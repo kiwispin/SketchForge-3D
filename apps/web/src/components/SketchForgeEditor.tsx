@@ -65,9 +65,10 @@ import {
 import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
+import { projectFileName, serializeProjectFile } from "@/lib/projectFile";
 import { makeShapeFromAsset, sceneShape, toolbarShapeAssets, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
-import { normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
+import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import {
   SKETCHFORGE_MCP_POLL_MS,
   SKETCHFORGE_MCP_ROUTE,
@@ -5161,6 +5162,7 @@ export function SketchForgeEditor({
   const shapesRef = useRef(shapes);
   const selectedIdsRef = useRef(selectedIds);
   const workspaceSettingsRef = useRef(workspaceSettings);
+  const currentSnapRef = useRef<GridSize>(normalizeSnapGrid(initialSnap));
   const noticeRef = useRef(notice);
   const projectInfoRef = useRef({ projectId: projectId ?? null, projectName });
   const historyIndexRef = useRef(historyIndex);
@@ -5585,6 +5587,7 @@ export function SketchForgeEditor({
   const updateProjectWorkspaceSettings = useCallback(
     (settings: { workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => {
       setWorkspaceSettings(settings.workspace);
+      currentSnapRef.current = settings.snap;
       if (!projectId || !onProjectWorkspaceChange) {
         return;
       }
@@ -5592,6 +5595,10 @@ export function SketchForgeEditor({
     },
     [onProjectWorkspaceChange, projectId],
   );
+
+  useEffect(() => {
+    currentSnapRef.current = normalizeSnapGrid(initialSnap);
+  }, [initialSnap]);
 
   const commitShapes = useCallback(
     (next: WorkplaneShape[], nextSelection: string | string[] | null = selectedIds, message?: string) => {
@@ -7542,10 +7549,23 @@ export function SketchForgeEditor({
     [commitShapes],
   );
 
-  const saveDesign = useCallback(() => {
-    setNotice(`Saved design with ${shapes.length} shape${shapes.length === 1 ? "" : "s"}`);
+  const saveProjectToFile = useCallback(() => {
+    const fileName = projectFileName(projectName);
+    const content = serializeProjectFile({
+      name: projectName,
+      workspace: workspaceSettingsRef.current,
+      snapGrid: currentSnapRef.current,
+      shapes: shapesRef.current,
+    });
+    void downloadTextFile(fileName, content, "application/json")
+      .then((result) => {
+        setNotice(result.mode === "folder" ? `Saved ${fileName} to ${result.path}` : `Saved ${fileName}`);
+      })
+      .catch((error: unknown) => {
+        setNotice(error instanceof Error ? error.message : "Could not save project file");
+      });
     setMenuOpen(false);
-  }, [shapes.length]);
+  }, [projectName]);
 
   const makeCopy = useCallback(() => {
     if (shapes.length === 0) {
@@ -7761,6 +7781,12 @@ export function SketchForgeEditor({
         return;
       }
 
+      if (shortcut && key === "s") {
+        event.preventDefault();
+        saveProjectToFile();
+        return;
+      }
+
       const step = event.shiftKey ? 5 : 1;
       if (shortcut && event.key === "ArrowUp") {
         event.preventDefault();
@@ -7815,6 +7841,7 @@ export function SketchForgeEditor({
     pasteShape,
     raiseSelected,
     redo,
+    saveProjectToFile,
     sketchActive,
     sketchRedo,
     sketchMeasurement,
@@ -8039,6 +8066,7 @@ export function SketchForgeEditor({
           onClose={() => setTopPanel(null)}
           onExport={exportDesign}
           onExportStep={exportStepDesign}
+          onSaveProject={saveProjectToFile}
           stepExporting={stepExporting}
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
@@ -8529,6 +8557,7 @@ function TopActionPanel({
   onClose,
   onExport,
   onExportStep,
+  onSaveProject,
   stepExporting,
   onImportFiles,
   onPickFile,
@@ -8540,6 +8569,7 @@ function TopActionPanel({
   onClose: () => void;
   onExport: (format: ExportFormat) => void;
   onExportStep: () => void;
+  onSaveProject: () => void;
   stepExporting: boolean;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
@@ -8588,6 +8618,11 @@ function TopActionPanel({
       ) : null}
       {panel === "export" ? (
         <div className="top-action-body">
+          <button onClick={onSaveProject}>
+            <Download size={18} />
+            Save project (.sketchforge)
+          </button>
+          <p className="export-step-note">Project files reopen in SketchForge with editable shapes, groups, holes, and workspace settings.</p>
           <p>{shapeCount} {scopeLabel} solid shape{shapeCount === 1 ? "" : "s"} ready to export.</p>
           <button onClick={() => onExport("stl")}>
             <Download size={18} />
