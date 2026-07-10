@@ -89,8 +89,15 @@ export function parseProjectFile(text: string): ParsedProjectFile {
       return [];
     }
     // Same loose-but-safe path the shape clipboard uses: sceneShape fills
-    // defaults for anything missing, canonicalizeShape normalizes rotations.
-    return [canonicalizeShape(sceneShape({ ...shape, name: shape.name, kind: shape.kind as ShapeKind, color: shape.color }))];
+    // defaults for anything missing and canonicalizes rotations. Malformed
+    // nested content (e.g. bad groupedShapes) throws inside sceneShape, so
+    // treat any throw as a malformed entry and drop it.
+    try {
+      return [sceneShape({ ...shape, name: shape.name, kind: shape.kind as ShapeKind, color: shape.color })];
+    } catch {
+      droppedShapeCount += 1;
+      return [];
+    }
   });
 
   const name = typeof project.name === "string" && project.name.trim() ? project.name.trim() : "Imported design";

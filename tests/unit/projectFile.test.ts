@@ -176,6 +176,38 @@ describe("serializeProjectFile / parseProjectFile", () => {
     expect(parsed.droppedShapeCount).toBe(3);
   });
 
+  it("drops group shapes whose groupedShapes entries are malformed", () => {
+    const text = JSON.stringify({
+      format: "sketchforge-project",
+      version: 1,
+      project: {
+        name: "Bad group entries",
+        shapes: [solidBox, { ...groupShape, groupedShapes: [null] }, holeCylinder],
+      },
+    });
+    const parsed = parseProjectFile(text);
+    expect(parsed.shapes).toHaveLength(2);
+    expect(parsed.shapes[0].id).toBe("shape-box-1");
+    expect(parsed.shapes[1].id).toBe("shape-cyl-1");
+    expect(parsed.droppedShapeCount).toBe(1);
+  });
+
+  it("drops group shapes whose groupedShapes is not an array", () => {
+    const text = JSON.stringify({
+      format: "sketchforge-project",
+      version: 1,
+      project: {
+        name: "Bad group value",
+        shapes: [solidBox, { ...groupShape, groupedShapes: 42 }, holeCylinder],
+      },
+    });
+    const parsed = parseProjectFile(text);
+    expect(parsed.shapes).toHaveLength(2);
+    expect(parsed.shapes[0].id).toBe("shape-box-1");
+    expect(parsed.shapes[1].id).toBe("shape-cyl-1");
+    expect(parsed.droppedShapeCount).toBe(1);
+  });
+
   it("falls back to a usable project name", () => {
     const text = JSON.stringify({
       format: "sketchforge-project",
