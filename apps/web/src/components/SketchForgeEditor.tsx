@@ -5374,6 +5374,7 @@ export function SketchForgeEditor({
   const [placementWorkplane, setPlacementWorkplane] = useState<PlacementWorkplane>(
     () => normalizePlacementWorkplane(initialPlacementWorkplane, initialPlacementElevation),
   );
+  const [rulerCanUndo, setRulerCanUndo] = useState(false);
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkplaneWorkspaceSettings>(() => normalizeWorkspaceSettings(initialWorkspace));
   const [snapGrid, setSnapGrid] = useState<GridSize>(() => normalizeSnapGrid(initialSnap));
   const [workplaneMode, setWorkplaneMode] = useState(false);
@@ -5396,6 +5397,7 @@ export function SketchForgeEditor({
   const projectInteractionActiveRef = useRef(false);
   const pendingProjectShapesRef = useRef<WorkplaneShape[] | null>(null);
   const projectSyncTimerRef = useRef<number | null>(null);
+  const rulerUndoRef = useRef<(() => void) | null>(null);
   const lastProjectShapesSyncRef = useRef("");
   const lastProjectShapesEchoRef = useRef<string | null>(null);
   const lastProjectIdRef = useRef<string | null>(null);
@@ -6931,6 +6933,19 @@ export function SketchForgeEditor({
     syncProjectShapes(nextShapes);
     setNotice(modifierCancelled ? "Edge modifier cancelled · Undo" : "Undo");
   }, [invalidateCadModifierSession, syncProjectShapes]);
+
+  const updateRulerUndoState = useCallback((canUndo: boolean, rulerUndo: (() => void) | null) => {
+    rulerUndoRef.current = rulerUndo;
+    setRulerCanUndo(canUndo);
+  }, []);
+
+  const undoFromToolbar = useCallback(() => {
+    if (rulerCanUndo && rulerUndoRef.current) {
+      rulerUndoRef.current();
+      return;
+    }
+    undo();
+  }, [rulerCanUndo, undo]);
 
   const redo = useCallback(() => {
     if (projectInteractionActiveRef.current) {
@@ -8681,7 +8696,8 @@ export function SketchForgeEditor({
         if (event.shiftKey) {
           redo();
         } else {
-          undo();
+          // Ruler edits have their own history and are undone first.
+          undoFromToolbar();
         }
         return;
       }
@@ -8816,6 +8832,7 @@ export function SketchForgeEditor({
     toggleLocked,
     toolbarMode,
     undo,
+    undoFromToolbar,
     ungroupSelected,
   ]);
 
@@ -8829,7 +8846,7 @@ export function SketchForgeEditor({
           setTopPanel(null);
           setMenuOpen(false);
         }}
-        canUndo={!projectInteractionActive && (historyIndex > 0 || Boolean(edgeModifier))}
+        canUndo={!projectInteractionActive && (historyIndex > 0 || Boolean(edgeModifier) || rulerCanUndo)}
         canRedo={!projectInteractionActive && historyIndex < history.length - 1}
         canGroup={selectedShapes.length > 1 && selectedShapes.every((shape) => !shape.locked)}
         canIntersect={selectedShapes.some((shape) => !shape.locked && !shape.hole) && selectedShapes.some((shape) => !shape.locked && Boolean(shape.hole))}
@@ -8886,7 +8903,7 @@ export function SketchForgeEditor({
         onShowHidden={showHidden}
         onToggleHidden={toggleHidden}
         onUngroup={ungroupSelected}
-        onUndo={undo}
+        onUndo={undoFromToolbar}
         onTopPanel={(panel) => {
           setTopPanel((current) => (current === panel ? null : panel));
           setMenuOpen(false);
@@ -8965,6 +8982,7 @@ export function SketchForgeEditor({
           onSetPlacementWorkplane={setViewportPlacementWorkplane}
           onToggleWorkplaneTool={activateWorkplaneTool}
           onInteractionActiveChange={updateProjectInteractionActive}
+          onRulerUndoStateChange={updateRulerUndoState}
           onEditSketch={beginSketchEdit}
           canSeparateParts={canSeparateSelectedParts}
           onSeparateParts={separateSelectedParts}
