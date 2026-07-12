@@ -68,6 +68,9 @@
 - Interaction-tested in the running app: verified the empty state, clean ready state, all three warnings together (0.5 mm height, 2 mm elevation, X = 101 mm), then corrected the shape to 20 mm height / 0 mm elevation / X = 0 and verified the ready state returned. The STL button remained enabled in both warning and ready states.
 - Verification completed: focused preflight unit coverage for clean, floating, undersized, out-of-workspace, rotated-footprint, hole, and hidden exported-shape cases; `npm run ci` (10 files / 54 tests); and `npm run pages:build` all passed.
 
-### ⬜ Final verification — NOT STARTED
+### ✅ Final verification — COMPLETE
 
-- Run `npm run ci`, `npm run pages:build`, and a live GitHub Pages smoke test after the final feature.
+- `npm run ci`: green (11 files / 66 tests, typecheck clean).
+- `npm run pages:build`: succeeded — 9/9 static pages generated and exported to `apps/web/out/`, including both WASM kernels (OCCT + Manifold) and the PWA files (`sw.js`, `offline.html`, manifest). Asset paths are correct for the subpath deploy (relative `./_next/…` plus the `/SketchForge-3D` base path).
+- Deploy: the `deploy-pages.yml` workflow ran on push to `main` and completed successfully for both the guided-tutorials and ruler-undo-button commits.
+- Live GitHub Pages smoke test: loaded the deployed site at `https://kiwispin.github.io/SketchForge-3D/` — the app boots with no console errors, assets resolve, and the **Learn** section renders the "Learn the basics" card (7 steps, Start button).
