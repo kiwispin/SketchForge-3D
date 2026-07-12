@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, Minus, Plus } from "lucide-react";
+import { Home, Minus, Plus, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import * as THREE from "three";
 import { Brush, Evaluator, HOLLOW_INTERSECTION } from "three-bvh-csg";
@@ -640,12 +640,16 @@ function RulerOverlay({
   startPointId,
   active,
   onPointPointerDown,
+  onPointPointerMove,
+  onPointPointerUp,
   onSegmentPointerDown,
 }: {
   overlay: RulerOverlayState;
   startPointId: string | null;
   active: boolean;
   onPointPointerDown: (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => void;
+  onPointPointerMove: (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => void;
+  onPointPointerUp: (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => void;
   onSegmentPointerDown: (event: ReactPointerEvent<SVGLineElement>, segmentId: string) => void;
 }) {
   return (
@@ -672,6 +676,9 @@ function RulerOverlay({
             cy={point.screenY}
             r="5"
             onPointerDown={(event) => onPointPointerDown(event, point.id)}
+            onPointerMove={(event) => onPointPointerMove(event, point.id)}
+            onPointerUp={(event) => onPointPointerUp(event, point.id)}
+            onPointerCancel={(event) => onPointPointerUp(event, point.id)}
           />
         ))}
         {active && overlay.hover ? <circle className="ruler-hover-point" cx={overlay.hover.screenX} cy={overlay.hover.screenY} r="5" /> : null}
@@ -1220,6 +1227,8 @@ export function WorkplaneViewport({
   const rulerModelRef = useRef(rulerModel);
   const rulerOverlayRef = useRef<RulerOverlayState | null>(null);
   const rulerIdRef = useRef(0);
+  const rulerHistoryRef = useRef<RulerModel[]>([]);
+  const rulerDragRef = useRef<{ pointId: string; pointerId: number } | null>(null);
   const alignModeRef = useRef(alignMode);
   const alignAnchorIdRef = useRef(alignAnchorId);
   const alignHandlesRef = useRef(alignHandles);
@@ -1631,6 +1640,37 @@ export function WorkplaneViewport({
     setRulerModel(next);
   }, []);
 
+  const snapshotRulerModel = useCallback((model: RulerModel): RulerModel => ({
+    points: model.points.map((point) => ({ ...point })),
+    segments: model.segments.map((segment) => ({ ...segment })),
+    startPointId: model.startPointId,
+    hover: model.hover ? { ...model.hover } : null,
+  }), []);
+
+  const commitRulerModel = useCallback(
+    (next: RulerModel) => {
+      rulerHistoryRef.current.push(snapshotRulerModel(rulerModelRef.current));
+      storeRulerModel(next);
+    },
+    [snapshotRulerModel, storeRulerModel],
+  );
+
+  const undoRuler = useCallback(() => {
+    const previous = rulerHistoryRef.current.pop();
+    if (!previous) {
+      return;
+    }
+    storeRulerModel({ ...previous, startPointId: null, hover: null });
+  }, [storeRulerModel]);
+
+  const clearRuler = useCallback(() => {
+    const current = rulerModelRef.current;
+    if (current.points.length === 0) {
+      return;
+    }
+    commitRulerModel({ points: [], segments: [], startPointId: null, hover: null });
+  }, [commitRulerModel]);
+
   const setRulerActive = useCallback((active: boolean) => {
     rulerModeRef.current = active;
     setRulerMode(active);
@@ -1641,7 +1681,7 @@ export function WorkplaneViewport({
   }, [storeRulerModel]);
 
   const resolveRulerCandidate = useCallback(
-    (clientX: number, clientY: number): RulerCandidate | null => {
+    (clientX: number, clientY: number, ignorePointId?: string): RulerCandidate | null => {
       const state = threeRef.current;
       if (!state) {
         return null;
@@ -1662,6 +1702,9 @@ export function WorkplaneViewport({
       const localX = clientX - rect.left;
       const localY = clientY - rect.top;
       const closestPoint = model.points.reduce<{ point: RulerPoint; distance: number } | null>((closest, point) => {
+        if (point.id === ignorePointId) {
+          return closest;
+        }
         const screen = projectToScreen(new THREE.Vector3(point.x, 0.12, point.z), state);
         const distance = Math.hypot(screen.x - localX, screen.y - localY);
         if (distance <= 12 && (!closest || distance < closest.distance)) {
@@ -1705,13 +1748,13 @@ export function WorkplaneViewport({
             const along = clamp(step > 0 ? snapValue(rawAlong, step) : rawAlong, 0, length);
             const x = start.x + directionX * along;
             const z = start.z + directionZ * along;
-            const existing = model.points.find((point) => Math.hypot(point.x - x, point.z - z) < 0.001);
+            const existing = model.points.find((point) => point.id !== ignorePointId && Math.hypot(point.x - x, point.z - z) < 0.001);
             return { x, z, pointId: existing?.id };
           }
         }
       }
 
-      const existing = model.points.find((point) => Math.hypot(point.x - snapped.x, point.z - snapped.z) < 0.001);
+      const existing = model.points.find((point) => point.id !== ignorePointId && Math.hypot(point.x - snapped.x, point.z - snapped.z) < 0.001);
       return { ...snapped, pointId: existing?.id };
     },
     [toRawPlanePoint],
@@ -1724,7 +1767,7 @@ export function WorkplaneViewport({
       const point = existing ?? { id: `ruler-point-${++rulerIdRef.current}`, x: candidate.x, z: candidate.z };
       const points = existing ? current.points : [...current.points, point];
       if (!current.startPointId) {
-        storeRulerModel({ ...current, points, startPointId: point.id, hover: { x: point.x, z: point.z } });
+        commitRulerModel({ ...current, points, startPointId: point.id, hover: { x: point.x, z: point.z } });
         return;
       }
       if (current.startPointId === point.id) {
@@ -1739,11 +1782,11 @@ export function WorkplaneViewport({
       const segments = duplicate
         ? current.segments
         : [...current.segments, { id: `ruler-segment-${++rulerIdRef.current}`, startId: current.startPointId, endId: point.id }];
-      storeRulerModel({ points, segments, startPointId: null, hover: null });
+      commitRulerModel({ points, segments, startPointId: null, hover: null });
       rulerModeRef.current = false;
       setRulerMode(false);
     },
-    [storeRulerModel],
+    [commitRulerModel],
   );
 
   const updateRulerHover = useCallback(
@@ -1760,30 +1803,6 @@ export function WorkplaneViewport({
       storeRulerModel({ ...current, hover });
     },
     [resolveRulerCandidate, storeRulerModel],
-  );
-
-  const removeRulerSegment = useCallback(
-    (segmentId: string) => {
-      const current = rulerModelRef.current;
-      const segments = current.segments.filter((segment) => segment.id !== segmentId);
-      const usedPointIds = new Set(segments.flatMap((segment) => [segment.startId, segment.endId]));
-      const points = current.points.filter((point) => usedPointIds.has(point.id) || point.id === current.startPointId);
-      storeRulerModel({ ...current, points, segments });
-    },
-    [storeRulerModel],
-  );
-
-  const removeRulerPoint = useCallback(
-    (pointId: string) => {
-      const current = rulerModelRef.current;
-      const connected = current.segments.filter((segment) => segment.startId === pointId || segment.endId === pointId);
-      if (connected.length > 0) {
-        removeRulerSegment(connected[connected.length - 1].id);
-        return;
-      }
-      storeRulerModel({ ...current, points: current.points.filter((point) => point.id !== pointId), startPointId: current.startPointId === pointId ? null : current.startPointId });
-    },
-    [removeRulerSegment, storeRulerModel],
   );
 
   const setMarqueeFromState = useCallback((marquee: MarqueeState | null) => {
@@ -2822,13 +2841,7 @@ export function WorkplaneViewport({
 
   const handleRulerPointPointerDown = useCallback(
     (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => {
-      if (event.button === 1) {
-        event.preventDefault();
-        event.stopPropagation();
-        removeRulerPoint(pointId);
-        return;
-      }
-      if (event.button !== 0 || !rulerModeRef.current) {
+      if (event.button !== 0) {
         return;
       }
       const point = rulerModelRef.current.points.find((candidate) => candidate.id === pointId);
@@ -2837,19 +2850,46 @@ export function WorkplaneViewport({
       }
       event.preventDefault();
       event.stopPropagation();
-      selectRulerCandidate({ x: point.x, z: point.z, pointId });
+      event.currentTarget.setPointerCapture(event.pointerId);
+      rulerHistoryRef.current.push(snapshotRulerModel(rulerModelRef.current));
+      rulerDragRef.current = { pointId, pointerId: event.pointerId };
     },
-    [removeRulerPoint, selectRulerCandidate],
+    [snapshotRulerModel],
   );
+
+  const handleRulerPointPointerMove = useCallback(
+    (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => {
+      const drag = rulerDragRef.current;
+      if (!drag || drag.pointId !== pointId || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      const candidate = resolveRulerCandidate(event.clientX, event.clientY, pointId);
+      if (!candidate) {
+        return;
+      }
+      const current = rulerModelRef.current;
+      const point = current.points.find((item) => item.id === pointId);
+      if (!point || (Math.abs(point.x - candidate.x) < 0.0001 && Math.abs(point.z - candidate.z) < 0.0001)) {
+        return;
+      }
+      storeRulerModel({ ...current, points: current.points.map((item) => (item.id === pointId ? { ...item, x: candidate.x, z: candidate.z } : item)) });
+    },
+    [resolveRulerCandidate, storeRulerModel],
+  );
+
+  const handleRulerPointPointerUp = useCallback((event: ReactPointerEvent<SVGCircleElement>, pointId: string) => {
+    const drag = rulerDragRef.current;
+    if (!drag || drag.pointId !== pointId || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    rulerDragRef.current = null;
+  }, []);
 
   const handleRulerSegmentPointerDown = useCallback(
     (event: ReactPointerEvent<SVGLineElement>, segmentId: string) => {
-      if (event.button === 1) {
-        event.preventDefault();
-        event.stopPropagation();
-        removeRulerSegment(segmentId);
-        return;
-      }
       if (event.button !== 0 || !rulerModeRef.current) {
         return;
       }
@@ -2860,7 +2900,7 @@ export function WorkplaneViewport({
         selectRulerCandidate(candidate);
       }
     },
-    [removeRulerSegment, resolveRulerCandidate, selectRulerCandidate],
+    [resolveRulerCandidate, selectRulerCandidate],
   );
 
   useEffect(() => {
@@ -2877,7 +2917,11 @@ export function WorkplaneViewport({
       }
 
       const key = event.key.toLowerCase();
-      if (event.key === "Escape" && rulerModeRef.current) {
+      if ((event.metaKey || event.ctrlKey) && key === "z" && rulerHistoryRef.current.length > 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        undoRuler();
+      } else if (event.key === "Escape" && rulerModeRef.current) {
         event.preventDefault();
         setRulerActive(false);
       } else if (key === "f" || event.key === "Home") {
@@ -2894,7 +2938,7 @@ export function WorkplaneViewport({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [resetView, setRulerActive, zoomCamera]);
+  }, [resetView, setRulerActive, undoRuler, zoomCamera]);
 
   return (
     <main className="workplane-stage">
@@ -2922,6 +2966,8 @@ export function WorkplaneViewport({
         <button className={rulerMode ? "active" : ""} aria-label="Ruler" title="Ruler" aria-pressed={rulerMode} onClick={toggleRulerMode}>
           <RulerGlyph />
         </button>
+        {rulerModel.points.length > 0 ? <button aria-label="Undo ruler" title="Undo ruler (Ctrl/Cmd+Z)" onClick={undoRuler}><Undo2 size={25} /></button> : null}
+        {rulerModel.points.length > 0 ? <button aria-label="Clear ruler" title="Clear ruler" onClick={clearRuler}><Trash2 size={23} /></button> : null}
       </div>
 
       <section className={`workplane-wrap ${workplaneMode ? "placing-workplane" : ""} ${rulerMode ? "ruler-mode" : ""} ${modifierActive ? "modifier-edge-pick" : ""}`} aria-label="Workplane">
@@ -2977,6 +3023,8 @@ export function WorkplaneViewport({
               startPointId={rulerModel.startPointId}
               active={rulerMode}
               onPointPointerDown={handleRulerPointPointerDown}
+              onPointPointerMove={handleRulerPointPointerMove}
+              onPointPointerUp={handleRulerPointPointerUp}
               onSegmentPointerDown={handleRulerSegmentPointerDown}
             />
           ) : null}

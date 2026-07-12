@@ -22,23 +22,25 @@
 
 ## Execution log
 
-### ✅ 1. Ruler and exact placement — COMPLETE
+### ✅ 1. Ruler and exact placement — IMPLEMENTED AND INTERACTION-TESTED
 
 - The existing workplane ruler and exact dimension inputs were retained.
 - Added editable **X**, **Y**, and **Z** fields to the selected-shape inspector, using the active measurement unit.
-- Verification: created a Box, set X/Z and Y = 6 mm, confirmed all values commit correctly; the Ruler control remains present. Typecheck and all 50 unit tests pass.
+- Fixed the ruler so its controls are discoverable and usable: visible **Undo ruler** and **Clear ruler** controls, plus Cmd/Ctrl+Z support for ruler history. Ruler points can be dragged with the primary pointer.
+- Verified in the running app: created a ruler segment, used both the **Undo ruler** button and Cmd/Ctrl+Z (each removed the segment), dragged the remaining point, and used **Clear ruler**.
+- Verified editable X/Y/Z placement in the running app with X = 24 mm, Y = 6 mm, and Z = -18 mm.
 
-### ✅ 2. Duplicate and repeat — COMPLETE
+### ✅ 2. Duplicate and repeat — IMPLEMENTED AND INTERACTION-TESTED
 
 - Kept the existing one-click Duplicate and Cmd/Ctrl+D behaviour.
 - Added **Repeat…** beside Duplicate. Students choose 1–50 copies and X/Y/Z offsets.
-- Verification: repeated a selected Box three times at a 10 mm X offset; created copies landed at X = 10, 20, and 30 mm and became the selection. Typecheck and all 50 unit tests pass.
+- Verified in the running app: repeated one selected Box twice using X = 5 mm, Y = 3 mm, and Z = -7 mm offsets. The resulting positions were (10, 2, -5), (15, 5, -12), and (20, 8, -19) mm. The earlier 3-copy X-offset path was also exercised.
 
-### ✅ 3. Align and distribute — COMPLETE
+### ✅ 3. Align and distribute — IMPLEMENTED AND INTERACTION-TESTED
 
 - Existing min/centre/max alignment controls remain unchanged.
 - Added **Distribute X** and **Distribute Z** controls for three or more selected shapes. End shapes remain fixed; unlocked shapes between them are spaced evenly.
-- Verification: selected six shapes and ran Distribute X; their X positions became 0, 6, 12, 18, 24, and 30 mm. Typecheck and all 50 unit tests pass.
+- Verified in the running app with unevenly placed shapes: **Distribute X** changed X positions from 0, 45, 100 to 0, 50, 100 mm; **Distribute Z** changed Z positions from 0, 50, 10 to 0, 50, 25 mm. The controls were enabled only after three shapes were selected.
 
 ### 🔶 4. Categorized shape library — IN PROGRESS
 
