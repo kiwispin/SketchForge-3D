@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Home, Minus, MousePointer2, PanelsTopLeft, Plus, Ruler, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Home, Minus, MousePointer2, PanelsTopLeft, Plus, Ruler, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type SetStateAction, type WheelEvent as ReactWheelEvent } from "react";
 import * as THREE from "three";
 import { Brush, Evaluator, HOLLOW_INTERSECTION } from "three-bvh-csg";
@@ -190,6 +190,7 @@ type WorkplaneViewportProps = {
   onSetPlacementWorkplane: (workplane: PlacementWorkplane, source: "shape" | "base") => void;
   onToggleWorkplaneTool: () => void;
   onInteractionActiveChange?: (active: boolean) => void;
+  onRulerUndoStateChange?: (canUndo: boolean, undo: (() => void) | null) => void;
   onEditSketch?: () => void;
   canSeparateParts?: boolean;
   onSeparateParts?: () => void;
@@ -385,6 +386,8 @@ type RulerCandidate = {
 type RulerPointDragState = {
   pointId: string;
   pointerId: number;
+  /** Ruler model before the drag started; pushed to ruler history if the point moves. */
+  before: RulerModel;
 };
 
 type RotationHandleSide = "near" | "right" | "far" | "left";
@@ -2216,6 +2219,7 @@ export function WorkplaneViewport({
   onSetPlacementWorkplane,
   onToggleWorkplaneTool,
   onInteractionActiveChange,
+  onRulerUndoStateChange,
   onEditSketch,
   canSeparateParts = false,
   onSeparateParts,
@@ -2286,6 +2290,8 @@ export function WorkplaneViewport({
   const rulerMoveModeRef = useRef(false);
   const rulerPointDragRef = useRef<RulerPointDragState | null>(null);
   const rulerModelRef = useRef(rulerModel);
+  const rulerHistoryRef = useRef<RulerModel[]>([]);
+  const [rulerHistoryRevision, setRulerHistoryRevision] = useState(0);
   const rulerOverlayRef = useRef<RulerOverlayState | null>(null);
   const rulerIdRef = useRef(0);
   const alignModeRef = useRef(alignMode);
@@ -2935,6 +2941,58 @@ export function WorkplaneViewport({
     setRulerModel(next);
   }, []);
 
+  // Ruler measurements keep their own undo stack (separate from shape history).
+  // Models are replaced immutably, so a shallow snapshot is enough.
+  const snapshotRulerModel = useCallback((model: RulerModel): RulerModel => ({
+    points: [...model.points],
+    segments: [...model.segments],
+    startPointId: null,
+    hover: null,
+  }), []);
+
+  const undoRuler = useCallback(() => {
+    const previous = rulerHistoryRef.current.pop();
+    if (!previous) {
+      return;
+    }
+    rulerPointDragRef.current = null;
+    storeRulerModel({ ...previous, startPointId: null, hover: null });
+    // Re-run attachment pruning in case a restored point refers to a shape that has since changed.
+    setRulerHistoryRevision((revision) => revision + 1);
+    onRulerUndoStateChange?.(rulerHistoryRef.current.length > 0, undoRuler);
+  }, [onRulerUndoStateChange, storeRulerModel]);
+
+  const reportRulerUndoState = useCallback(() => {
+    onRulerUndoStateChange?.(rulerHistoryRef.current.length > 0, undoRuler);
+  }, [onRulerUndoStateChange, undoRuler]);
+
+  const pushRulerHistory = useCallback((model: RulerModel) => {
+    rulerHistoryRef.current.push(snapshotRulerModel(model));
+    reportRulerUndoState();
+  }, [reportRulerUndoState, snapshotRulerModel]);
+
+  const commitRulerModel = useCallback(
+    (next: RulerModel) => {
+      pushRulerHistory(rulerModelRef.current);
+      storeRulerModel(next);
+    },
+    [pushRulerHistory, storeRulerModel],
+  );
+
+  useEffect(() => {
+    reportRulerUndoState();
+    return () => onRulerUndoStateChange?.(false, null);
+  }, [onRulerUndoStateChange, reportRulerUndoState]);
+
+  const clearRuler = useCallback(() => {
+    const current = rulerModelRef.current;
+    if (current.points.length === 0) {
+      return;
+    }
+    rulerPointDragRef.current = null;
+    commitRulerModel({ points: [], segments: [], startPointId: null, hover: null });
+  }, [commitRulerModel]);
+
   useEffect(() => {
     const current = rulerModelRef.current;
     const shapeById = new Map(shapes.map((shape) => [shape.id, shape]));
@@ -2997,7 +3055,7 @@ export function WorkplaneViewport({
       startPointId: current.startPointId && !removedPointIds.has(current.startPointId) ? current.startPointId : null,
       hover: hoverRemoved ? null : current.hover,
     });
-  }, [shapes, storeRulerModel]);
+  }, [rulerHistoryRevision, shapes, storeRulerModel]);
 
   const setRulerActive = useCallback((active: boolean) => {
     rulerModeRef.current = active;
@@ -3129,7 +3187,7 @@ export function WorkplaneViewport({
             endId: end.id,
             edge: candidate.edge,
           }];
-          storeRulerModel({ points, segments, startPointId: null, hover: null });
+          commitRulerModel({ points, segments, startPointId: null, hover: null });
           return;
         }
       }
@@ -3138,7 +3196,7 @@ export function WorkplaneViewport({
       const point = existing ?? makePoint(candidate);
       const points = existing ? current.points : [...current.points, point];
       if (!current.startPointId) {
-        storeRulerModel({ ...current, points, startPointId: point.id, hover: { x: point.x, y: point.y, z: point.z, attachment: point.attachment } });
+        commitRulerModel({ ...current, points, startPointId: point.id, hover: { x: point.x, y: point.y, z: point.z, attachment: point.attachment } });
         return;
       }
       if (current.startPointId === point.id) {
@@ -3153,9 +3211,9 @@ export function WorkplaneViewport({
       const segments = duplicate
         ? current.segments
         : [...current.segments, { id: `ruler-segment-${++rulerIdRef.current}`, startId: current.startPointId, endId: point.id }];
-      storeRulerModel({ points, segments, startPointId: null, hover: null });
+      commitRulerModel({ points, segments, startPointId: null, hover: null });
     },
-    [storeRulerModel],
+    [commitRulerModel],
   );
 
   const updateRulerHover = useCallback(
@@ -3182,9 +3240,9 @@ export function WorkplaneViewport({
       const segments = current.segments.filter((segment) => segment.id !== segmentId);
       const usedPointIds = new Set(segments.flatMap((segment) => [segment.startId, segment.endId]));
       const points = current.points.filter((point) => usedPointIds.has(point.id) || point.id === current.startPointId);
-      storeRulerModel({ ...current, points, segments });
+      commitRulerModel({ ...current, points, segments });
     },
-    [storeRulerModel],
+    [commitRulerModel],
   );
 
   const removeRulerPoint = useCallback(
@@ -3192,14 +3250,14 @@ export function WorkplaneViewport({
       const current = rulerModelRef.current;
       const segments = current.segments.filter((segment) => segment.startId !== pointId && segment.endId !== pointId);
       const points = current.points.filter((point) => point.id !== pointId);
-      storeRulerModel({
+      commitRulerModel({
         ...current,
         points,
         segments,
         startPointId: current.startPointId === pointId ? null : current.startPointId,
       });
     },
-    [storeRulerModel],
+    [commitRulerModel],
   );
 
   const setMarqueeFromState = useCallback((marquee: MarqueeState | null) => {
@@ -4628,7 +4686,7 @@ export function WorkplaneViewport({
         event.preventDefault();
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
-        rulerPointDragRef.current = { pointId, pointerId: event.pointerId };
+        rulerPointDragRef.current = { pointId, pointerId: event.pointerId, before: rulerModelRef.current };
         return;
       }
       if (!rulerModeRef.current) {
@@ -4681,9 +4739,12 @@ export function WorkplaneViewport({
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       rulerPointDragRef.current = null;
       const current = rulerModelRef.current;
+      if (current.points !== drag.before.points) {
+        pushRulerHistory(drag.before);
+      }
       storeRulerModel({ ...current, hover: null });
     },
-    [storeRulerModel],
+    [pushRulerHistory, storeRulerModel],
   );
 
   const handleRulerSegmentPointerDown = useCallback(
@@ -4825,6 +4886,11 @@ export function WorkplaneViewport({
                   <button className={`ruler-delete-button ${rulerDeleteMode ? "active" : ""}`} aria-label="Delete measurement part" title="Delete measurement part" aria-pressed={rulerDeleteMode} onClick={activateRulerDelete}>
                     <X size={20} strokeWidth={2.4} aria-hidden="true" />
                   </button>
+                  {rulerModel.points.length > 0 ? (
+                    <button aria-label="Clear ruler" title="Clear all measurements (Ctrl/Cmd+Z to undo)" onClick={clearRuler}>
+                      <Trash2 size={19} strokeWidth={2.3} aria-hidden="true" />
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
