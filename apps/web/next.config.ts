@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const isStaticExport = process.env.STATIC_EXPORT === "true";
+const isGitHubPages = process.env.GITHUB_PAGES === "true";
+const basePath = isGitHubPages ? "/SketchForge-3D" : "";
 const extraAllowedDevOrigins = (process.env.SKETCHFORGE_ALLOWED_DEV_ORIGINS ?? "")
   .split(",")
   .map((origin) => origin.trim())
@@ -11,6 +13,7 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["localhost", "127.0.0.1", ...extraAllowedDevOrigins],
   env: {
     NEXT_PUBLIC_STATIC_EXPORT: isStaticExport ? "true" : "false",
+    NEXT_PUBLIC_BASE_PATH: basePath,
   },
   images: {
     unoptimized: true
@@ -31,6 +34,7 @@ const nextConfig: NextConfig = {
         output: "export" as const,
         trailingSlash: true,
         assetPrefix: "./",
+        ...(isGitHubPages ? { basePath } : {}),
       }
     : {}),
 };

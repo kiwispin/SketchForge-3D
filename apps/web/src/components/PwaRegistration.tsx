@@ -13,8 +13,8 @@ export function PwaRegistration() {
       navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload(), { once: true });
     }
 
-    void navigator.serviceWorker.register("/sw.js").catch(() => {
-        // The editor remains fully usable online if registration is unavailable.
+    void navigator.serviceWorker.register("./sw.js").catch(() => {
+      // The editor remains fully usable online if registration is unavailable.
     });
   }, []);
 

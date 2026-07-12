@@ -3,7 +3,11 @@ import { fileURLToPath } from "node:url";
 
 const nextCli = fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url));
 const child = spawn(process.execPath, [nextCli, "build", "apps/web"], {
-  env: { ...process.env, STATIC_EXPORT: "true" },
+  env: {
+    ...process.env,
+    STATIC_EXPORT: "true",
+    ...(process.argv.includes("--github-pages") ? { GITHUB_PAGES: "true" } : {}),
+  },
   stdio: "inherit",
 });
 

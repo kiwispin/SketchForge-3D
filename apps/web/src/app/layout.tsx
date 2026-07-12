@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: "SketchForge 3D editor",
   description: "Browser-based SketchForge editor workspace",
   applicationName: "SketchForge 3D",
-  manifest: "/manifest.webmanifest",
+  manifest: "./manifest.webmanifest",
   appleWebApp: {
     capable: true,
     title: "SketchForge",

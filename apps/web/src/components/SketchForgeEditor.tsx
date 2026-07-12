@@ -160,6 +160,7 @@ const DOWNLOAD_FOLDER_STORAGE_KEY = "sketchForge.downloadFolder";
 const SHARED_CLIPBOARD_STORAGE_KEY = "sketchForge.clipboard";
 const SYSTEM_CLIPBOARD_PREFIX = "SKETCHFORGE3D/1\n";
 const STATIC_EXPORT_BUILD = process.env.NEXT_PUBLIC_STATIC_EXPORT === "true";
+const ASSET_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 declare global {
   interface Window {
@@ -8150,7 +8151,7 @@ function SketchReferenceIcon({ name }: { name: SketchReferenceIconName }) {
       className="sketch-reference-icon"
       data-sketch-icon={name}
       draggable={false}
-      src={`/assets/sketchforge/${sketchReferenceIcons[name]}`}
+      src={`${ASSET_BASE_PATH}/assets/sketchforge/${sketchReferenceIcons[name]}`}
       alt=""
     />
   );
