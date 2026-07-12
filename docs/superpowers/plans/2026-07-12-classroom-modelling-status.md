@@ -54,7 +54,13 @@
 
 ### ⬜ 5. Guided activities — NOT STARTED
 
-### ⬜ 6. Printability preflight — NOT STARTED
+### ✅ 6. Printability preflight — IMPLEMENTED AND INTERACTION-TESTED (PRIORITIZED AHEAD OF CONNECTORS)
+
+- Added an offline, non-blocking **Printability check** directly in the Export panel. It checks the solids that will be exported (selected solids when selected; otherwise all solids, including hidden ones).
+- Flags each affected shape by name for: a dimension below 1 mm, floating above the workplane, and a rotated or unrotated footprint extending outside the current workplane.
+- A clean model shows **ready to export**; an empty model explains that a solid is needed. Warnings do not block STL/OBJ/STEP buttons, so teachers retain judgement over intentional designs.
+- Interaction-tested in the running app: verified the empty state, clean ready state, all three warnings together (0.5 mm height, 2 mm elevation, X = 101 mm), then corrected the shape to 20 mm height / 0 mm elevation / X = 0 and verified the ready state returned. The STL button remained enabled in both warning and ready states.
+- Verification completed: focused preflight unit coverage for clean, floating, undersized, out-of-workspace, rotated-footprint, hole, and hidden exported-shape cases; `npm run ci` (10 files / 54 tests); and `npm run pages:build` all passed.
 
 ### ⬜ Final verification — NOT STARTED
 

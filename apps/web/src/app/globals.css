@@ -2024,6 +2024,51 @@ button {
   line-height: 1.35;
 }
 
+.printability-preflight {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #c8ddea;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.printability-preflight.ready {
+  color: #17623a;
+  background: #eefaf2;
+  border-color: #a9d8b8;
+}
+
+.printability-preflight.neutral {
+  color: #51697c;
+  background: #f7fafc;
+}
+
+.printability-preflight.warning {
+  color: #744d09;
+  background: #fff8e6;
+  border-color: #eac86f;
+}
+
+.printability-preflight strong {
+  display: block;
+  color: inherit;
+  font-size: 13px;
+}
+
+.printability-preflight p {
+  margin: 4px 0 0;
+  color: inherit;
+  font-size: 12px;
+}
+
+.printability-preflight ul {
+  display: grid;
+  gap: 3px;
+  margin: 7px 0 0;
+  padding-left: 17px;
+}
+
 .top-action-body button {
   display: flex;
   min-height: 38px;

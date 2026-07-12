@@ -67,6 +67,7 @@ import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
 import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import {
@@ -5435,6 +5436,10 @@ export function SketchForgeEditor({
   }, []);
   const exportableShapeCount = useMemo(() => (hasSelection ? selectedShapes : shapes).filter((shape) => !shape.hole).length, [hasSelection, selectedShapes, shapes]);
   const exportScopeLabel = hasSelection ? "selected" : "total";
+  const exportPreflight = useMemo(
+    () => checkPrintability(hasSelection ? selectedShapes : shapes, workspaceSettings),
+    [hasSelection, selectedShapes, shapes, workspaceSettings],
+  );
   const effectiveAlignAnchorId = useMemo(
     () => effectiveAlignmentAnchorId(selectedShapes, alignAnchorId),
     [alignAnchorId, selectedShapes],
@@ -8167,6 +8172,7 @@ export function SketchForgeEditor({
           onClose={() => setTopPanel(null)}
           onExport={exportDesign}
           onExportStep={exportStepDesign}
+          preflight={exportPreflight}
           onSaveProject={saveProjectToFile}
           onRepeat={repeatSelected}
           stepExporting={stepExporting}
@@ -8691,6 +8697,7 @@ function TopActionPanel({
   onClose,
   onExport,
   onExportStep,
+  preflight,
   onSaveProject,
   onRepeat,
   stepExporting,
@@ -8704,6 +8711,7 @@ function TopActionPanel({
   onClose: () => void;
   onExport: (format: ExportFormat) => void;
   onExportStep: () => void;
+  preflight: PrintabilityReport;
   onSaveProject: () => void;
   onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void;
   stepExporting: boolean;
@@ -8762,6 +8770,7 @@ function TopActionPanel({
           </button>
           <p className="export-step-note">Project files reopen in SketchForge with editable shapes, groups, holes, and workspace settings.</p>
           <p>{shapeCount} {scopeLabel} solid shape{shapeCount === 1 ? "" : "s"} ready to export.</p>
+          <PrintabilityPreflight report={preflight} />
           <button onClick={() => onExport("stl")}>
             <Download size={18} />
             Download STL
@@ -8799,6 +8808,24 @@ function TopActionPanel({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function PrintabilityPreflight({ report }: { report: PrintabilityReport }) {
+  if (report.checkedCount === 0) {
+    return <p className="printability-preflight neutral">Add a solid shape to run the printability check.</p>;
+  }
+  if (report.issues.length === 0) {
+    return <p className="printability-preflight ready">Printability check: ready to export.</p>;
+  }
+  return (
+    <section className="printability-preflight warning" aria-label="Printability check">
+      <strong>Printability check: {report.issues.length} warning{report.issues.length === 1 ? "" : "s"}</strong>
+      <p>Fix these before printing where possible. Export remains available for teacher review.</p>
+      <ul>
+        {report.issues.map((issue) => <li key={`${issue.kind}-${issue.shapeId}`}>{issue.message}</li>)}
+      </ul>
+    </section>
   );
 }
 
