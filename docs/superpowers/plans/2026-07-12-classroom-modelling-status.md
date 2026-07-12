@@ -28,11 +28,15 @@
 - Added editable **X**, **Y**, and **Z** fields to the selected-shape inspector, using the active measurement unit.
 - Verification: created a Box, set X/Z and Y = 6 mm, confirmed all values commit correctly; the Ruler control remains present. Typecheck and all 50 unit tests pass.
 
-### 🔶 2. Duplicate and repeat — IN PROGRESS
+### ✅ 2. Duplicate and repeat — COMPLETE
 
-- Planned behaviour: duplicate the selected shape(s) repeatedly with a configurable count and X/Y/Z spacing, retaining all existing shape properties.
+- Kept the existing one-click Duplicate and Cmd/Ctrl+D behaviour.
+- Added **Repeat…** beside Duplicate. Students choose 1–50 copies and X/Y/Z offsets.
+- Verification: repeated a selected Box three times at a 10 mm X offset; created copies landed at X = 10, 20, and 30 mm and became the selection. Typecheck and all 50 unit tests pass.
 
-### ⬜ 3. Align and distribute — NOT STARTED
+### 🔶 3. Align and distribute — IN PROGRESS
+
+- Existing state: alignment to minimum, centre, and maximum positions is available. Distribution will add equal gaps between three or more selected shapes.
 
 ### ⬜ 4. Categorized shape library — NOT STARTED
 

@@ -2017,6 +2017,38 @@ button {
   background: #eef8fc;
 }
 
+.repeat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.repeat-grid label {
+  display: grid;
+  gap: 4px;
+  color: #51697c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.repeat-grid input {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  color: #284158;
+  border: 1px solid #cbd9e3;
+  border-radius: 4px;
+  background: #ffffff;
+  font: inherit;
+  font-weight: 700;
+}
+
+.repeat-grid input:focus {
+  border-color: #55add8;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 156, 222, 0.14);
+}
+
 .top-action-body button svg,
 .top-action-body button .vector-toolbar-sprite-icon,
 .top-action-body button .toolbar-command-icon {
