@@ -276,6 +276,21 @@ Build a static export:
 npm run export
 ```
 
+## Install as an app (PWA)
+
+SketchForge can run as an installable Progressive Web App. Build the static app,
+serve the generated `apps/web/out/` folder from an HTTPS web server, then open it in a
+modern browser and choose **Install SketchForge** from the browser menu.
+
+```bash
+npm run pwa:build
+npx serve apps/web/out
+```
+
+For local testing, open the URL printed by `serve`; localhost is treated as a
+secure origin by browsers. The app caches its editor shell after the first
+successful load and stores projects locally in the browser on that device.
+
 ## Contributing
 
 Contributions are welcome. Good places to help:
