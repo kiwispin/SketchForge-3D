@@ -117,7 +117,7 @@ import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset,
 
 export { importedShapeFromStl, importedShapeFromSvg };
 
-type TopPanel = "import" | "export" | "profile" | "settings" | null;
+type TopPanel = "import" | "export" | "profile" | "settings" | "repeat" | null;
 type ExportFormat = "stl" | "obj" | "step" | "svg" | "skf";
 type DirectExportFormat = Exclude<ExportFormat, "step" | "skf">;
 type SkfHistoryLimit = EditorHistoryExportLimit;
@@ -6827,6 +6827,27 @@ export function SketchForgeEditor({
     commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Duplicated ${duplicates.length} shape${duplicates.length === 1 ? "" : "s"}`);
   }, [commitShapes, hasSelection, selectedShapes, shapes]);
 
+  const repeatSelected = useCallback(
+    (count: number, offsetX: number, offsetY: number, offsetZ: number) => {
+      if (!hasSelection) {
+        setNotice("Select a shape first");
+        return;
+      }
+      const copies = Math.max(1, Math.min(50, Math.floor(count)));
+      const duplicates = Array.from({ length: copies }, (_, copyIndex) =>
+        selectedShapes.map((shape) => ({
+          ...cloneWorkplaneShapeTreeWithFreshIds(shape, `repeat-${copyIndex + 1}`),
+          x: shape.x + offsetX * (copyIndex + 1),
+          z: shape.z + offsetZ * (copyIndex + 1),
+          elevation: (shape.elevation ?? 0) + offsetY * (copyIndex + 1),
+        })),
+      ).flat();
+      commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Repeated ${selectedShapes.length} shape${selectedShapes.length === 1 ? "" : "s"}, ${copies} time${copies === 1 ? "" : "s"}`);
+      setTopPanel(null);
+    },
+    [commitShapes, hasSelection, selectedShapes, shapes],
+  );
+
   const copySelected = useCallback(() => {
     if (!hasSelection) {
       setNotice("Select a shape first");
@@ -8811,6 +8832,10 @@ export function SketchForgeEditor({
         onCopy={copySelected}
         onDelete={deleteSelected}
         onDuplicate={duplicateSelected}
+        onRepeat={() => {
+          setTopPanel("repeat");
+          setMenuOpen(false);
+        }}
         onDropToWorkplane={dropSelectedToWorkplane}
         onGroup={groupSelected}
         onIntersect={intersectSelected}
@@ -8979,6 +9004,7 @@ export function SketchForgeEditor({
           onExportStep={exportStepDesign}
           sharedProjectsEnabled={sharedProjectsEnabled}
           skfExporting={skfExporting}
+          onRepeat={repeatSelected}
           stepExporting={stepExporting}
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
@@ -9099,6 +9125,7 @@ function SecondaryToolbar({
   onCopy,
   onDelete,
   onDuplicate,
+  onRepeat,
   onDropToWorkplane,
   onGroup,
   onIntersect,
@@ -9150,6 +9177,7 @@ function SecondaryToolbar({
   onCopy: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onRepeat: () => void;
   onDropToWorkplane: () => void;
   onGroup: () => void;
   onIntersect: () => void;
@@ -9257,6 +9285,7 @@ function SecondaryToolbar({
     { label: "Copy", icon: ToolbarCopyIcon, action: onCopy, enabled: hasSelection },
     { label: "Paste", icon: ToolbarPasteIcon, action: onPaste, enabled: hasClipboard },
     { label: "Duplicate", icon: ToolbarDuplicateIcon, action: onDuplicate, enabled: hasSelection },
+    { label: "Repeat…", icon: ToolbarDuplicateIcon, action: onRepeat, enabled: hasSelection },
     { label: "Delete", icon: ToolbarTrashIcon, action: onDelete, enabled: hasSelection },
     { label: "Undo", icon: ToolbarUndoIcon, action: onUndo, enabled: canUndo },
     { label: "Redo", icon: ToolbarRedoIcon, action: onRedo, enabled: canRedo },
@@ -9659,6 +9688,7 @@ function TopActionPanel({
   onExportStep,
   sharedProjectsEnabled,
   skfExporting,
+  onRepeat,
   stepExporting,
   onImportFiles,
   onPickFile,
@@ -9675,6 +9705,7 @@ function TopActionPanel({
   onExportStep: (exportName: string) => void;
   sharedProjectsEnabled: boolean;
   skfExporting: boolean;
+  onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void;
   stepExporting: boolean;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
@@ -9693,7 +9724,9 @@ function TopActionPanel({
         ? "Settings"
         : panel === "export"
           ? "Export"
-          : "Import";
+          : panel === "repeat"
+            ? "Repeat"
+            : "Import";
 
   const exportDetails: Record<ExportFormat, { label: string; description: string; note: string }> = {
     stl: {
@@ -9880,6 +9913,7 @@ function TopActionPanel({
           </footer>
         </div>
       ) : null}
+      {panel === "repeat" ? <RepeatPanel onRepeat={onRepeat} /> : null}
       {panel === "settings" ? (
         <div className="top-action-body">
           <p>Workspace preferences</p>
@@ -9895,6 +9929,25 @@ function TopActionPanel({
           <button onClick={() => onNotice("Sign out selected")}>Sign out</button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function RepeatPanel({ onRepeat }: { onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void }) {
+  const [count, setCount] = useState(3);
+  const [offsetX, setOffsetX] = useState(20);
+  const [offsetY, setOffsetY] = useState(0);
+  const [offsetZ, setOffsetZ] = useState(0);
+  return (
+    <div className="top-action-body repeat-panel">
+      <p>Create evenly offset copies of the selected shape or group.</p>
+      <div className="repeat-grid">
+        <label>Copies<input aria-label="Repeat copies" type="number" min="1" max="50" value={count} onChange={(event) => setCount(Number(event.currentTarget.value))} /></label>
+        <label>Offset X<input aria-label="Repeat offset X" type="number" step="0.1" value={offsetX} onChange={(event) => setOffsetX(Number(event.currentTarget.value))} /></label>
+        <label>Offset Y<input aria-label="Repeat offset Y" type="number" step="0.1" value={offsetY} onChange={(event) => setOffsetY(Number(event.currentTarget.value))} /></label>
+        <label>Offset Z<input aria-label="Repeat offset Z" type="number" step="0.1" value={offsetZ} onChange={(event) => setOffsetZ(Number(event.currentTarget.value))} /></label>
+      </div>
+      <button onClick={() => onRepeat(count, offsetX, offsetY, offsetZ)}>Create copies</button>
     </div>
   );
 }
