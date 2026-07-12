@@ -66,7 +66,7 @@ import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifier
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
 import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
-import { makeShapeFromAsset, sceneShape, toolbarShapeAssets, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import {
@@ -8349,6 +8349,7 @@ function SecondaryToolbar({
   saveStatus?: ProjectSaveStatus | null;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
+  const [shapeCategory, setShapeCategory] = useState<"basic" | "text">("basic");
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const suppressNextShapeClickRef = useRef(false);
   const selectToolbarMode = (mode: "geometry" | "sketch") => {
@@ -8360,6 +8361,7 @@ function SecondaryToolbar({
     onAddShape(shape);
     setShapesOpen(false);
   };
+  const activeShapeCategory = shapeLibraryCategories.find((category) => category.id === shapeCategory) ?? shapeLibraryCategories[0];
   const leftTools = [
     { label: "Copy", icon: ToolbarCopyIcon, action: onCopy, enabled: hasSelection },
     { label: "Paste", icon: ToolbarPasteIcon, action: onPaste, enabled: hasClipboard },
@@ -8441,9 +8443,23 @@ function SecondaryToolbar({
           </div>
           {shapesOpen ? (
             <div className="shape-menu-dropdown">
-              <div className="shape-menu-title">Basic Shapes</div>
+              <div className="shape-menu-categories" role="tablist" aria-label="Shape categories">
+                {shapeLibraryCategories.map((category) => (
+                  <button
+                    className={`shape-menu-category ${category.id === activeShapeCategory.id ? "active" : ""}`}
+                    key={category.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={category.id === activeShapeCategory.id}
+                    onClick={() => setShapeCategory(category.id)}
+                  >
+                    {category.label}
+                  </button>
+                ))}
+              </div>
+              <div className="shape-menu-title">{activeShapeCategory.label}</div>
               <div className="shape-menu-list">
-                {toolbarShapeAssets.map((shape) => (
+                {activeShapeCategory.shapes.map((shape) => (
                   <button
                     className="shape-menu-item"
                     key={shape.id}

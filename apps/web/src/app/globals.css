@@ -1801,6 +1801,33 @@ button {
   border-bottom: 1px solid #dbe5ed;
 }
 
+.shape-menu-categories {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+  background: linear-gradient(180deg, #fff, #f3f7fa);
+}
+
+.shape-menu-category {
+  min-height: 30px;
+  padding: 4px 9px;
+  color: #5b7184;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.shape-menu-category:hover,
+.shape-menu-category.active {
+  color: #294760;
+  background: #fff;
+  border-color: #cfdce5;
+  border-bottom-color: #fff;
+}
+
 .shape-menu-list {
   display: flex;
   max-height: min(608px, calc(100vh - 136px));

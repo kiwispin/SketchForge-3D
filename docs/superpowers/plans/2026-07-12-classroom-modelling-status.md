@@ -43,9 +43,14 @@
 - Added **Distribute X** and **Distribute Z** controls for three or more selected shapes. End shapes remain fixed; unlocked shapes between them are spaced evenly.
 - Verified in the running app with unevenly placed shapes: **Distribute X** changed X positions from 0, 45, 100 to 0, 50, 100 mm; **Distribute Z** changed Z positions from 0, 50, 10 to 0, 50, 25 mm. The controls were enabled only after three shapes were selected.
 
-### 🔶 4. Categorized shape library — IN PROGRESS
+### 🔶 4. Categorized shape library — TEXT SUBSTEP COMPLETE; REMAINING CATEGORIES PENDING
 
 - Planned categories: Basic, Text, Connectors, Architectural, and Printable Parts. Existing basic primitives stay available in the first category.
+- ✅ Added accessible **Basic Shapes** and **Text** category tabs to the Shapes menu. Basic retains Box, Cylinder, Sphere, Cone, Pyramid, Wedge, Round Roof, Half Sphere, Torus, and Tube; Text contains the Text solid.
+- ✅ Interaction-tested in the running app: switched between Basic Shapes and Text, added Text, changed its content to `Kia Ora`, selected the Sans font, changed height from 10 to 14 mm, and moved it from X = 0 to X = 18 mm.
+- ✅ Verified Text history and deletion: toolbar Undo restored X = 0, Redo restored X = 18, Delete removed the Text solid, and Undo restored it.
+- ✅ Verification completed: focused shape-library unit test, `npm run ci` (9 files / 51 tests), and `npm run pages:build` all passed.
+- ⬜ Connectors, Architectural, and Printable Parts remain deliberately out of scope until the next approved increment.
 
 ### ⬜ 5. Guided activities — NOT STARTED
 
