@@ -1866,9 +1866,13 @@ function resizeSignsForDimension(signs: ResizeSigns, axis: "width" | "depth") {
 function patchWithResizeAnchor(
   shape: WorkplaneShape,
   patch: Partial<WorkplaneShape>,
-  axis: ShapeInspectorUpdateOptions["resizeAxis"] | DimensionMark["axis"],
+  options: ShapeInspectorUpdateOptions | undefined,
   anchor: ResizeAnchorMemory | null,
 ) {
+  if (options?.position) {
+    return patch;
+  }
+  const axis = options?.resizeAxis;
   if (axis === "height") {
     return patchWithPreservedWorldYEdge(shape, patch, anchor?.shapeId === shape.id && anchor.pressedY === "bottom" ? "top" : "bottom");
   }
@@ -3712,11 +3716,11 @@ export function WorkplaneViewport({
         if (shape.kind === "cone") {
           patch.baseRadius = nextValue / 2;
         }
-        onUpdateShape(id, patchWithResizeAnchor(shape, patch, edit.axis, lastResizeAnchorRef.current));
+        onUpdateShape(id, patchWithResizeAnchor(shape, patch, { resizeAxis: edit.axis }, lastResizeAnchorRef.current));
       } else if (edit.axis === "depth") {
-        onUpdateShape(id, patchWithResizeAnchor(shape, { depth: nextValue, size: resizedShapeSize(shapeWidth(shape), nextValue) }, edit.axis, lastResizeAnchorRef.current));
+        onUpdateShape(id, patchWithResizeAnchor(shape, { depth: nextValue, size: resizedShapeSize(shapeWidth(shape), nextValue) }, { resizeAxis: edit.axis }, lastResizeAnchorRef.current));
       } else {
-        onUpdateShape(id, patchWithResizeAnchor(shape, { height: nextValue }, edit.axis, lastResizeAnchorRef.current));
+        onUpdateShape(id, patchWithResizeAnchor(shape, { height: nextValue }, { resizeAxis: edit.axis }, lastResizeAnchorRef.current));
       }
     }
     setEditingDimension(null);
@@ -4908,7 +4912,7 @@ export function WorkplaneViewport({
           workspace={workspace}
           onUpdate={(patch, options) => {
             clearMoveDimensions();
-            onUpdateShape(selectedShape.id, patchWithResizeAnchor(selectedShape, patch, options?.resizeAxis, lastResizeAnchorRef.current));
+            onUpdateShape(selectedShape.id, patchWithResizeAnchor(selectedShape, patch, options, lastResizeAnchorRef.current));
           }}
           onSnapChange={setSnap}
           onSnapOpenChange={setSnapOpen}
