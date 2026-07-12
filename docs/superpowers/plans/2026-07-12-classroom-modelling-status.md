@@ -28,6 +28,7 @@
 - Added editable **X**, **Y**, and **Z** fields to the selected-shape inspector, using the active measurement unit.
 - Fixed the ruler so its controls are discoverable and usable: visible **Undo ruler** and **Clear ruler** controls, plus Cmd/Ctrl+Z support for ruler history. Ruler points can be dragged with the primary pointer.
 - Verified in the running app: created a ruler segment, used both the **Undo ruler** button and Cmd/Ctrl+Z (each removed the segment), dragged the remaining point, and used **Clear ruler**.
+- Fixed and re-verified the main toolbar **Undo**: it now enables whenever ruler history exists and removes the latest ruler action, matching Cmd/Ctrl+Z.
 - Verified editable X/Y/Z placement in the running app with X = 24 mm, Y = 6 mm, and Z = -18 mm.
 
 ### ✅ 2. Duplicate and repeat — IMPLEMENTED AND INTERACTION-TESTED

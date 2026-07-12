@@ -147,6 +147,7 @@ type WorkplaneViewportProps = {
   onSelectShape: (id: string | string[] | null, mode?: "replace" | "toggle") => void;
   onSetPlacementElevation: (elevation: number, source: "shape" | "base") => void;
   onInteractionActiveChange?: (active: boolean) => void;
+  onRulerUndoStateChange?: (canUndo: boolean, undo: (() => void) | null) => void;
   onEditSketch?: () => void;
   canSeparateParts?: boolean;
   onSeparateParts?: () => void;
@@ -1172,6 +1173,7 @@ export function WorkplaneViewport({
   onSelectShape,
   onSetPlacementElevation,
   onInteractionActiveChange,
+  onRulerUndoStateChange,
   onEditSketch,
   canSeparateParts = false,
   onSeparateParts,
@@ -1647,21 +1649,32 @@ export function WorkplaneViewport({
     hover: model.hover ? { ...model.hover } : null,
   }), []);
 
-  const commitRulerModel = useCallback(
-    (next: RulerModel) => {
-      rulerHistoryRef.current.push(snapshotRulerModel(rulerModelRef.current));
-      storeRulerModel(next);
-    },
-    [snapshotRulerModel, storeRulerModel],
-  );
-
   const undoRuler = useCallback(() => {
     const previous = rulerHistoryRef.current.pop();
     if (!previous) {
       return;
     }
     storeRulerModel({ ...previous, startPointId: null, hover: null });
-  }, [storeRulerModel]);
+    onRulerUndoStateChange?.(rulerHistoryRef.current.length > 0, undoRuler);
+  }, [onRulerUndoStateChange, storeRulerModel]);
+
+  const reportRulerUndoState = useCallback(() => {
+    onRulerUndoStateChange?.(rulerHistoryRef.current.length > 0, undoRuler);
+  }, [onRulerUndoStateChange, undoRuler]);
+
+  const commitRulerModel = useCallback(
+    (next: RulerModel) => {
+      rulerHistoryRef.current.push(snapshotRulerModel(rulerModelRef.current));
+      storeRulerModel(next);
+      reportRulerUndoState();
+    },
+    [reportRulerUndoState, snapshotRulerModel, storeRulerModel],
+  );
+
+  useEffect(() => {
+    reportRulerUndoState();
+    return () => onRulerUndoStateChange?.(false, null);
+  }, [onRulerUndoStateChange, reportRulerUndoState]);
 
   const clearRuler = useCallback(() => {
     const current = rulerModelRef.current;
@@ -2852,9 +2865,10 @@ export function WorkplaneViewport({
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
       rulerHistoryRef.current.push(snapshotRulerModel(rulerModelRef.current));
+      reportRulerUndoState();
       rulerDragRef.current = { pointId, pointerId: event.pointerId };
     },
-    [snapshotRulerModel],
+    [reportRulerUndoState, snapshotRulerModel],
   );
 
   const handleRulerPointPointerMove = useCallback(
