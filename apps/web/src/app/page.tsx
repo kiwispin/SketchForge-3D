@@ -49,6 +49,7 @@ const DOWNLOAD_MODE_STORAGE_KEY = "sketchForge.downloadMode";
 const DOWNLOAD_FOLDER_STORAGE_KEY = "sketchForge.downloadFolder";
 const PROJECT_ACCENTS: DashboardProject["accent"][] = ["cyan", "green", "gold", "red"];
 const STATIC_EXPORT_BUILD = process.env.NEXT_PUBLIC_STATIC_EXPORT === "true";
+const APP_ROOT_PATH = process.env.NEXT_PUBLIC_BASE_PATH ? `${process.env.NEXT_PUBLIC_BASE_PATH}/` : "/";
 
 function formatUpdated(timestamp: number) {
   const age = Date.now() - timestamp;
@@ -328,7 +329,7 @@ export default function Home() {
     setActiveProjectId(null);
     setView("dashboard");
     if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", "/");
+      window.history.replaceState(null, "", APP_ROOT_PATH);
     }
   }, [activeProjectId, projects]);
 
@@ -389,7 +390,7 @@ export default function Home() {
         setProjects(storedProjects);
         setActiveProjectId(null);
         setView("dashboard");
-        window.history.replaceState(null, "", "/");
+        window.history.replaceState(null, "", APP_ROOT_PATH);
         return;
       }
       setProjects(storedProjects.map((project) => (project.id === projectId ? { ...project, updatedAt: Date.now() } : project)));
@@ -400,7 +401,7 @@ export default function Home() {
     setEditorStarted(true);
     setView("editor");
     if (typeof window !== "undefined") {
-      const nextUrl = projectId ? `/?editor=1&project=${encodeURIComponent(projectId)}` : "/?editor=1";
+      const nextUrl = projectId ? `${APP_ROOT_PATH}?editor=1&project=${encodeURIComponent(projectId)}` : `${APP_ROOT_PATH}?editor=1`;
       window.history.replaceState(null, "", nextUrl);
     }
   };
@@ -606,7 +607,7 @@ export default function Home() {
     setDashboardSection("home");
     setView("dashboard");
     if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", "/");
+      window.history.replaceState(null, "", APP_ROOT_PATH);
     }
   };
 
