@@ -8,8 +8,13 @@ export function PwaRegistration() {
       return;
     }
 
+    if (!navigator.serviceWorker.controller && !sessionStorage.getItem("sketchforge.pwaShellCached")) {
+      sessionStorage.setItem("sketchforge.pwaShellCached", "true");
+      navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload(), { once: true });
+    }
+
     void navigator.serviceWorker.register("/sw.js").catch(() => {
-      // The editor remains fully usable online if registration is unavailable.
+        // The editor remains fully usable online if registration is unavailable.
     });
   }, []);
 
