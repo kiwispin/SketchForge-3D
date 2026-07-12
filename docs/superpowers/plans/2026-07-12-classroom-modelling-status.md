@@ -34,11 +34,15 @@
 - Added **Repeat…** beside Duplicate. Students choose 1–50 copies and X/Y/Z offsets.
 - Verification: repeated a selected Box three times at a 10 mm X offset; created copies landed at X = 10, 20, and 30 mm and became the selection. Typecheck and all 50 unit tests pass.
 
-### 🔶 3. Align and distribute — IN PROGRESS
+### ✅ 3. Align and distribute — COMPLETE
 
-- Existing state: alignment to minimum, centre, and maximum positions is available. Distribution will add equal gaps between three or more selected shapes.
+- Existing min/centre/max alignment controls remain unchanged.
+- Added **Distribute X** and **Distribute Z** controls for three or more selected shapes. End shapes remain fixed; unlocked shapes between them are spaced evenly.
+- Verification: selected six shapes and ran Distribute X; their X positions became 0, 6, 12, 18, 24, and 30 mm. Typecheck and all 50 unit tests pass.
 
-### ⬜ 4. Categorized shape library — NOT STARTED
+### 🔶 4. Categorized shape library — IN PROGRESS
+
+- Planned categories: Basic, Text, Connectors, Architectural, and Printable Parts. Existing basic primitives stay available in the first category.
 
 ### ⬜ 5. Guided activities — NOT STARTED
 

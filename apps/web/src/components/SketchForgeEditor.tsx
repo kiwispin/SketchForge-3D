@@ -2556,6 +2556,27 @@ function alignedShapesForSelection(
   return { nextShapes, moved };
 }
 
+function distributedShapesForSelection(shapes: WorkplaneShape[], selectedIds: string[], selectedShapes: WorkplaneShape[], axis: "x" | "z") {
+  if (selectedShapes.length < 3) {
+    return { nextShapes: shapes, moved: 0 };
+  }
+  const selected = new Set(selectedIds);
+  const ordered = [...selectedShapes].sort((a, b) => (axis === "x" ? a.x - b.x : a.z - b.z));
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  const span = (axis === "x" ? last.x - first.x : last.z - first.z) / (ordered.length - 1);
+  const targetById = new Map(ordered.map((shape, index) => [shape.id, (axis === "x" ? first.x : first.z) + span * index]));
+  let moved = 0;
+  const nextShapes = shapes.map((shape) => {
+    if (!selected.has(shape.id) || shape.locked) return shape;
+    const target = targetById.get(shape.id);
+    if (target === undefined || Math.abs((axis === "x" ? shape.x : shape.z) - target) < ALIGN_EPSILON) return shape;
+    moved += 1;
+    return canonicalizeShape(axis === "x" ? { ...shape, x: cleanNearZero(target, ALIGN_EPSILON) } : { ...shape, z: cleanNearZero(target, ALIGN_EPSILON) });
+  });
+  return { nextShapes, moved };
+}
+
 function effectiveAlignmentAnchorId(selection: WorkplaneShape[], requestedAnchorId: string | null) {
   return selection.find((shape) => shape.locked)?.id
     ?? (requestedAnchorId && selection.some((shape) => shape.id === requestedAnchorId) ? requestedAnchorId : null);
@@ -6326,6 +6347,22 @@ export function SketchForgeEditor({
     [commitShapes, effectiveAlignAnchorId, selectedIds, selectedShapes, shapes],
   );
 
+  const distributeSelection = useCallback(
+    (axis: "x" | "z") => {
+      if (selectedShapes.length < 3) {
+        setNotice("Select at least three shapes to distribute");
+        return;
+      }
+      const { nextShapes, moved } = distributedShapesForSelection(shapes, selectedIds, selectedShapes, axis);
+      if (moved === 0) {
+        setNotice("Already evenly distributed");
+        return;
+      }
+      commitShapes(nextShapes, selectedIds, `Distributed ${moved} shape${moved === 1 ? "" : "s"} along ${axis.toUpperCase()}`);
+    },
+    [commitShapes, selectedIds, selectedShapes, shapes],
+  );
+
   const previewAlignSelection = useCallback((axis: AlignAxis, target: AlignTarget) => {
     setAlignPreview({ axis, target });
   }, []);
@@ -7917,6 +7954,7 @@ export function SketchForgeEditor({
         hasSelection={hasSelection}
         alignMode={alignMode}
         canAlign={selectedShapes.length > 1}
+        canDistribute={selectedShapes.length > 2}
         canEdgeModify={selectedShapes.length === 1 && Boolean(selectedShape && !selectedShape.locked && !selectedShape.hole)}
         edgeModifierKind={edgeModifier?.kind ?? null}
         mirrorMode={mirrorMode}
@@ -7941,6 +7979,7 @@ export function SketchForgeEditor({
         onSketchCancel={cancelSketch}
         onHome={onHome}
         onAlign={toggleAlignMode}
+        onDistribute={distributeSelection}
         onChamfer={() => edgeModifier?.kind === "chamfer" ? cancelEdgeModifier() : startEdgeModifier("chamfer")}
         onCopy={copySelected}
         onDelete={deleteSelected}
@@ -8189,6 +8228,7 @@ function SecondaryToolbar({
   onToolbarModeChange,
   alignMode,
   canAlign,
+  canDistribute,
   canEdgeModify,
   edgeModifierKind,
   canGroup,
@@ -8214,6 +8254,7 @@ function SecondaryToolbar({
   onSketchCancel,
   onHome,
   onAlign,
+  onDistribute,
   onChamfer,
   onCopy,
   onDelete,
@@ -8241,6 +8282,7 @@ function SecondaryToolbar({
   onToolbarModeChange: (mode: ToolbarMode) => void;
   alignMode: boolean;
   canAlign: boolean;
+  canDistribute: boolean;
   canEdgeModify: boolean;
   edgeModifierKind: CadModifierKind | null;
   canGroup: boolean;
@@ -8266,6 +8308,7 @@ function SecondaryToolbar({
   onSketchCancel: () => void;
   onHome?: () => void;
   onAlign: () => void;
+  onDistribute: (axis: "x" | "z") => void;
   onChamfer: () => void;
   onCopy: () => void;
   onDelete: () => void;
@@ -8321,6 +8364,8 @@ function SecondaryToolbar({
   ];
   const modifyTools = [
     { label: "Align", icon: ToolbarAlignIcon, action: onAlign, enabled: canAlign, active: alignMode },
+    { label: "Distribute X", icon: ToolbarAlignIcon, action: () => onDistribute("x"), enabled: canDistribute },
+    { label: "Distribute Z", icon: ToolbarAlignIcon, action: () => onDistribute("z"), enabled: canDistribute },
     { label: "Mirror", icon: ToolbarMirrorIcon, action: onMirror, enabled: hasSelection, active: mirrorMode },
     { label: "Snap to grid", icon: ToolbarSnapGridIcon, action: onSnap, enabled: hasSelection },
     { label: "Chamfer", icon: ToolbarChamferIcon, action: onChamfer, enabled: canEdgeModify, active: edgeModifierKind === "chamfer" },
