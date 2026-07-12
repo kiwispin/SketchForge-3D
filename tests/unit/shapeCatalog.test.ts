@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShapeAsset } from "@/types/sketchforge";
-import { makeShapeFromAsset, sceneShape, toolbarShapeAssets } from "@/lib/shapeCatalog";
+import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
 
 describe("shape catalog", () => {
   it("does not expose removed decorative shapes in the toolbar catalog", () => {
@@ -8,6 +8,16 @@ describe("shape catalog", () => {
 
     expect(kinds).not.toContain("star");
     expect(kinds).not.toContain("heart");
+  });
+
+  it("keeps text in its own library category while preserving the basic shapes", () => {
+    const basic = shapeLibraryCategories.find((category) => category.id === "basic");
+    const text = shapeLibraryCategories.find((category) => category.id === "text");
+
+    expect(basic?.shapes.map((asset) => asset.kind)).toContain("box");
+    expect(basic?.shapes.map((asset) => asset.kind)).not.toContain("text");
+    expect(text?.shapes).toHaveLength(1);
+    expect(text?.shapes[0]).toMatchObject({ id: "text", kind: "text", name: "Text" });
   });
 
   it("creates placed shapes from toolbar assets", () => {

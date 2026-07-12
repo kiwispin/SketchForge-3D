@@ -88,7 +88,7 @@ import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceF
 import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
 import { buildSketchRevolveMesh, DEFAULT_SKETCH_REVOLVE_SETTINGS, normalizeSketchRevolveSettings, type SketchRevolveMesh } from "@/lib/sketchRevolve";
 import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
-import { makeShapeFromAsset, sceneShape, toolbarShapeAssets, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { importedShapeFromSvg, invalidSvgMeshReason } from "@/lib/svgImport";
 import { toSvgProjection, type SvgProjectionLayer } from "@/lib/svgExport";
@@ -9156,6 +9156,7 @@ function SecondaryToolbar({
   const [visibilityMenuPosition, setVisibilityMenuPosition] = useState({ top: 0, left: 0 });
   const sketchCreateMenuRef = useRef<HTMLDivElement>(null);
   const visibilityMenuRef = useRef<HTMLDivElement>(null);
+  const [shapeCategory, setShapeCategory] = useState<"basic" | "text">("basic");
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const suppressNextShapeClickRef = useRef(false);
   const selectToolbarMode = (mode: "geometry" | "sketch") => {
@@ -9236,6 +9237,7 @@ function SecondaryToolbar({
     onTopPanel(null);
     setVisibilityOpen(true);
   };
+  const activeShapeCategory = shapeLibraryCategories.find((category) => category.id === shapeCategory) ?? shapeLibraryCategories[0];
   const leftTools = [
     { label: "Copy", icon: ToolbarCopyIcon, action: onCopy, enabled: hasSelection },
     { label: "Paste", icon: ToolbarPasteIcon, action: onPaste, enabled: hasClipboard },
@@ -9323,9 +9325,23 @@ function SecondaryToolbar({
           </div>
           {shapesOpen ? (
             <div className="shape-menu-dropdown">
-              <div className="shape-menu-title">Basic Shapes</div>
+              <div className="shape-menu-categories" role="tablist" aria-label="Shape categories">
+                {shapeLibraryCategories.map((category) => (
+                  <button
+                    className={`shape-menu-category ${category.id === activeShapeCategory.id ? "active" : ""}`}
+                    key={category.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={category.id === activeShapeCategory.id}
+                    onClick={() => setShapeCategory(category.id)}
+                  >
+                    {category.label}
+                  </button>
+                ))}
+              </div>
+              <div className="shape-menu-title">{activeShapeCategory.label}</div>
               <div className="shape-menu-list">
-                {toolbarShapeAssets.map((shape) => (
+                {activeShapeCategory.shapes.map((shape) => (
                   <button
                     className="shape-menu-item"
                     key={shape.id}
