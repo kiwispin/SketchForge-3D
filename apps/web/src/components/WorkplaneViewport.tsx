@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, Minus, Plus, Trash2, Undo2 } from "lucide-react";
+import { Home, Minus, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import * as THREE from "three";
 import { Brush, Evaluator, HOLLOW_INTERSECTION } from "three-bvh-csg";
@@ -2980,7 +2980,6 @@ export function WorkplaneViewport({
         <button className={rulerMode ? "active" : ""} aria-label="Ruler" title="Ruler" aria-pressed={rulerMode} onClick={toggleRulerMode}>
           <RulerGlyph />
         </button>
-        {rulerModel.points.length > 0 ? <button aria-label="Undo ruler" title="Undo ruler (Ctrl/Cmd+Z)" onClick={undoRuler}><Undo2 size={25} /></button> : null}
         {rulerModel.points.length > 0 ? <button aria-label="Clear ruler" title="Clear ruler" onClick={clearRuler}><Trash2 size={23} /></button> : null}
       </div>
 
