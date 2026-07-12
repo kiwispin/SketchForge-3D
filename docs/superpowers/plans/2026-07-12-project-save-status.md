@@ -15,6 +15,7 @@
 | `d958973` | Task 1: `.sketchforge` file format module + 12 unit tests |
 | `993abf4` | Task 1 review fix: drop malformed nested `groupedShapes` entries (try/catch in `parseProjectFile`), +2 tests, minor cleanups |
 | `26c6139` | Task 2: Save project button in Export panel + Cmd/Ctrl+S |
+| Pending | Tasks 3–4: Open `.sketchforge` files as new projects + editor autosave indicator |
 
 ## Task status
 
@@ -23,19 +24,22 @@
 - Spec compliance review: **passed**.
 - Code quality review: **approved** after one fix round (nested-group validation gap fixed in `993abf4`; verified by re-review).
 
-### 🔶 Task 2 — Editor save (IMPLEMENTED, REVIEWS INCOMPLETE)
-- Commit `26c6139`. Implementer verified: typecheck clean, 50/50 tests, live browser check (Save button renders above STL/OBJ/STEP in the Export panel; Ctrl+S triggers exactly one download; no shadowing by the bare `s` solid-mode shortcut).
-- **Spec compliance review: NOT DONE** — the reviewer subagent was killed mid-run by a session limit. Re-dispatch it (review commit `26c6139` vs. plan Task 2; check Cmd+S branch placement, dependency array, `saveDesign` fully removed, export panel otherwise unchanged, single-file commit).
-- **Code quality review: NOT DONE** — run after spec review passes (base `993abf4`, head `26c6139`).
+### ✅ Task 2 — Editor save (COMPLETE)
+- Commit `26c6139`. A source review confirmed the Cmd/Ctrl+S branch is correctly placed before the bare `s` shortcut, the hook dependency is present, and the retired `saveDesign` callback is gone.
+- Browser verification on 2026-07-12 confirmed the Export-panel control and Cmd/Ctrl+S both download `Untitled design 1.sketchforge` without invoking the browser page-save dialog.
 
-### ⬜ Task 3 — Open `.sketchforge` as new project (NOT STARTED)
-Editor: accept project files in `selectFile` + new `onProjectFileImport` prop + accept attr + drop-zone copy. Dashboard (`page.tsx`): `importProjectFilePayload` (name dedupe " (2)", create project, save shapes, open editor), extend `importFileFromDashboard`, accept attr, card label → "Import file", pass prop to editor. Full code is in plan Task 3.
+### ✅ Task 3 — Open `.sketchforge` as new project (COMPLETE)
+- Editor and dashboard now accept `.sketchforge` files, parse them through the shared file module, create a new project with name de-duplication, retain workspace/snap settings and shapes, and report dropped unreadable shapes.
+- The dashboard card now says "Import file" and the editor drop zone advertises project files.
 
-### ⬜ Task 4 — Autosave indicator (NOT STARTED)
-`ProjectSaveStatus` type in `types/sketchforge.ts`; pending-write counter + status state in `page.tsx` `updateProjectShapes`; `saveStatus` prop → editor → `SecondaryToolbar` Output section chip; CSS in `globals.css`. Full code is in plan Task 4.
+### ✅ Task 4 — Autosave indicator (COMPLETE)
+- The Output ribbon shows real IndexedDB queue state: `Saving…`, `Saved ✓`, or `Save failed`.
+- Browser verification on 2026-07-12 confirmed the indicator reaches `Saved ✓` after adding a Box.
 
-### ⬜ Task 5 — Full verification (NOT STARTED)
-`npm run ci` + manual browser pass per plan Task 5 checklist (save, Cmd+S, reimport with group/hole/workspace fidelity, editor drop zone, bogus-file rejection, indicator states).
+### 🔶 Task 5 — Full verification (PARTIALLY COMPLETE)
+- `npm run ci` passes: typecheck clean and 50/50 tests.
+- Browser checks passed for the saved autosave state, the Export-panel save button, and Cmd/Ctrl+S.
+- Still manually verify importing a downloaded file (including grouped hole/workspace fidelity), editor drop-zone import, and bogus-file rejection when a file-picker-capable browser session is available.
 
 ### ⬜ Final step (NOT STARTED)
 Final whole-branch code review (base `458538d`), then superpowers:finishing-a-development-branch (merge/PR decision with user).

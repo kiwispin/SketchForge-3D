@@ -65,7 +65,7 @@ import {
 import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
-import { projectFileName, serializeProjectFile } from "@/lib/projectFile";
+import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { makeShapeFromAsset, sceneShape, toolbarShapeAssets, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
@@ -78,7 +78,7 @@ import {
   type SketchForgeMcpViewFace,
 } from "@/lib/sketchforgeMcpProtocol";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ShapeAsset, SketchImage, SketchPoint, SketchProfile, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectSaveStatus, ShapeAsset, SketchImage, SketchPoint, SketchProfile, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export { importedShapeFromStl, importedShapeFromSvg };
 
@@ -5114,6 +5114,8 @@ export function SketchForgeEditor({
   onProjectShapesChange,
   onProjectSnapshot,
   onProjectWorkspaceChange,
+  onProjectFileImport,
+  saveStatus = null,
   projectId,
   projectName = "SketchForge design",
   projectRevision = 0,
@@ -5125,6 +5127,8 @@ export function SketchForgeEditor({
   onProjectShapesChange?: (snapshot: { projectId: string; shapes: WorkplaneShape[] }) => void;
   onProjectSnapshot?: (snapshot: { image: string; projectId: string; shapes: number }) => void;
   onProjectWorkspaceChange?: (snapshot: { projectId: string; workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => void;
+  onProjectFileImport?: (payload: ParsedProjectFile) => void;
+  saveStatus?: ProjectSaveStatus | null;
   projectId?: string | null;
   projectName?: string;
   projectRevision?: number;
@@ -7584,10 +7588,24 @@ export function SketchForgeEditor({
   }, [commitShapes, shapes]);
 
   const selectFile = useCallback(async (file: File) => {
+    if (isProjectFileName(file.name)) {
+      if (!onProjectFileImport) {
+        setNotice("Open project files from the dashboard");
+        return;
+      }
+      try {
+        const parsed = parseProjectFile(await file.text());
+        onProjectFileImport(parsed);
+        setTopPanel(null);
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : `Could not open ${file.name}`);
+      }
+      return;
+    }
     const isStep = /\.(step|stp)$/i.test(file.name);
     const isSvg = /\.svg$/i.test(file.name) || file.type === "image/svg+xml";
     if (!isStep && !isSvg && !importExtensionSupported(file.name)) {
-      setNotice("Unsupported file type. Use STL, STEP, or SVG.");
+      setNotice("Unsupported file type. Use STL, STEP, SVG, or .sketchforge.");
       return;
     }
 
@@ -7607,7 +7625,7 @@ export function SketchForgeEditor({
     } catch (error) {
       setNotice(error instanceof Error ? error.message : `Could not import ${file.name}`);
     }
-  }, [commitShapes, shapes]);
+  }, [commitShapes, onProjectFileImport, shapes]);
 
   const selectFiles = useCallback(
     (files: FileList | File[]) => {
@@ -7921,6 +7939,7 @@ export function SketchForgeEditor({
         onUndo={undo}
         onWorkplaneTool={activateWorkplaneTool}
         workplaneMode={workplaneMode}
+        saveStatus={saveStatus}
         onTopPanel={(panel) => {
           setTopPanel(panel);
           setMenuOpen(false);
@@ -8088,7 +8107,7 @@ export function SketchForgeEditor({
         ref={fileInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".stl,.step,.stp,.svg,image/svg+xml"
+        accept=".stl,.step,.stp,.svg,image/svg+xml,.sketchforge"
         onChange={(event) => {
           if (event.currentTarget.files) {
             selectFiles(event.currentTarget.files);
@@ -8187,6 +8206,7 @@ function SecondaryToolbar({
   workplaneMode,
   onTopPanel,
   onAddShape,
+  saveStatus,
 }: {
   toolbarMode: ToolbarMode;
   onToolbarModeChange: (mode: ToolbarMode) => void;
@@ -8237,6 +8257,7 @@ function SecondaryToolbar({
   workplaneMode: boolean;
   onTopPanel: (panel: TopPanel) => void;
   onAddShape: (shape: ShapeAsset) => void;
+  saveStatus?: ProjectSaveStatus | null;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
@@ -8420,6 +8441,11 @@ function SecondaryToolbar({
       <div className="toolbar-section toolbar-actions-section">
         <div className="toolbar-section-label">Output</div>
         <div className="action-buttons">
+          {saveStatus && saveStatus !== "idle" ? (
+            <div className={`autosave-indicator ${saveStatus}`} role="status" title="Designs autosave to this browser">
+              {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : "Save failed"}
+            </div>
+          ) : null}
           <button className="action-icon-button" aria-label="Import" title="Import" onClick={() => onTopPanel("import")}>
             <ToolbarImportIcon />
           </button>
@@ -8611,7 +8637,7 @@ function TopActionPanel({
             }}
           >
             <ToolbarImportIcon />
-            <strong>Drop STL, STEP, or SVG files</strong>
+            <strong>Drop STL, STEP, SVG, or .sketchforge files</strong>
             <span>or click to choose from your computer</span>
           </button>
         </div>

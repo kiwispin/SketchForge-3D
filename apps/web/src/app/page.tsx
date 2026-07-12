@@ -4,9 +4,10 @@ import { Clock3, EllipsisVertical, FileUp, Grid3X3, HomeIcon, List, Pencil, Plus
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
 import { createLocalId } from "@/lib/localIds";
+import { isProjectFileName, parseProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { importExtensionSupported } from "@/lib/stlImport";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
-import type { GridSize, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { GridSize, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 type AppView = "dashboard" | "editor";
 type ViewMode = "grid" | "list";
@@ -254,10 +255,12 @@ export default function Home() {
   const [downloadFolder, setDownloadFolder] = useState("");
   const [dashboardNotice, setDashboardNotice] = useState("");
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
+  const [projectSaveStatus, setProjectSaveStatus] = useState<ProjectSaveStatus>("idle");
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
   const nextProjectRevisionRef = useRef(0);
   const projectShapeSaveQueuesRef = useRef<Record<string, Promise<void>>>({});
+  const pendingProjectSavesRef = useRef(0);
 
   useEffect(() => {
     const { projects: storedProjects, legacyShapes } = readStoredProjects();
@@ -456,12 +459,18 @@ export default function Home() {
       };
     });
 
+    pendingProjectSavesRef.current += 1;
+    setProjectSaveStatus("saving");
     const previousSave = projectShapeSaveQueuesRef.current[snapshot.projectId] ?? Promise.resolve();
     const queuedSave = previousSave.catch(() => undefined).then(() => saveProjectShapes(snapshot.projectId, snapshot.shapes, revision));
     projectShapeSaveQueuesRef.current[snapshot.projectId] = queuedSave;
 
     void queuedSave
       .then(() => {
+        pendingProjectSavesRef.current -= 1;
+        if (pendingProjectSavesRef.current === 0) {
+          setProjectSaveStatus("saved");
+        }
         setProjects((current) =>
           current.map((project) =>
             project.id === snapshot.projectId && (project.revision ?? 0) <= revision
@@ -471,6 +480,8 @@ export default function Home() {
         );
       })
       .catch((error) => {
+        pendingProjectSavesRef.current -= 1;
+        setProjectSaveStatus("error");
         if (projectShapeSaveQueuesRef.current[snapshot.projectId] === queuedSave) {
           setDashboardNotice(error instanceof Error ? error.message : "Could not save project shapes");
         }
@@ -513,8 +524,45 @@ export default function Home() {
     openEditor(project.id, { allowMissingFromStorage: true });
   };
 
+  const importProjectFilePayload = useCallback(
+    (payload: ParsedProjectFile, sourceName?: string) => {
+      const takenNames = new Set(projects.map((project) => project.name));
+      let name = payload.name;
+      for (let suffix = 2; takenNames.has(name); suffix += 1) {
+        name = `${payload.name} (${suffix})`;
+      }
+      const project = newProject(name, projects.length, payload.shapes.length);
+      project.workspace = payload.workspace;
+      project.snapGrid = payload.snapGrid;
+      const revision = project.revision ?? project.updatedAt;
+      setProjectShapesById((current) => ({
+        ...current,
+        [project.id]: { revision, shapes: payload.shapes },
+      }));
+      void saveProjectShapes(project.id, payload.shapes, revision).catch(() => {
+        setDashboardNotice("Could not prepare project shape storage");
+      });
+      const droppedNote =
+        payload.droppedShapeCount > 0
+          ? ` (skipped ${payload.droppedShapeCount} unreadable shape${payload.droppedShapeCount === 1 ? "" : "s"})`
+          : "";
+      setDashboardNotice(`Imported ${sourceName ?? name}${droppedNote}`);
+      setProjects((current) => [project, ...current]);
+      openEditor(project.id, { allowMissingFromStorage: true });
+    },
+    [projects],
+  );
+
   const importFileFromDashboard = useCallback(
     async (file: File) => {
+      if (isProjectFileName(file.name)) {
+        try {
+          importProjectFilePayload(parseProjectFile(await file.text()), file.name);
+        } catch (error) {
+          setDashboardNotice(error instanceof Error ? error.message : `Could not open ${file.name}`);
+        }
+        return;
+      }
       const isSvg = /\.svg$/i.test(file.name) || file.type === "image/svg+xml";
       if (!isSvg && !importExtensionSupported(file.name)) {
         setDashboardNotice("Unsupported file type. Use STL or SVG.");
@@ -539,7 +587,7 @@ export default function Home() {
         setDashboardNotice(error instanceof Error ? error.message : `Could not import ${file.name}`);
       }
     },
-    [projects.length],
+    [importProjectFilePayload, projects.length],
   );
 
   const openLatestProject = () => {
@@ -614,7 +662,7 @@ export default function Home() {
         ref={dashboardImportInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".stl,.svg,image/svg+xml"
+        accept=".stl,.svg,image/svg+xml,.sketchforge"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           if (file) {
@@ -665,9 +713,11 @@ export default function Home() {
             onProjectShapesChange={updateProjectShapes}
             onProjectSnapshot={updateProjectSnapshot}
             onProjectWorkspaceChange={updateProjectWorkspace}
+            onProjectFileImport={importProjectFilePayload}
             projectId={activeProjectId}
             projectName={activeProject?.name}
             projectRevision={activeProjectShapeEntry?.revision ?? activeProject?.revision ?? 0}
+            saveStatus={activeProjectId ? projectSaveStatus : null}
           />
         </div>
       ) : null}
@@ -817,7 +867,7 @@ function Dashboard({
                   <span className="dashboard-action-icon">
                     <FileUp size={24} strokeWidth={2.4} />
                   </span>
-                  <span>Import STL/SVG</span>
+                  <span>Import file</span>
                 </button>
                 <button className="dashboard-action-tile" type="button" onClick={onWorkspace}>
                   <span className="dashboard-action-icon">
