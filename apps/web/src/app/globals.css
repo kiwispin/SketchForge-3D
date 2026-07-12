@@ -3572,6 +3572,39 @@ button {
   gap: 17px;
 }
 
+.position-card {
+  padding-bottom: 12px;
+}
+
+.position-property-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.position-property {
+  display: grid;
+  gap: 5px;
+  color: #586a7d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.position-property .range-value-control {
+  width: 100%;
+  gap: 3px;
+  padding: 0 4px;
+}
+
+.position-property .range-value-control input {
+  width: min(100%, 56px);
+  font-size: 12px;
+}
+
+.position-property .range-value-unit {
+  font-size: 10px;
+}
+
 .range-property {
   display: grid;
   gap: 7px;

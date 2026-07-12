@@ -67,7 +67,7 @@ type SelectPropertyConfig = {
 };
 
 type ShapePropertyConfig = RangePropertyConfig | TextPropertyConfig | SelectPropertyConfig;
-export type ShapeInspectorUpdateOptions = { resizeAxis?: "width" | "depth" | "height" };
+export type ShapeInspectorUpdateOptions = { resizeAxis?: "width" | "depth" | "height"; position?: true };
 type ShapeInspectorUpdate = (patch: Partial<WorkplaneShape>, options?: ShapeInspectorUpdateOptions) => void;
 
 function clamp(value: number, min: number, max: number) {
@@ -349,10 +349,106 @@ export function ShapeInspector({
           </div>
         ) : null}
       </div>
+      <PositionCard shape={shape} workspace={workspace} disabled={locked} onUpdate={onUpdate} />
       <div className="inspector-snap-dock">
         <SnapGridControl snap={snap} snapOpen={snapOpen} onSnapChange={onSnapChange} onSnapOpenChange={onSnapOpenChange} />
       </div>
     </aside>
+  );
+}
+
+function PositionCard({
+  shape,
+  workspace,
+  disabled,
+  onUpdate,
+}: {
+  shape: WorkplaneShape;
+  workspace: WorkplaneWorkspaceSettings;
+  disabled?: boolean;
+  onUpdate: ShapeInspectorUpdate;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="property-card position-card">
+      <button
+        className="property-card-header"
+        type="button"
+        aria-expanded={open}
+        aria-controls={`position-${shape.id}`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>Position</span>
+        <ChevronUp className={open ? "" : "collapsed"} size={25} strokeWidth={2.8} />
+      </button>
+      {open ? (
+        <div className="position-property-list" id={`position-${shape.id}`}>
+          <PositionProperty label="X" value={shape.x} workspace={workspace} disabled={disabled} onChange={(x) => onUpdate({ x })} />
+          <PositionProperty label="Y" value={shape.elevation ?? 0} workspace={workspace} disabled={disabled} onChange={(elevation) => onUpdate({ elevation }, { position: true })} />
+          <PositionProperty label="Z" value={shape.z} workspace={workspace} disabled={disabled} onChange={(z) => onUpdate({ z })} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PositionProperty({
+  label,
+  value,
+  workspace,
+  disabled,
+  onChange,
+}: {
+  label: "X" | "Y" | "Z";
+  value: number;
+  workspace: WorkplaneWorkspaceSettings;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}) {
+  const accuracy = workspace.accuracy;
+  const displayValue = millimetersToDisplay(Number.isFinite(value) ? value : 0, workspace);
+  const step = displayStepFromMillimeters(0.01, workspace);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(formatPropertyNumber(displayValue, accuracy, step));
+  useEffect(() => {
+    if (!editing) {
+      setDraft(formatPropertyNumber(displayValue, accuracy, step));
+    }
+  }, [accuracy, displayValue, editing, step]);
+  const commitDraft = () => {
+    const next = Number(draft);
+    onChange(Number.isFinite(next) ? displayToMillimeters(next, workspace) : value);
+    setEditing(false);
+  };
+  return (
+    <label className="position-property">
+      <span>{label}</span>
+      <span className="range-value-control">
+        <input
+          type="number"
+          step={step}
+          value={editing ? draft : formatPropertyNumber(displayValue, accuracy, step)}
+          disabled={disabled}
+          inputMode="decimal"
+          aria-label={`Position ${label}`}
+          onFocus={() => {
+            setDraft(formatPropertyNumber(displayValue, accuracy, step));
+            setEditing(true);
+          }}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onBlur={commitDraft}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              setDraft(formatPropertyNumber(displayValue, accuracy, step));
+              setEditing(false);
+            }
+          }}
+        />
+        <span className="range-value-unit">{lengthDisplayUnit(workspace).label}</span>
+      </span>
+    </label>
   );
 }
 
