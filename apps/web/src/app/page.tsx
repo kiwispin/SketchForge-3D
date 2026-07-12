@@ -1,8 +1,9 @@
 "use client";
 
-import { Clock3, EllipsisVertical, FileUp, Grid3X3, HomeIcon, List, Pencil, Plus, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Clock3, EllipsisVertical, FileUp, GraduationCap, Grid3X3, HomeIcon, List, Pencil, Plus, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
+import { tutorials } from "@/lib/tutorials";
 import { createLocalId } from "@/lib/localIds";
 import { isProjectFileName, parseProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { importExtensionSupported } from "@/lib/stlImport";
@@ -11,7 +12,7 @@ import type { GridSize, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSet
 
 type AppView = "dashboard" | "editor";
 type ViewMode = "grid" | "list";
-type DashboardSection = "home" | "challenges";
+type DashboardSection = "home" | "challenges" | "learn";
 type DownloadMode = "browser" | "folder";
 
 type DashboardProject = {
@@ -257,6 +258,7 @@ export default function Home() {
   const [dashboardNotice, setDashboardNotice] = useState("");
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
   const [projectSaveStatus, setProjectSaveStatus] = useState<ProjectSaveStatus>("idle");
+  const [launchTutorial, setLaunchTutorial] = useState<{ projectId: string; tutorialId: string } | null>(null);
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
   const nextProjectRevisionRef = useRef(0);
@@ -525,6 +527,22 @@ export default function Home() {
     openEditor(project.id, { allowMissingFromStorage: true });
   };
 
+  const startTutorial = (tutorialId: string) => {
+    const tutorial = tutorials.find((entry) => entry.id === tutorialId);
+    if (!tutorial) return;
+    const project = newProject(tutorial.title, projects.length);
+    setProjectShapesById((current) => ({
+      ...current,
+      [project.id]: { revision: project.revision ?? project.updatedAt, shapes: [] },
+    }));
+    void saveProjectShapes(project.id, [], project.revision ?? project.updatedAt).catch(() => {
+      setDashboardNotice("Could not prepare project shape storage");
+    });
+    setProjects((current) => [project, ...current]);
+    setLaunchTutorial({ projectId: project.id, tutorialId });
+    openEditor(project.id, { allowMissingFromStorage: true });
+  };
+
   const importProjectFilePayload = useCallback(
     (payload: ParsedProjectFile, sourceName?: string) => {
       const takenNames = new Set(projects.map((project) => project.name));
@@ -606,6 +624,7 @@ export default function Home() {
     }
     setDashboardSection("home");
     setView("dashboard");
+    setLaunchTutorial(null);
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", APP_ROOT_PATH);
     }
@@ -694,6 +713,11 @@ export default function Home() {
             setDashboardSection("challenges");
             setDashboardNotice("");
           }}
+          onLearn={() => {
+            setDashboardSection("learn");
+            setDashboardNotice("");
+          }}
+          onStartTutorial={startTutorial}
           onDashboardHome={() => setDashboardSection("home")}
           onOpenProject={openEditor}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -719,6 +743,7 @@ export default function Home() {
             projectName={activeProject?.name}
             projectRevision={activeProjectShapeEntry?.revision ?? activeProject?.revision ?? 0}
             saveStatus={activeProjectId ? projectSaveStatus : null}
+            initialTutorialId={launchTutorial && activeProjectId === launchTutorial.projectId ? launchTutorial.tutorialId : null}
           />
         </div>
       ) : null}
@@ -744,6 +769,8 @@ function Dashboard({
   onDownloadModeChange,
   onImportFile,
   onChallenges,
+  onLearn,
+  onStartTutorial,
   onDashboardHome,
   onOpenProject,
   onOpenSettings,
@@ -770,6 +797,8 @@ function Dashboard({
   onDownloadModeChange: (value: DownloadMode) => void;
   onImportFile: () => void;
   onChallenges: () => void;
+  onLearn: () => void;
+  onStartTutorial: (tutorialId: string) => void;
   onDashboardHome: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenSettings: () => void;
@@ -843,6 +872,10 @@ function Dashboard({
               <SlidersHorizontal size={20} />
               <span>Challenges</span>
             </button>
+            <button className={`dashboard-nav-item ${dashboardSection === "learn" ? "active" : ""}`} type="button" aria-label="Learn" title="Learn" onClick={onLearn}>
+              <GraduationCap size={20} />
+              <span>Learn</span>
+            </button>
           </div>
           <button className="dashboard-nav-item dashboard-settings-button" type="button" aria-label="Download settings" title="Download settings" onClick={onOpenSettings}>
             <Settings size={20} />
@@ -850,11 +883,37 @@ function Dashboard({
           </button>
         </aside>
 
-        <section className="dashboard-main" aria-label={dashboardSection === "challenges" ? "Challenges" : "Dashboard"}>
+        <section className="dashboard-main" aria-label={dashboardSection === "challenges" ? "Challenges" : dashboardSection === "learn" ? "Learn" : "Dashboard"}>
           {dashboardSection === "challenges" ? (
             <div className="dashboard-coming-soon" role="status">
               <strong>Coming soon</strong>
             </div>
+          ) : dashboardSection === "learn" ? (
+            <>
+              <div className="dashboard-section-header">
+                <div>
+                  <h1>Learn</h1>
+                  <span>Step-by-step tutorials you follow right in the editor.</span>
+                </div>
+              </div>
+              <div className="dashboard-learn">
+                {tutorials.map((tutorial) => (
+                  <article className="tutorial-card" key={tutorial.id}>
+                    <span className="tutorial-card-badge">
+                      <GraduationCap size={22} strokeWidth={2.2} />
+                    </span>
+                    <div className="tutorial-card-body">
+                      <h2>{tutorial.title}</h2>
+                      <p>{tutorial.description}</p>
+                      <span className="tutorial-card-meta">{tutorial.steps.length} steps</span>
+                    </div>
+                    <button className="tutorial-card-start" type="button" onClick={() => onStartTutorial(tutorial.id)}>
+                      Start
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </>
           ) : (
             <>
               <div className="dashboard-actions-band">

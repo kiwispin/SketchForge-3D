@@ -36,6 +36,7 @@ No login. No server project storage. No heavyweight CAD install just to make a u
 ## What It Does
 
 - **Local-first projects** - designs live in browser storage with generated project thumbnails.
+- **Guided tutorials** - a Learn section with step-by-step, in-editor lessons that auto-advance as you complete each move and celebrate progress along the way.
 - **Real 3D workplane** - grid, camera controls, snap settings, transform handles, outlines, and inspector controls.
 - **Primitive shape library** - boxes, cylinders, spheres, cones, pyramids, wedges, text, roofs, half spheres, torus shapes, tubes, and more.
 - **Solid and hole workflow** - turn shapes into cutters and group them into final geometry.

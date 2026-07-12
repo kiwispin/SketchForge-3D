@@ -4911,3 +4911,280 @@ button {
     height: 24px;
   }
 }
+
+/* --- Guided tutorials --- */
+
+.dashboard-learn {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.tutorial-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  color: #263f57;
+  background: #ffffff;
+  border: 1px solid #d9e3eb;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(31, 52, 71, 0.05);
+}
+
+.tutorial-card:hover {
+  border-color: #98d9ee;
+  box-shadow: 0 5px 15px rgba(32, 61, 82, 0.12);
+}
+
+.tutorial-card-badge {
+  display: grid;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  color: #ffffff;
+  background: #00aeea;
+  border-radius: 10px;
+}
+
+.tutorial-card-body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tutorial-card-body h2 {
+  margin: 0 0 6px;
+  color: #213c55;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.tutorial-card-body p {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #52697d;
+}
+
+.tutorial-card-meta {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #7d92a4;
+}
+
+.tutorial-card-start {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 9px 20px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  background: #00aeea;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.tutorial-card-start:hover {
+  background: #0098cf;
+}
+
+.tutorial-panel {
+  position: fixed;
+  top: calc(var(--editor-toolbar-height) + 8px);
+  left: 18px;
+  z-index: 44;
+  display: flex;
+  width: 316px;
+  max-width: calc(100vw - 36px);
+  flex-direction: column;
+  color: #253f57;
+  background: #fff;
+  border: 1px solid #cfdce5;
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(28, 48, 68, 0.2);
+}
+
+.tutorial-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 10px 12px 16px;
+}
+
+.tutorial-panel-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tutorial-panel-kicker {
+  font-size: 15px;
+  font-weight: 800;
+  color: #16354e;
+}
+
+.tutorial-panel-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b8194;
+}
+
+.tutorial-panel-exit {
+  display: grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: #4f6578;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.tutorial-panel-exit:hover {
+  background: #eef8fc;
+}
+
+.tutorial-panel-progress {
+  height: 4px;
+  margin: 0 16px;
+  background: #e4edf3;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.tutorial-panel-progress span {
+  display: block;
+  height: 100%;
+  background: #00aeea;
+  border-radius: 999px;
+  transition: width 220ms ease;
+}
+
+.tutorial-panel-body {
+  padding: 14px 16px 4px;
+}
+
+.tutorial-panel-title {
+  margin: 0 0 7px;
+  font-size: 17px;
+  font-weight: 800;
+  color: #16354e;
+}
+
+.tutorial-panel-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #46607a;
+}
+
+.tutorial-panel-hint {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #4a6076;
+  background: #f2f9fc;
+  border-radius: 6px;
+}
+
+.tutorial-panel-done {
+  margin: 10px 0 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: #1c9d5a;
+}
+
+.tutorial-panel-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.tutorial-panel-back {
+  padding: 8px 18px;
+  color: #46607a;
+  font-size: 14px;
+  font-weight: 700;
+  background: #eef3f6;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tutorial-panel-back:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tutorial-panel-next {
+  padding: 8px 24px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  background: #00aeea;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tutorial-panel-next:hover {
+  background: #0098cf;
+}
+
+.tutorial-confetti {
+  position: absolute;
+  top: 46%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.tutorial-confetti span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 9px;
+  height: 12px;
+  opacity: 0;
+  transform: translate(0, 0);
+  animation-name: tutorial-confetti-fly;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+  animation-fill-mode: forwards;
+}
+
+.tutorial-confetti span.round {
+  width: 9px;
+  height: 9px;
+}
+
+@keyframes tutorial-confetti-fly {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) rotate(0deg) scale(0.6);
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-confetti {
+    display: none;
+  }
+}

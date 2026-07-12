@@ -52,7 +52,13 @@
 - ✅ Verification completed: focused shape-library unit test, `npm run ci` (9 files / 51 tests), and `npm run pages:build` all passed.
 - ⬜ Connectors, Architectural, and Printable Parts remain deliberately out of scope until the next approved increment.
 
-### ⬜ 5. Guided activities — NOT STARTED
+### ✅ 5. Guided activities — DELIVERED AS GUIDED TUTORIALS (Tinkercad-style)
+
+- A first pass shipped guided *activities* as one-click starter models (e.g. a name tag) inside the Shapes menu. On review this was the wrong shape: it was not a guided experience and lived in the wrong place. It was removed entirely.
+- Replaced with a dedicated **Learn** dashboard section (sidebar item beside Home/Challenges) offering step-by-step tutorials, modelled on Tinkercad's lessons.
+- The first tutorial, **"Learn the basics"**, teaches the five core moves — place, resize, rotate, hole, group. An in-editor left-hand panel shows numbered steps with a progress bar; steps **auto-advance** when the student completes the action (detected from the live scene via `computeTutorialSignals`), with a manual **Next/Back** fallback so it never gets stuck. Each completed step fires a **confetti** celebration. Exit/Finish keeps the project.
+- New pure module `apps/web/src/lib/tutorials.ts` (unit-tested, 12 cases) holds tutorial content + detection logic, so further tutorials (dice, phone stand, name-tag-as-tutorial) are one entry each.
+- Verified: `npm run ci` (11 files / 66 tests) green; full interaction pass in the running app (place/resize/hole/group auto-advance, manual Next fallback, Back, Exit, confetti burst, and no regression to undo/redo/delete with the panel open). Live limitation noted: the rotate step's auto-advance requires a canvas rotate-handle drag that could not be driven headlessly; its detection logic is unit-tested and the manual-Next fallback carries past it.
 
 ### ✅ 6. Printability preflight — IMPLEMENTED AND INTERACTION-TESTED (PRIORITIZED AHEAD OF CONNECTORS)
 
