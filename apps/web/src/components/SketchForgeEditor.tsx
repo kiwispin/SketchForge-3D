@@ -8276,7 +8276,7 @@ export function SketchForgeEditor({
         ref={fileInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".stl,.step,.stp,.svg,image/svg+xml,.sketchforge"
+        accept=".stl,.step,.stp,.svg,image/svg+xml,.sketchforge,.sketchforge.json"
         onChange={(event) => {
           if (event.currentTarget.files) {
             selectFiles(event.currentTarget.files);

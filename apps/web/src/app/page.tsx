@@ -682,7 +682,7 @@ export default function Home() {
         ref={dashboardImportInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".stl,.svg,image/svg+xml,.sketchforge"
+        accept=".stl,.svg,image/svg+xml,.sketchforge,.sketchforge.json"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           if (file) {
