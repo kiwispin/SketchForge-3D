@@ -69,7 +69,7 @@ import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectF
 import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
-import { connectCollaboration, type CollaborationSession } from "@/lib/collaborationClient";
+import { connectCollaboration, type CollaborationParticipant, type CollaborationSession } from "@/lib/collaborationClient";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import {
@@ -5187,6 +5187,7 @@ export function SketchForgeEditor({
   const [activeMode, setActiveMode] = useState("3D Design");
   const [notice, setNotice] = useState("Ready");
   const [collaborationCode, setCollaborationCode] = useState<string | null>(null);
+  const [collaborationParticipants, setCollaborationParticipants] = useState<CollaborationParticipant[]>([]);
   const collaborationRef = useRef<ReturnType<typeof connectCollaboration> | null>(null);
   const remoteCollaborationFingerprintRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -5577,7 +5578,7 @@ export function SketchForgeEditor({
       setHistoryIndex(0);
       syncProjectShapes(next);
       setNotice("Collaboration update received");
-    }, () => setNotice("Collaboration ended; your local copy was kept"));
+    }, () => setNotice("Collaboration ended; your local copy was kept"), setCollaborationParticipants);
     return () => collaborationRef.current?.close();
   }, [collaborationSession, syncProjectShapes]);
 
@@ -8064,7 +8065,7 @@ export function SketchForgeEditor({
 
   return (
     <div className="sketchforge-editor">
-      {onStartCollaboration ? <div className="collaboration-start">{collaborationSession?.role === "host" ? <><span>Invite code: {collaborationSession.code}</span><button type="button" onClick={() => { collaborationRef.current?.end(); window.setTimeout(() => onEndCollaboration?.(), 50); setNotice("Collaboration ended; your local copy was kept"); }}>End collaboration</button></> : collaborationSession?.role === "guest" ? <span>Joined: {collaborationSession.code}</span> : <button type="button" onClick={() => void onStartCollaboration({ name: projectName, shapes }).then((code) => { setCollaborationCode(code); setNotice(`Invite code: ${code}`); }).catch((error) => setNotice(error instanceof Error ? error.message : "Could not start collaboration"))}>{collaborationCode ? `Invite code: ${collaborationCode}` : "Start collaboration"}</button>}</div> : null}
+      {onStartCollaboration ? <div className="collaboration-start">{collaborationSession?.role === "host" ? <><span>Invite code: {collaborationSession.code}</span><span className="collaboration-participants">{collaborationParticipants.map((participant) => participant.name).join(", ")}</span><button type="button" onClick={() => { collaborationRef.current?.end(); window.setTimeout(() => onEndCollaboration?.(), 50); setNotice("Collaboration ended; your local copy was kept"); }}>End collaboration</button></> : collaborationSession?.role === "guest" ? <><span>Joined: {collaborationSession.code}</span><span className="collaboration-participants">{collaborationParticipants.map((participant) => participant.name).join(", ")}</span></> : <button type="button" onClick={() => void onStartCollaboration({ name: projectName, shapes }).then((code) => { setCollaborationCode(code); setNotice(`Invite code: ${code}`); }).catch((error) => setNotice(error instanceof Error ? error.message : "Could not start collaboration"))}>{collaborationCode ? `Invite code: ${collaborationCode}` : "Start collaboration"}</button>}</div> : null}
       <SecondaryToolbar
         toolbarMode={toolbarMode}
         sharedSession={Boolean(collaborationSession)}

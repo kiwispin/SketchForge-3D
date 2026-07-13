@@ -3,6 +3,7 @@ import type { WorkplaneShape } from "@/types/sketchforge";
 
 export type CollaborationSnapshot = { name?: string; shapes: WorkplaneShape[] };
 export type CollaborationSession = { code: string; participantId: string; name: string; role: "host" | "guest" };
+export type CollaborationParticipant = { name: string; role: "host" | "guest" };
 
 function serviceUrl(path: string) {
   if (typeof window === "undefined") return path;
@@ -29,7 +30,7 @@ export async function startCollaboration(name: string, snapshot: CollaborationSn
   return { code: payload.code, participantId: payload.participantId };
 }
 
-export function connectCollaboration(session: CollaborationSession, onSnapshot: (snapshot: CollaborationSnapshot) => void, onEnded: () => void) {
+export function connectCollaboration(session: CollaborationSession, onSnapshot: (snapshot: CollaborationSnapshot) => void, onEnded: () => void, onPresence?: (participants: CollaborationParticipant[]) => void) {
   const base = serviceUrl("").replace(/^http/, "ws");
   const socket = new WebSocket(`${base}/collaboration?code=${encodeURIComponent(session.code)}&participantId=${encodeURIComponent(session.participantId)}&name=${encodeURIComponent(session.name)}`);
   let pendingSnapshot: CollaborationSnapshot | null = null;
@@ -42,8 +43,9 @@ export function connectCollaboration(session: CollaborationSession, onSnapshot: 
     sendPendingSnapshot();
   });
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data) as { type?: string; snapshot?: CollaborationSnapshot };
+    const message = JSON.parse(event.data) as { type?: string; snapshot?: CollaborationSnapshot; participants?: CollaborationParticipant[] };
     if ((message.type === "snapshot" || message.type === "replace") && message.snapshot) onSnapshot(message.snapshot);
+    if ((message.type === "snapshot" || message.type === "presence") && Array.isArray(message.participants)) onPresence?.(message.participants);
     if (message.type === "ended") onEnded();
   });
   return {
