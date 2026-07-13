@@ -8604,7 +8604,7 @@ function SecondaryToolbar({
                       event.dataTransfer.setData("application/x-sketchforge-shape", JSON.stringify(shape));
                     }}
                   >
-                    <img src={shape.menuIcon} alt="" draggable={false} />
+                    <img src={`${ASSET_BASE_PATH}/${shape.menuIcon}`} alt="" draggable={false} />
                     <span>{shape.name}</span>
                   </button>
                 ))}
