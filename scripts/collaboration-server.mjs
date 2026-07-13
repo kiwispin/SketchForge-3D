@@ -1,10 +1,20 @@
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
+import { networkInterfaces } from "node:os";
 import { WebSocketServer } from "ws";
 
 const port = Number(process.env.COLLAB_PORT ?? 3101);
 const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const rooms = new Map();
+
+function localNetworkAddress() {
+  const candidates = Object.values(networkInterfaces())
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry.address)
+    .filter((address) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address));
+  return candidates.sort((left, right) => Number(right.startsWith("192.168.")) - Number(left.startsWith("192.168.")))[0] ?? null;
+}
 
 function code() {
   const bytes = randomBytes(8);
@@ -44,7 +54,8 @@ const server = createServer((request, response) => {
     while (rooms.has(inviteCode)) inviteCode = code();
     const hostId = randomUUID();
     rooms.set(inviteCode, { code: inviteCode, hostId, snapshot: snapshot ?? null, clients: new Map(), hostDisconnectTimer: null });
-    respond(response, 201, { code: inviteCode, participantId: hostId });
+    const address = localNetworkAddress();
+    respond(response, 201, { code: inviteCode, participantId: hostId, lanUrl: address ? `http://${address}:${process.env.SKETCHFORGE_WEB_PORT ?? 3000}` : null });
   });
 });
 

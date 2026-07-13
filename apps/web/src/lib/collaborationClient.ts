@@ -2,7 +2,7 @@ import { normalizeInviteCode } from "@/lib/collaboration";
 import type { WorkplaneShape } from "@/types/sketchforge";
 
 export type CollaborationSnapshot = { name?: string; shapes: WorkplaneShape[] };
-export type CollaborationSession = { code: string; participantId: string; name: string; role: "host" | "guest" };
+export type CollaborationSession = { code: string; participantId: string; name: string; role: "host" | "guest"; lanUrl?: string | null };
 export type CollaborationParticipant = { name: string; role: "host" | "guest" };
 
 function serviceUrl(path: string) {
@@ -23,11 +23,11 @@ export async function joinCollaboration(code: string, name: string): Promise<{ c
   return { code: payload.code, participantId: payload.participantId, snapshot: payload.snapshot };
 }
 
-export async function startCollaboration(name: string, snapshot: CollaborationSnapshot): Promise<{ code: string; participantId: string }> {
+export async function startCollaboration(name: string, snapshot: CollaborationSnapshot): Promise<{ code: string; participantId: string; lanUrl?: string | null }> {
   const response = await fetch(serviceUrl("/rooms"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hostName: name.trim(), snapshot }) });
-  const payload = await response.json() as { error?: string; code?: string; participantId?: string };
+  const payload = await response.json() as { error?: string; code?: string; participantId?: string; lanUrl?: string | null };
   if (!response.ok || !payload.code || !payload.participantId) throw new Error(payload.error ?? "Could not start collaboration");
-  return { code: payload.code, participantId: payload.participantId };
+  return { code: payload.code, participantId: payload.participantId, lanUrl: payload.lanUrl };
 }
 
 export function connectCollaboration(session: CollaborationSession, onSnapshot: (snapshot: CollaborationSnapshot) => void, onEnded: () => void, onPresence?: (participants: CollaborationParticipant[]) => void) {
