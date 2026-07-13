@@ -96,6 +96,54 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
   const width = isNameTag || isPhoneStand ? 70 : asset.kind === "text" ? 86 : size;
   const depth = isNameTag ? 28 : isPhoneStand ? 60 : asset.kind === "text" ? 28 : size;
 
+  if (isPhoneStand) {
+    const color = asset.color;
+    const child = (id: string, name: string, x: number, z: number, elevation: number, childWidth: number, childDepth: number, childHeight: number, rotationX = 0): WorkplaneShape => ({
+      id: createLocalId(id),
+      name,
+      kind: "box",
+      color,
+      x,
+      z,
+      elevation,
+      size: Math.max(childWidth, childDepth),
+      width: childWidth,
+      depth: childDepth,
+      height: childHeight,
+      rotation: 0,
+      rotationX,
+      rotationZ: 0,
+      locked: false,
+      hidden: false,
+    });
+    return {
+      id: createLocalId(asset.id),
+      name: asset.name,
+      kind: "box",
+      color,
+      x: point?.x ?? 0,
+      z: point?.z ?? 0,
+      elevation: point?.elevation ?? 0,
+      size: 70,
+      width: 70,
+      depth: 70,
+      height: 50,
+      rotation: 0,
+      rotationX: 0,
+      rotationZ: 0,
+      groupedBaseWidth: 70,
+      groupedBaseDepth: 70,
+      groupedBaseHeight: 50,
+      groupedShapes: [
+        child("phone-stand-base", "Phone stand base", 0, 0, 0, 70, 70, 4),
+        child("phone-stand-back", "Phone stand back", 0, 25, 3, 70, 4, 45, -15),
+        child("phone-stand-lip", "Phone stand retaining lip", 0, -23, 4, 70, 6, 8),
+      ],
+      locked: false,
+      hidden: false,
+    };
+  }
+
   return {
     id: createLocalId(asset.id),
     name: asset.name,

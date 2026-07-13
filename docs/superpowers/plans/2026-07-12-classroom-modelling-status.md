@@ -52,7 +52,9 @@
 - ✅ Verification completed: focused shape-library unit test, `npm run ci` (9 files / 51 tests), and `npm run pages:build` all passed.
 - ✅ Added a **Connectors** tab with two classroom-ready, CSG-compatible presets: a solid 8 × 8 × 16 mm **Peg** and a 10 × 10 × 12 mm **Socket** hole. Both reuse the existing cylinder geometry, so grouping, hole subtraction, export, and project files stay compatible.
 - ✅ Browser-tested the full history path: added Peg and Socket, verified their dimensions and Socket hole mode, undid both additions, then redid both additions. Focused unit coverage, `npm run ci` (11 files / 67 tests), and `npm run pages:build` all passed.
-- ✅ Added a **Printable Parts** tab with four editable starter models: **Name Tag** (70 × 28 × 3 mm rounded box), **Phone Stand** (70 × 60 × 45 mm wedge), **Cable Guide** (18 × 18 × 8 mm tube), and **Spacer** (12 × 12 × 10 mm tube). They reuse existing primitives, preserving local-first save/open, CSG, export, and printability checks.
+- ✅ Redesigned the Shapes picker after visual review: its four category tabs now remain readable in a wider two-column picker, and its shape cards are no longer squashed into a narrow list.
+- ✅ Added a **Printable Parts** tab with four editable starter models: **Name Tag** (70 × 28 × 3 mm rounded box), **Phone Stand** (an editable 70 × 70 × 50 mm three-part base, angled back, and retaining lip), **Cable Guide** (18 × 18 × 8 mm tube), and **Spacer** (12 × 12 × 10 mm tube). They reuse existing primitives, preserving local-first save/open, CSG, export, and printability checks.
+- ✅ Browser-reviewed the rendered picker and Phone Stand. The stand is no longer a wedge placeholder; it can be separated into its three editable parts, undone back into the stand, and redone.
 - ✅ Browser-tested creation of all four presets at their intended dimensions, then undid all four creations and redid all four. Focused unit coverage, `npm run ci` (11 files / 68 tests), and `npm run pages:build` all passed.
 - ⬜ Architectural shapes remain deliberately out of scope until the next approved increment.
 

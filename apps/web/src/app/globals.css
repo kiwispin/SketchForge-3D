@@ -1780,7 +1780,7 @@ button {
   top: var(--editor-toolbar-tools-height);
   left: 0;
   z-index: 60;
-  width: 244px;
+  width: min(440px, calc(100vw - 20px));
   max-height: min(650px, calc(100vh - 92px));
   overflow: hidden;
   color: #253f57;
@@ -1802,19 +1802,20 @@ button {
 }
 
 .shape-menu-categories {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
-  padding: 8px 8px 0;
+  padding: 8px;
   background: linear-gradient(180deg, #fff, #f3f7fa);
 }
 
 .shape-menu-category {
-  min-height: 30px;
-  padding: 4px 9px;
+  min-height: 34px;
+  padding: 6px 9px;
   color: #5b7184;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px 4px 0 0;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
@@ -1825,13 +1826,13 @@ button {
   color: #294760;
   background: #fff;
   border-color: #cfdce5;
-  border-bottom-color: #fff;
+  border-color: #cfdce5;
 }
 
 .shape-menu-list {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   max-height: min(608px, calc(100vh - 136px));
-  flex-direction: column;
   gap: 4px;
   padding: 8px;
   overflow-y: auto;
@@ -1839,10 +1840,10 @@ button {
 
 .shape-menu-item {
   display: flex;
-  min-height: 58px;
+  min-height: 72px;
   align-items: center;
   justify-content: flex-start;
-  gap: 11px;
+  gap: 9px;
   padding: 5px 10px 5px 7px;
   color: #2c455c;
   background: #f8fafb;
@@ -1864,8 +1865,8 @@ button {
 
 .shape-menu-item img {
   flex: 0 0 auto;
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   object-fit: contain;
   pointer-events: none;
 }
@@ -1873,7 +1874,7 @@ button {
 .shape-menu-item span {
   overflow: hidden;
   min-width: 0;
-  max-width: 150px;
+  max-width: 130px;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4803,7 +4804,7 @@ button {
     position: fixed;
     top: var(--editor-toolbar-height);
     left: 10px;
-    width: min(264px, calc(100vw - 20px));
+    width: min(440px, calc(100vw - 20px));
   }
 
   .workspace-modal {
