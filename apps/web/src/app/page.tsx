@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock3, EllipsisVertical, FileUp, GraduationCap, Grid3X3, HomeIcon, List, Pencil, Plus, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowRight, Clock3, EllipsisVertical, FileUp, GraduationCap, Grid3X3, HomeIcon, KeyRound, List, Pencil, Plus, Search, Settings, SlidersHorizontal, Trash2, UsersRound, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
 import { tutorials } from "@/lib/tutorials";
@@ -959,8 +959,8 @@ function Dashboard({
                   </span>
                   <span>Import file</span>
                 </button>
-                <button className="dashboard-action-tile" type="button" onClick={() => setJoinOpen(true)}>
-                  <span className="dashboard-action-icon"><Plus size={24} strokeWidth={2.4} /></span>
+                <button className="dashboard-action-tile" type="button" onClick={() => { setJoinError(""); setJoinOpen(true); }}>
+                  <span className="dashboard-action-icon"><UsersRound size={24} strokeWidth={2.4} /></span>
                   <span>Join collaboration</span>
                 </button>
                 <button className="dashboard-action-tile" type="button" onClick={onWorkspace}>
@@ -970,7 +970,6 @@ function Dashboard({
                   <span>Continue workplane</span>
                 </button>
               </div>
-              {joinOpen ? <div className="dashboard-import-notice"><strong>Join collaboration</strong><input aria-label="Invite code" value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value)} placeholder="ABCD-EFGH" /><input aria-label="Display name" value={joinName} onChange={(event) => setJoinName(event.currentTarget.value)} placeholder="Your name" /><button type="button" onClick={() => void onJoinCollaboration(joinCode, joinName).catch((error) => setJoinError(error instanceof Error ? error.message : "Could not join"))}>Join</button><button type="button" onClick={() => setJoinOpen(false)}>Cancel</button>{joinError ? <span>{joinError}</span> : null}</div> : null}
               {dashboardNotice ? (
                 <div className="dashboard-import-notice" role="status">
                   {dashboardNotice}
@@ -1077,6 +1076,39 @@ function Dashboard({
               </button>
             </div>
           </div>
+        </section>
+      ) : null}
+
+      {joinOpen ? (
+        <section className="dashboard-confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="join-collaboration-title">
+          <form
+            className="dashboard-confirm-dialog collaboration-join-dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setJoinError("");
+              void onJoinCollaboration(joinCode, joinName).catch((error) => setJoinError(error instanceof Error ? error.message : "Could not join"));
+            }}
+          >
+            <header>
+              <span className="collaboration-dialog-icon"><UsersRound size={20} /></span>
+              <strong id="join-collaboration-title">Join a shared design</strong>
+              <button type="button" aria-label="Cancel joining collaboration" onClick={() => setJoinOpen(false)}><X size={18} /></button>
+            </header>
+            <p>Ask the student who started the design for their invite code, then choose the name they will see.</p>
+            <label>
+              <span><KeyRound size={15} /> Invite code</span>
+              <input autoFocus aria-label="Invite code" value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value.toUpperCase())} placeholder="ABCD-EFGH" autoComplete="off" spellCheck={false} />
+            </label>
+            <label>
+              <span>Your display name</span>
+              <input aria-label="Display name" value={joinName} onChange={(event) => setJoinName(event.currentTarget.value)} placeholder="For example, Sam" maxLength={24} autoComplete="name" />
+            </label>
+            {joinError ? <div className="collaboration-join-error" role="alert">{joinError}</div> : null}
+            <div className="dashboard-confirm-actions">
+              <button className="dashboard-confirm-cancel" type="button" onClick={() => setJoinOpen(false)}>Cancel</button>
+              <button className="dashboard-confirm-save" type="submit" disabled={!joinCode.trim() || joinName.trim().length < 2}>Join design <ArrowRight size={16} /></button>
+            </div>
+          </form>
         </section>
       ) : null}
 
