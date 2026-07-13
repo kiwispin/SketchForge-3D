@@ -245,6 +245,18 @@ http://127.0.0.1:3000/
 
 Leave the terminal open while you use the app. To stop the development server, press `Ctrl+C` in the terminal.
 
+### Test student collaboration
+
+On the collaboration branch, start both the editor and the invite-code room service together:
+
+```bash
+npm run dev:collaboration
+```
+
+Open `http://127.0.0.1:3000/` in two separate browser profiles (for example, a normal window and an Incognito/Private window). In the first, create a design and select **Start collaboration**. Enter a display name and copy the invite code. In the second, select **Join collaboration**, enter that code and a different display name.
+
+For a second desktop on the same LAN, open `http://<host-computer-LAN-IP>:3000/` instead. Both devices must be allowed through the host firewall on TCP ports 3000 and 3101. This is an experimental local-network feature; do not expose these ports to the public internet.
+
 ### Useful Developer Commands
 
 Run TypeScript checks:

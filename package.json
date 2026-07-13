@@ -7,6 +7,7 @@
     "copy:occt": "node scripts/copy-occt-wasm.mjs",
     "predev": "npm run copy:occt",
     "dev": "next dev apps/web",
+    "dev:collaboration": "node scripts/collaboration-dev.mjs",
     "prebuild": "npm run copy:occt",
     "build": "next build apps/web",
     "export": "node scripts/static-export.mjs",

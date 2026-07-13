@@ -1,0 +1,19 @@
+import { spawn } from "node:child_process";
+
+const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const children = [
+  spawn(process.execPath, ["scripts/collaboration-server.mjs"], {
+    env: { ...process.env, COLLAB_PORT: process.env.COLLAB_PORT ?? "3101" },
+    stdio: "inherit",
+  }),
+  spawn(npm, ["run", "dev", "--", "--hostname", "0.0.0.0"], { stdio: "inherit" }),
+];
+
+function stop(exitCode = 0) {
+  for (const child of children) child.kill("SIGTERM");
+  process.exit(exitCode);
+}
+
+process.on("SIGINT", () => stop());
+process.on("SIGTERM", () => stop());
+for (const child of children) child.on("exit", (code) => stop(code ?? 1));
