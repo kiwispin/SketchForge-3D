@@ -29,10 +29,10 @@ export const connectorShapeAssets: ToolbarShapeAsset[] = [
 ];
 
 export const printablePartShapeAssets: ToolbarShapeAsset[] = [
-  { id: "printable-name-tag", name: "Name Tag", src: "assets/sketchforge/box-red.png", menuIcon: "assets/sketchforge/box-red.png", kind: "box", color: "#d41721" },
-  { id: "printable-phone-stand", name: "Phone Stand", src: "assets/sketchforge/wedge-blue.png", menuIcon: "assets/sketchforge/wedge-blue.png", kind: "wedge", color: "#33983d" },
-  { id: "printable-cable-guide", name: "Cable Guide", src: "assets/sketchforge/tube-orange.png", menuIcon: "assets/sketchforge/tube-orange.png", kind: "tube", color: "#ce7013" },
-  { id: "printable-spacer", name: "Spacer", src: "assets/sketchforge/tube-orange.png", menuIcon: "assets/sketchforge/tube-orange.png", kind: "tube", color: "#2563eb" },
+  { id: "printable-name-tag", name: "Name Tag", src: "assets/sketchforge/printable-name-tag.svg", menuIcon: "assets/sketchforge/printable-name-tag.svg", kind: "box", color: "#d41721" },
+  { id: "printable-phone-stand", name: "Phone Stand", src: "assets/sketchforge/printable-phone-stand.svg", menuIcon: "assets/sketchforge/printable-phone-stand.svg", kind: "wedge", color: "#33983d" },
+  { id: "printable-cable-guide", name: "Cable Guide", src: "assets/sketchforge/printable-cable-guide.svg", menuIcon: "assets/sketchforge/printable-cable-guide.svg", kind: "tube", color: "#ce7013" },
+  { id: "printable-spacer", name: "Spacer", src: "assets/sketchforge/printable-spacer.svg", menuIcon: "assets/sketchforge/printable-spacer.svg", kind: "tube", color: "#2563eb" },
 ];
 
 export const shapeLibraryCategories: ShapeLibraryCategory[] = [

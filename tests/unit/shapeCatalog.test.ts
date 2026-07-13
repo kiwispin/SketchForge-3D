@@ -51,6 +51,12 @@ describe("shape catalog", () => {
       "printable-cable-guide",
       "printable-spacer",
     ]);
+    expect(printableParts?.shapes.map((asset) => asset.menuIcon)).toEqual([
+      "assets/sketchforge/printable-name-tag.svg",
+      "assets/sketchforge/printable-phone-stand.svg",
+      "assets/sketchforge/printable-cable-guide.svg",
+      "assets/sketchforge/printable-spacer.svg",
+    ]);
     const nameTag = makeShapeFromAsset(byId("printable-name-tag"));
     expect(nameTag).toMatchObject({ kind: "box", width: 70, depth: 28, height: 5, groupedBaseWidth: 70, groupedBaseDepth: 28, groupedBaseHeight: 5 });
     expect(nameTag.groupedShapes?.map((shape) => shape.name)).toEqual(["Name tag plaque", "Keyring hole", "NAME label"]);

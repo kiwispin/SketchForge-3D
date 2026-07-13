@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Cable guide ring">
+  <ellipse cx="48" cy="61" rx="28" ry="13" fill="#a85012" stroke="#73360f" stroke-width="3"/>
+  <path d="M20 61V34c0-9 13-16 28-16s28 7 28 16v27c0 9-13 16-28 16S20 70 20 61z" fill="#ed811f" stroke="#9d4b12" stroke-width="3"/>
+  <ellipse cx="48" cy="34" rx="28" ry="13" fill="#f39a45" stroke="#9d4b12" stroke-width="3"/>
+  <ellipse cx="48" cy="34" rx="14" ry="6" fill="#f8fafc" stroke="#9d4b12" stroke-width="3"/>
+  <path d="M34 35v26c0 3 6 6 14 6s14-3 14-6V35" fill="none" stroke="#c15e17" stroke-width="3"/>
+</svg>
