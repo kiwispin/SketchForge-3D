@@ -69,6 +69,7 @@ import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectF
 import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
+import { connectCollaboration, type CollaborationSession } from "@/lib/collaborationClient";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import {
@@ -5139,6 +5140,9 @@ export function SketchForgeEditor({
   onProjectSnapshot,
   onProjectWorkspaceChange,
   onProjectFileImport,
+  onStartCollaboration,
+  onEndCollaboration,
+  collaborationSession = null,
   saveStatus = null,
   projectId,
   projectName = "SketchForge design",
@@ -5153,6 +5157,9 @@ export function SketchForgeEditor({
   onProjectSnapshot?: (snapshot: { image: string; projectId: string; shapes: number }) => void;
   onProjectWorkspaceChange?: (snapshot: { projectId: string; workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => void;
   onProjectFileImport?: (payload: ParsedProjectFile) => void;
+  onStartCollaboration?: (snapshot: { name: string; shapes: WorkplaneShape[] }) => Promise<string>;
+  onEndCollaboration?: () => void;
+  collaborationSession?: CollaborationSession | null;
   saveStatus?: ProjectSaveStatus | null;
   projectId?: string | null;
   projectName?: string;
@@ -5179,6 +5186,9 @@ export function SketchForgeEditor({
   const [mirrorPreviewAxis, setMirrorPreviewAxis] = useState<AlignAxis | null>(null);
   const [activeMode, setActiveMode] = useState("3D Design");
   const [notice, setNotice] = useState("Ready");
+  const [collaborationCode, setCollaborationCode] = useState<string | null>(null);
+  const collaborationRef = useRef<ReturnType<typeof connectCollaboration> | null>(null);
+  const remoteCollaborationFingerprintRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sketchImageInputRef = useRef<HTMLInputElement | null>(null);
   const booleanAutomationRunRef = useRef<string | null>(null);
@@ -5553,6 +5563,35 @@ export function SketchForgeEditor({
     [onProjectShapesChange, projectId],
   );
 
+  useEffect(() => {
+    collaborationRef.current?.close();
+    collaborationRef.current = null;
+    if (!collaborationSession) return;
+    collaborationRef.current = connectCollaboration(collaborationSession, (snapshot) => {
+      const next = snapshot.shapes.map(canonicalizeShape);
+      remoteCollaborationFingerprintRef.current = projectShapesFingerprint(next);
+      shapesRef.current = next;
+      setShapes(next);
+      historyIndexRef.current = 0;
+      setHistory([next]);
+      setHistoryIndex(0);
+      syncProjectShapes(next);
+      setNotice("Collaboration update received");
+    }, () => setNotice("Collaboration ended; your local copy was kept"));
+    return () => collaborationRef.current?.close();
+  }, [collaborationSession, syncProjectShapes]);
+
+  useEffect(() => {
+    if (!collaborationRef.current) return;
+    const canonicalShapes = shapes.map(canonicalizeShape);
+    const fingerprint = projectShapesFingerprint(canonicalShapes);
+    if (remoteCollaborationFingerprintRef.current === fingerprint) {
+      remoteCollaborationFingerprintRef.current = null;
+      return;
+    }
+    collaborationRef.current.replace({ name: projectName, shapes: canonicalShapes });
+  }, [projectName, shapes]);
+
   const finalizeInteractionHistory = useCallback(() => {
     const startFingerprint = interactionHistoryStartRef.current;
     const hadChanges = interactionHistoryChangedRef.current;
@@ -5659,7 +5698,7 @@ export function SketchForgeEditor({
       }
       syncProjectShapes(canonicalNext);
     },
-    [historyIndex, selectedIds, syncProjectShapes],
+    [historyIndex, projectName, selectedIds, syncProjectShapes],
   );
 
   const removeEdgeTreatment = useCallback(async (optionId: string) => {
@@ -8025,6 +8064,7 @@ export function SketchForgeEditor({
 
   return (
     <div className="sketchforge-editor">
+      {onStartCollaboration ? <div className="collaboration-start">{collaborationSession?.role === "host" ? <><span>Invite code: {collaborationSession.code}</span><button type="button" onClick={() => { collaborationRef.current?.end(); window.setTimeout(() => onEndCollaboration?.(), 50); setNotice("Collaboration ended; your local copy was kept"); }}>End collaboration</button></> : collaborationSession?.role === "guest" ? <span>Joined: {collaborationSession.code}</span> : <button type="button" onClick={() => void onStartCollaboration({ name: projectName, shapes }).then((code) => { setCollaborationCode(code); setNotice(`Invite code: ${code}`); }).catch((error) => setNotice(error instanceof Error ? error.message : "Could not start collaboration"))}>{collaborationCode ? `Invite code: ${collaborationCode}` : "Start collaboration"}</button>}</div> : null}
       <SecondaryToolbar
         toolbarMode={toolbarMode}
         onToolbarModeChange={(mode) => {

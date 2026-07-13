@@ -1891,6 +1891,10 @@ button {
   white-space: nowrap;
 }
 
+.collaboration-start { position: fixed; right: 18px; bottom: 18px; z-index: 70; display: flex; align-items: center; gap: 10px; padding: 10px 14px; color: #fff; background: #2563eb; border-radius: 7px; font-weight: 800; box-shadow: 0 5px 16px rgba(37, 99, 235, .3); }
+.collaboration-start button { color: inherit; background: transparent; border: 0; font: inherit; cursor: pointer; }
+.collaboration-start button + button { padding-left: 10px; border-left: 1px solid rgba(255, 255, 255, .45); }
+
 .action-buttons button {
   box-sizing: border-box;
   display: inline-flex;

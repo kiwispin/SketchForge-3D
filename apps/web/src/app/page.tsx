@@ -6,6 +6,7 @@ import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@
 import { tutorials } from "@/lib/tutorials";
 import { createLocalId } from "@/lib/localIds";
 import { isProjectFileName, parseProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
+import { joinCollaboration, startCollaboration } from "@/lib/collaborationClient";
 import { importExtensionSupported } from "@/lib/stlImport";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import type { GridSize, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
@@ -258,6 +259,7 @@ export default function Home() {
   const [dashboardNotice, setDashboardNotice] = useState("");
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
   const [projectSaveStatus, setProjectSaveStatus] = useState<ProjectSaveStatus>("idle");
+  const [collaborationSession, setCollaborationSession] = useState<import("@/lib/collaborationClient").CollaborationSession | null>(null);
   const [launchTutorial, setLaunchTutorial] = useState<{ projectId: string; tutorialId: string } | null>(null);
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -656,6 +658,24 @@ export default function Home() {
     );
   };
 
+  const joinProject = async (code: string, name: string) => {
+    const joined = await joinCollaboration(code, name);
+    const project = newProject(joined.snapshot.name ? `Shared: ${joined.snapshot.name}` : "Shared design", projects.length, joined.snapshot.shapes.length);
+    const revision = Date.now();
+    await saveProjectShapes(project.id, joined.snapshot.shapes, revision);
+    setProjectShapesById((current) => ({ ...current, [project.id]: { revision, shapes: joined.snapshot.shapes } }));
+    setProjects((current) => [{ ...project, revision, updatedAt: revision }, ...current]);
+    setCollaborationSession({ code: joined.code, participantId: joined.participantId, name: name.trim(), role: "guest" });
+    openEditor(project.id, { allowMissingFromStorage: true });
+  };
+  const hostProject = async (snapshot: { name: string; shapes: WorkplaneShape[] }) => {
+    const name = window.prompt("Your display name", "Student A")?.trim();
+    if (!name) throw new Error("A display name is required");
+    const started = await startCollaboration(name, snapshot);
+    setCollaborationSession({ ...started, name, role: "host" });
+    return started.code;
+  };
+
   if (!mounted) {
     return null;
   }
@@ -709,6 +729,7 @@ export default function Home() {
           onDownloadFolderChange={setDownloadFolder}
           onDownloadModeChange={setDownloadMode}
           onImportFile={() => dashboardImportInputRef.current?.click()}
+          onJoinCollaboration={joinProject}
           onChallenges={() => {
             setDashboardSection("challenges");
             setDashboardNotice("");
@@ -739,6 +760,9 @@ export default function Home() {
             onProjectSnapshot={updateProjectSnapshot}
             onProjectWorkspaceChange={updateProjectWorkspace}
             onProjectFileImport={importProjectFilePayload}
+            onStartCollaboration={hostProject}
+            onEndCollaboration={() => setCollaborationSession(null)}
+            collaborationSession={collaborationSession}
             projectId={activeProjectId}
             projectName={activeProject?.name}
             projectRevision={activeProjectShapeEntry?.revision ?? activeProject?.revision ?? 0}
@@ -768,6 +792,7 @@ function Dashboard({
   onDownloadFolderChange,
   onDownloadModeChange,
   onImportFile,
+  onJoinCollaboration,
   onChallenges,
   onLearn,
   onStartTutorial,
@@ -796,6 +821,7 @@ function Dashboard({
   onDownloadFolderChange: (value: string) => void;
   onDownloadModeChange: (value: DownloadMode) => void;
   onImportFile: () => void;
+  onJoinCollaboration: (code: string, name: string) => Promise<void>;
   onChallenges: () => void;
   onLearn: () => void;
   onStartTutorial: (tutorialId: string) => void;
@@ -812,6 +838,10 @@ function Dashboard({
   const [projectPendingDeleteId, setProjectPendingDeleteId] = useState<string | null>(null);
   const [projectPendingRenameId, setProjectPendingRenameId] = useState<string | null>(null);
   const [projectNameDraft, setProjectNameDraft] = useState("");
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [joinCode, setJoinCode] = useState("");
+  const [joinName, setJoinName] = useState("");
+  const [joinError, setJoinError] = useState("");
   const projectPendingDelete = projects.find((project) => project.id === projectPendingDeleteId) ?? null;
   const projectPendingRename = projects.find((project) => project.id === projectPendingRenameId) ?? null;
 
@@ -929,6 +959,10 @@ function Dashboard({
                   </span>
                   <span>Import file</span>
                 </button>
+                <button className="dashboard-action-tile" type="button" onClick={() => setJoinOpen(true)}>
+                  <span className="dashboard-action-icon"><Plus size={24} strokeWidth={2.4} /></span>
+                  <span>Join collaboration</span>
+                </button>
                 <button className="dashboard-action-tile" type="button" onClick={onWorkspace}>
                   <span className="dashboard-action-icon">
                     <Clock3 size={24} strokeWidth={2.4} />
@@ -936,6 +970,7 @@ function Dashboard({
                   <span>Continue workplane</span>
                 </button>
               </div>
+              {joinOpen ? <div className="dashboard-import-notice"><strong>Join collaboration</strong><input aria-label="Invite code" value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value)} placeholder="ABCD-EFGH" /><input aria-label="Display name" value={joinName} onChange={(event) => setJoinName(event.currentTarget.value)} placeholder="Your name" /><button type="button" onClick={() => void onJoinCollaboration(joinCode, joinName).catch((error) => setJoinError(error instanceof Error ? error.message : "Could not join"))}>Join</button><button type="button" onClick={() => setJoinOpen(false)}>Cancel</button>{joinError ? <span>{joinError}</span> : null}</div> : null}
               {dashboardNotice ? (
                 <div className="dashboard-import-notice" role="status">
                   {dashboardNotice}
