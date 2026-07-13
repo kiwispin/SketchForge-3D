@@ -198,6 +198,8 @@ const DOWNLOAD_FOLDER_STORAGE_KEY = "sketchForge.downloadFolder";
 const SHARED_CLIPBOARD_STORAGE_KEY = "sketchForge.clipboard";
 const SYSTEM_CLIPBOARD_PREFIX = "SKETCHFORGE3D/1\n";
 const STATIC_EXPORT_BUILD = process.env.NEXT_PUBLIC_STATIC_EXPORT === "true";
+// Base path for static assets; empty unless deployed under a sub-path (e.g. GitHub Pages).
+const ASSET_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 declare global {
   interface Window {
@@ -9400,7 +9402,7 @@ function SecondaryToolbar({
                       event.dataTransfer.setData("application/x-sketchforge-shape", JSON.stringify(shape));
                     }}
                   >
-                    <img src={shape.menuIcon} alt="" draggable={false} />
+                    <img src={`${ASSET_BASE_PATH}/${shape.menuIcon}`} alt="" draggable={false} />
                     <span>{shape.name}</span>
                   </button>
                 ))}
