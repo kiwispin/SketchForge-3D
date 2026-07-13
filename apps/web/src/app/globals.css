@@ -1847,7 +1847,7 @@ button {
   padding: 5px 10px 5px 7px;
   color: #2c455c;
   background: #f8fafb;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--shape-accent) 24%, #cfdce5);
   border-radius: 4px;
   cursor: pointer;
   touch-action: manipulation;
@@ -1863,10 +1863,21 @@ button {
   transform: translateY(-1px);
 }
 
-.shape-menu-item img {
+.shape-menu-icon {
+  display: grid;
   flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  background: color-mix(in srgb, var(--shape-accent) 11%, #fff);
+  border: 1px solid color-mix(in srgb, var(--shape-accent) 32%, #dbe5ed);
+  border-radius: 8px;
+  box-shadow: inset 3px 0 0 var(--shape-accent);
+}
+
+.shape-menu-item img {
+  width: 50px;
+  height: 50px;
   object-fit: contain;
   pointer-events: none;
 }

@@ -20,6 +20,15 @@ describe("shape catalog", () => {
     expect(text?.shapes[0]).toMatchObject({ id: "text", kind: "text", name: "Text" });
   });
 
+  it("uses distinct coloured icons for basic shapes and a real hole icon for the Socket", () => {
+    const basic = shapeLibraryCategories.find((category) => category.id === "basic")!;
+    const socket = connectorShapeAssets.find((asset) => asset.id === "connector-socket")!;
+
+    expect(new Set(basic.shapes.map((shape) => shape.color)).size).toBe(basic.shapes.length);
+    expect(basic.shapes.every((shape) => shape.menuIcon.startsWith("assets/sketchforge/") && !shape.menuIcon.includes("shape-icons-gray"))).toBe(true);
+    expect(socket.menuIcon).toBe("assets/sketchforge/cylinder-hole.png");
+  });
+
   it("offers a classroom connector pair with compatible peg and socket dimensions", () => {
     const connectors = shapeLibraryCategories.find((category) => category.id === "connectors");
     const peg = connectorShapeAssets.find((asset) => asset.id === "connector-peg");

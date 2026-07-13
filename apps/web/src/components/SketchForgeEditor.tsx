@@ -8550,6 +8550,7 @@ function SecondaryToolbar({
                     className="shape-menu-item"
                     key={shape.id}
                     type="button"
+                    style={{ "--shape-accent": shape.color } as CSSProperties}
                     draggable={false}
                     onClick={() => {
                       if (suppressNextShapeClickRef.current) {
@@ -8604,7 +8605,9 @@ function SecondaryToolbar({
                       event.dataTransfer.setData("application/x-sketchforge-shape", JSON.stringify(shape));
                     }}
                   >
-                    <img src={`${ASSET_BASE_PATH}/${shape.menuIcon}`} alt="" draggable={false} />
+                    <span className="shape-menu-icon" aria-hidden="true">
+                      <img src={`${ASSET_BASE_PATH}/${shape.menuIcon}`} alt="" draggable={false} />
+                    </span>
                     <span>{shape.name}</span>
                   </button>
                 ))}

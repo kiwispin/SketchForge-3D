@@ -10,29 +10,29 @@ export type ShapeLibraryCategory = {
 };
 
 export const toolbarShapeAssets: ToolbarShapeAsset[] = [
-  { id: "box", name: "Box", src: "assets/sketchforge/shape-icons-gray/box.png", menuIcon: "assets/sketchforge/shape-icons-gray/box.png", kind: "box", color: "#d41721" },
-  { id: "cylinder", name: "Cylinder", src: "assets/sketchforge/shape-icons-gray/cylinder.png", menuIcon: "assets/sketchforge/shape-icons-gray/cylinder.png", kind: "cylinder", color: "#d97813" },
-  { id: "sphere", name: "Sphere", src: "assets/sketchforge/shape-icons-gray/sphere.png", menuIcon: "assets/sketchforge/shape-icons-gray/sphere.png", kind: "sphere", color: "#0098c7" },
-  { id: "cone", name: "Cone", src: "assets/sketchforge/shape-icons-gray/cone.png", menuIcon: "assets/sketchforge/shape-icons-gray/cone.png", kind: "cone", color: "#6e2786" },
-  { id: "pyramid", name: "Pyramid", src: "assets/sketchforge/shape-icons-gray/pyramid.png", menuIcon: "assets/sketchforge/shape-icons-gray/pyramid.png", kind: "pyramid", color: "#f2cf10" },
-  { id: "wedge", name: "Wedge", src: "assets/sketchforge/shape-icons-gray/wedge.png", menuIcon: "assets/sketchforge/shape-icons-gray/wedge.png", kind: "wedge", color: "#33983d" },
-  { id: "text", name: "Text", src: "assets/sketchforge/shape-icons-gray/text.png", menuIcon: "assets/sketchforge/shape-icons-gray/text.png", kind: "text", color: "#cf101b" },
-  { id: "round-roof", name: "Round Roof", src: "assets/sketchforge/shape-icons-gray/round-roof.png", menuIcon: "assets/sketchforge/shape-icons-gray/round-roof.png", kind: "roundRoof", color: "#67c4ce" },
-  { id: "half-sphere", name: "Half Sphere", src: "assets/sketchforge/shape-icons-gray/half-sphere.png", menuIcon: "assets/sketchforge/shape-icons-gray/half-sphere.png", kind: "halfSphere", color: "#c9009a" },
-  { id: "torus", name: "Torus", src: "assets/sketchforge/shape-icons-gray/torus.png", menuIcon: "assets/sketchforge/shape-icons-gray/torus.png", kind: "torus", color: "#0098c7" },
-  { id: "tube", name: "Tube", src: "assets/sketchforge/shape-icons-gray/tube.png", menuIcon: "assets/sketchforge/shape-icons-gray/tube.png", kind: "tube", color: "#ce7013" },
+  { id: "box", name: "Box", src: "assets/sketchforge/box-red.png", menuIcon: "assets/sketchforge/box-red.png", kind: "box", color: "#d41721" },
+  { id: "cylinder", name: "Cylinder", src: "assets/sketchforge/cylinder-orange.png", menuIcon: "assets/sketchforge/cylinder-orange.png", kind: "cylinder", color: "#d97813" },
+  { id: "sphere", name: "Sphere", src: "assets/sketchforge/sphere-blue.png", menuIcon: "assets/sketchforge/sphere-blue.png", kind: "sphere", color: "#0098c7" },
+  { id: "cone", name: "Cone", src: "assets/sketchforge/cone-purple.png", menuIcon: "assets/sketchforge/cone-purple.png", kind: "cone", color: "#6e2786" },
+  { id: "pyramid", name: "Pyramid", src: "assets/sketchforge/pyramid-yellow.png", menuIcon: "assets/sketchforge/pyramid-yellow.png", kind: "pyramid", color: "#d6ad00" },
+  { id: "wedge", name: "Wedge", src: "assets/sketchforge/wedge-blue.png", menuIcon: "assets/sketchforge/wedge-blue.png", kind: "wedge", color: "#33983d" },
+  { id: "text", name: "Text", src: "assets/sketchforge/text-red.png", menuIcon: "assets/sketchforge/text-red.png", kind: "text", color: "#cf101b" },
+  { id: "round-roof", name: "Round Roof", src: "assets/sketchforge/round-roof-cyan.png", menuIcon: "assets/sketchforge/round-roof-cyan.png", kind: "roundRoof", color: "#00a6a6" },
+  { id: "half-sphere", name: "Half Sphere", src: "assets/sketchforge/half-sphere-pink.png", menuIcon: "assets/sketchforge/half-sphere-pink.png", kind: "halfSphere", color: "#c9009a" },
+  { id: "torus", name: "Torus", src: "assets/sketchforge/torus-blue.png", menuIcon: "assets/sketchforge/torus-blue.png", kind: "torus", color: "#4f46e5" },
+  { id: "tube", name: "Tube", src: "assets/sketchforge/tube-orange.png", menuIcon: "assets/sketchforge/tube-orange.png", kind: "tube", color: "#9a5b13" },
 ];
 
 export const connectorShapeAssets: ToolbarShapeAsset[] = [
-  { id: "connector-peg", name: "Peg", src: "assets/sketchforge/shape-icons-gray/cylinder.png", menuIcon: "assets/sketchforge/shape-icons-gray/cylinder.png", kind: "cylinder", color: "#2563eb" },
-  { id: "connector-socket", name: "Socket", src: "assets/sketchforge/shape-icons-gray/cylinder.png", menuIcon: "assets/sketchforge/shape-icons-gray/cylinder-hole.png", kind: "cylinder", color: "#94a3b8", hole: true },
+  { id: "connector-peg", name: "Peg", src: "assets/sketchforge/cylinder-orange.png", menuIcon: "assets/sketchforge/cylinder-orange.png", kind: "cylinder", color: "#2563eb" },
+  { id: "connector-socket", name: "Socket", src: "assets/sketchforge/cylinder-hole.png", menuIcon: "assets/sketchforge/cylinder-hole.png", kind: "cylinder", color: "#94a3b8", hole: true },
 ];
 
 export const printablePartShapeAssets: ToolbarShapeAsset[] = [
-  { id: "printable-name-tag", name: "Name Tag", src: "assets/sketchforge/shape-icons-gray/box.png", menuIcon: "assets/sketchforge/shape-icons-gray/box.png", kind: "box", color: "#d41721" },
-  { id: "printable-phone-stand", name: "Phone Stand", src: "assets/sketchforge/shape-icons-gray/wedge.png", menuIcon: "assets/sketchforge/shape-icons-gray/wedge.png", kind: "wedge", color: "#33983d" },
-  { id: "printable-cable-guide", name: "Cable Guide", src: "assets/sketchforge/shape-icons-gray/tube.png", menuIcon: "assets/sketchforge/shape-icons-gray/tube.png", kind: "tube", color: "#ce7013" },
-  { id: "printable-spacer", name: "Spacer", src: "assets/sketchforge/shape-icons-gray/tube.png", menuIcon: "assets/sketchforge/shape-icons-gray/tube.png", kind: "tube", color: "#2563eb" },
+  { id: "printable-name-tag", name: "Name Tag", src: "assets/sketchforge/box-red.png", menuIcon: "assets/sketchforge/box-red.png", kind: "box", color: "#d41721" },
+  { id: "printable-phone-stand", name: "Phone Stand", src: "assets/sketchforge/wedge-blue.png", menuIcon: "assets/sketchforge/wedge-blue.png", kind: "wedge", color: "#33983d" },
+  { id: "printable-cable-guide", name: "Cable Guide", src: "assets/sketchforge/tube-orange.png", menuIcon: "assets/sketchforge/tube-orange.png", kind: "tube", color: "#ce7013" },
+  { id: "printable-spacer", name: "Spacer", src: "assets/sketchforge/tube-orange.png", menuIcon: "assets/sketchforge/tube-orange.png", kind: "tube", color: "#2563eb" },
 ];
 
 export const shapeLibraryCategories: ShapeLibraryCategory[] = [
