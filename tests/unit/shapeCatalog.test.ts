@@ -45,13 +45,21 @@ describe("shape catalog", () => {
     const nameTag = makeShapeFromAsset(byId("printable-name-tag"));
     expect(nameTag).toMatchObject({ kind: "box", width: 70, depth: 28, height: 5, groupedBaseWidth: 70, groupedBaseDepth: 28, groupedBaseHeight: 5 });
     expect(nameTag.groupedShapes?.map((shape) => shape.name)).toEqual(["Name tag plaque", "Keyring hole", "NAME label"]);
-    expect(nameTag.groupedShapes?.[1]).toMatchObject({ kind: "cylinder", hole: true, width: 6, height: 8 });
+    expect(nameTag.groupedShapes?.[1]).toMatchObject({ kind: "cylinder", hole: true, width: 6, height: 5, elevation: 0 });
     expect(nameTag.groupedShapes?.[2]).toMatchObject({ kind: "text", text: "NAME", height: 1 });
     const phoneStand = makeShapeFromAsset(byId("printable-phone-stand"));
     expect(phoneStand).toMatchObject({ kind: "box", width: 70, depth: 70, height: 50, groupedBaseWidth: 70, groupedBaseDepth: 70, groupedBaseHeight: 50 });
     expect(phoneStand.groupedShapes).toHaveLength(3);
     expect(phoneStand.groupedShapes?.map((shape) => shape.name)).toEqual(["Phone stand base", "Phone stand back", "Phone stand retaining lip"]);
     expect(phoneStand.groupedShapes?.[1]).toMatchObject({ width: 70, depth: 4, height: 45, rotationX: -15 });
+
+    [nameTag, phoneStand].forEach((assembly) => {
+      const baseHeight = assembly.groupedBaseHeight!;
+      assembly.groupedShapes!.forEach((part) => {
+        expect(part.elevation ?? 0).toBeGreaterThanOrEqual(0);
+        expect((part.elevation ?? 0) + part.height).toBeLessThanOrEqual(baseHeight);
+      });
+    });
     expect(makeShapeFromAsset(byId("printable-cable-guide"))).toMatchObject({ kind: "tube", width: 18, depth: 18, height: 8, bevel: 4 });
     expect(makeShapeFromAsset(byId("printable-spacer"))).toMatchObject({ kind: "tube", width: 12, depth: 12, height: 10, bevel: 3 });
   });

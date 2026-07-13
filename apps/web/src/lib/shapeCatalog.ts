@@ -110,7 +110,7 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
       groupedBaseWidth: 70, groupedBaseDepth: 28, groupedBaseHeight: 5,
       groupedShapes: [
         child("name-tag-plaque", "Name tag plaque", "box", 0, 0, 0, 70, 28, 4, { radius: 4, steps: 10 }),
-        child("name-tag-hole", "Keyring hole", "cylinder", -28, 0, -2, 6, 6, 8, { hole: true, color: "#b8c2cc", sides: 48 }),
+        child("name-tag-hole", "Keyring hole", "cylinder", -28, 0, 0, 6, 6, 5, { hole: true, color: "#b8c2cc", sides: 48 }),
         child("name-tag-label", "NAME label", "text", 5, 0, 4, 42, 14, 1, { color: "#ffffff", text: "NAME", font: "Sans" }),
       ],
       locked: false, hidden: false,
