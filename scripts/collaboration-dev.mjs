@@ -6,7 +6,8 @@ const children = [
     env: { ...process.env, COLLAB_PORT: process.env.COLLAB_PORT ?? "3101" },
     stdio: "inherit",
   }),
-  spawn(npm, ["run", "dev", "--", "--hostname", "0.0.0.0"], { stdio: "inherit" }),
+  // Windows cannot directly spawn npm.cmd without a shell (EINVAL).
+  spawn(npm, ["run", "dev", "--", "--hostname", "0.0.0.0"], { stdio: "inherit", shell: process.platform === "win32" }),
 ];
 
 function stop(exitCode = 0) {
