@@ -7,7 +7,12 @@ const children = [
     stdio: "inherit",
   }),
   // Windows cannot directly spawn npm.cmd without a shell (EINVAL).
-  spawn(npm, ["run", "dev", "--", "--hostname", "0.0.0.0"], { stdio: "inherit", shell: process.platform === "win32" }),
+  spawn(npm, ["run", "dev", "--", "--hostname", "0.0.0.0"], {
+    // Development must never inherit a deployment/static-export setting.
+    env: { ...process.env, STATIC_EXPORT: "", GITHUB_PAGES: "" },
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  }),
 ];
 
 function stop(exitCode = 0) {
