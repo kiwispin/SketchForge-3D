@@ -4,7 +4,7 @@ import type { ShapeAsset, WorkplaneShape } from "@/types/sketchforge";
 
 export type ToolbarShapeAsset = ShapeAsset & { menuIcon: string };
 export type ShapeLibraryCategory = {
-  id: "basic" | "connectors" | "text";
+  id: "basic" | "connectors" | "printableParts" | "text";
   label: string;
   shapes: ToolbarShapeAsset[];
 };
@@ -28,9 +28,17 @@ export const connectorShapeAssets: ToolbarShapeAsset[] = [
   { id: "connector-socket", name: "Socket", src: "assets/sketchforge/shape-icons-gray/cylinder.png", menuIcon: "assets/sketchforge/shape-icons-gray/cylinder-hole.png", kind: "cylinder", color: "#94a3b8", hole: true },
 ];
 
+export const printablePartShapeAssets: ToolbarShapeAsset[] = [
+  { id: "printable-name-tag", name: "Name Tag", src: "assets/sketchforge/shape-icons-gray/box.png", menuIcon: "assets/sketchforge/shape-icons-gray/box.png", kind: "box", color: "#d41721" },
+  { id: "printable-phone-stand", name: "Phone Stand", src: "assets/sketchforge/shape-icons-gray/wedge.png", menuIcon: "assets/sketchforge/shape-icons-gray/wedge.png", kind: "wedge", color: "#33983d" },
+  { id: "printable-cable-guide", name: "Cable Guide", src: "assets/sketchforge/shape-icons-gray/tube.png", menuIcon: "assets/sketchforge/shape-icons-gray/tube.png", kind: "tube", color: "#ce7013" },
+  { id: "printable-spacer", name: "Spacer", src: "assets/sketchforge/shape-icons-gray/tube.png", menuIcon: "assets/sketchforge/shape-icons-gray/tube.png", kind: "tube", color: "#2563eb" },
+];
+
 export const shapeLibraryCategories: ShapeLibraryCategory[] = [
   { id: "basic", label: "Basic Shapes", shapes: toolbarShapeAssets.filter((shape) => shape.kind !== "text") },
   { id: "connectors", label: "Connectors", shapes: connectorShapeAssets },
+  { id: "printableParts", label: "Printable Parts", shapes: printablePartShapeAssets },
   { id: "text", label: "Text", shapes: toolbarShapeAssets.filter((shape) => shape.kind === "text") },
 ];
 
@@ -77,12 +85,16 @@ export function sceneShape(shape: Partial<WorkplaneShape> & Pick<WorkplaneShape,
 export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: number; elevation?: number }): WorkplaneShape {
   const isConnectorPeg = asset.id === "connector-peg";
   const isConnectorSocket = asset.id === "connector-socket";
+  const isNameTag = asset.id === "printable-name-tag";
+  const isPhoneStand = asset.id === "printable-phone-stand";
+  const isCableGuide = asset.id === "printable-cable-guide";
+  const isSpacer = asset.id === "printable-spacer";
   const roundProfile = asset.kind === "sphere" || asset.kind === "torus" || asset.kind === "ring" || asset.kind === "halfSphere";
   const flatProfile = asset.kind === "torus" || asset.kind === "ring" || asset.kind === "text";
-  const size = isConnectorPeg ? 8 : isConnectorSocket ? 10 : roundProfile ? 22 : 20;
-  const height = isConnectorPeg ? 16 : isConnectorSocket ? 12 : asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
-  const width = asset.kind === "text" ? 86 : size;
-  const depth = asset.kind === "text" ? 28 : size;
+  const size = isConnectorPeg ? 8 : isConnectorSocket ? 10 : isCableGuide ? 18 : isSpacer ? 12 : roundProfile ? 22 : 20;
+  const height = isConnectorPeg ? 16 : isConnectorSocket ? 12 : isNameTag ? 3 : isPhoneStand ? 45 : isCableGuide ? 8 : isSpacer ? 10 : asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
+  const width = isNameTag || isPhoneStand ? 70 : asset.kind === "text" ? 86 : size;
+  const depth = isNameTag ? 28 : isPhoneStand ? 60 : asset.kind === "text" ? 28 : size;
 
   return {
     id: createLocalId(asset.id),
@@ -100,12 +112,12 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
     rotation: 0,
     rotationX: 0,
     rotationZ: 0,
-    radius: asset.kind === "box" ? 0 : undefined,
+    radius: asset.kind === "box" ? (isNameTag ? 3 : 0) : undefined,
     text: asset.kind === "text" ? "TEXT" : undefined,
     font: asset.kind === "text" ? "Multilanguage" : undefined,
     steps: asset.kind === "box" ? 10 : asset.kind === "sphere" ? 24 : asset.kind === "halfSphere" ? 32 : undefined,
     sides: asset.kind === "cylinder" || asset.kind === "cone" ? (isConnectorPeg || isConnectorSocket ? 48 : 96) : asset.kind === "roundRoof" ? 64 : asset.kind === "pyramid" ? 4 : undefined,
-    bevel: asset.kind === "cylinder" ? 0 : asset.kind === "tube" || asset.kind === "ring" ? 4 : undefined,
+    bevel: asset.kind === "cylinder" ? 0 : asset.kind === "tube" || asset.kind === "ring" ? (isSpacer ? 3 : 4) : undefined,
     segments: asset.kind === "cylinder" ? 1 : undefined,
     topRadius: asset.kind === "cone" ? 0 : undefined,
     baseRadius: asset.kind === "cone" ? size / 2 : undefined,

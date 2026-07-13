@@ -8435,7 +8435,7 @@ function SecondaryToolbar({
   saveStatus?: ProjectSaveStatus | null;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
-  const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "text">("basic");
+  const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "printableParts" | "text">("basic");
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const suppressNextShapeClickRef = useRef(false);
   const selectToolbarMode = (mode: "geometry" | "sketch") => {

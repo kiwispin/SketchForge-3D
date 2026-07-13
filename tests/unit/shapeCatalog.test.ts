@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShapeAsset } from "@/types/sketchforge";
-import { connectorShapeAssets, makeShapeFromAsset, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
+import { connectorShapeAssets, makeShapeFromAsset, printablePartShapeAssets, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
 
 describe("shape catalog", () => {
   it("does not expose removed decorative shapes in the toolbar catalog", () => {
@@ -30,6 +30,22 @@ describe("shape catalog", () => {
     expect(socket).toBeDefined();
     expect(makeShapeFromAsset(peg!)).toMatchObject({ name: "Peg", kind: "cylinder", width: 8, depth: 8, height: 16, hole: undefined, sides: 48 });
     expect(makeShapeFromAsset(socket!)).toMatchObject({ name: "Socket", kind: "cylinder", width: 10, depth: 10, height: 12, hole: true, sides: 48 });
+  });
+
+  it("offers editable printable-part starters with purposeful dimensions", () => {
+    const printableParts = shapeLibraryCategories.find((category) => category.id === "printableParts");
+    const byId = (id: string) => printablePartShapeAssets.find((asset) => asset.id === id)!;
+
+    expect(printableParts?.shapes.map((asset) => asset.id)).toEqual([
+      "printable-name-tag",
+      "printable-phone-stand",
+      "printable-cable-guide",
+      "printable-spacer",
+    ]);
+    expect(makeShapeFromAsset(byId("printable-name-tag"))).toMatchObject({ kind: "box", width: 70, depth: 28, height: 3, radius: 3 });
+    expect(makeShapeFromAsset(byId("printable-phone-stand"))).toMatchObject({ kind: "wedge", width: 70, depth: 60, height: 45 });
+    expect(makeShapeFromAsset(byId("printable-cable-guide"))).toMatchObject({ kind: "tube", width: 18, depth: 18, height: 8, bevel: 4 });
+    expect(makeShapeFromAsset(byId("printable-spacer"))).toMatchObject({ kind: "tube", width: 12, depth: 12, height: 10, bevel: 3 });
   });
 
   it("creates placed shapes from toolbar assets", () => {
