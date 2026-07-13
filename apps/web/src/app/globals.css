@@ -662,6 +662,76 @@ button {
   font-weight: 800;
 }
 
+.collaboration-nearby-sessions {
+  display: grid;
+  gap: 10px;
+  margin: 0 18px 16px;
+  padding: 13px;
+  border: 1px solid #bfe3f1;
+  border-radius: 8px;
+  background: #f1faff;
+}
+
+.collaboration-nearby-sessions > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.collaboration-nearby-sessions > div:first-child strong {
+  color: #1d536c;
+  font-size: 13px;
+}
+
+.collaboration-nearby-sessions > div:first-child span,
+.collaboration-nearby-empty {
+  color: #547184;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.collaboration-nearby-session-list {
+  display: grid;
+  gap: 7px;
+}
+
+.collaboration-nearby-session-list button {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  color: #24637e;
+  text-align: left;
+  border: 1px solid #c5dce7;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.collaboration-nearby-session-list button:hover,
+.collaboration-nearby-session-list button.is-selected {
+  color: #075e85;
+  border-color: #1682aa;
+  background: #e4f6fc;
+}
+
+.collaboration-nearby-session-list button span {
+  display: grid;
+  gap: 1px;
+}
+
+.collaboration-nearby-session-list button strong {
+  color: #1d3448;
+  font-size: 13px;
+}
+
+.collaboration-nearby-session-list button small {
+  color: #5e7688;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .collaboration-join-dialog > label > span {
   display: inline-flex;
   align-items: center;

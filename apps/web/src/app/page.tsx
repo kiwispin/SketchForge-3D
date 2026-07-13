@@ -7,6 +7,7 @@ import { tutorials } from "@/lib/tutorials";
 import { createLocalId } from "@/lib/localIds";
 import { isProjectFileName, parseProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { joinCollaboration, startCollaboration } from "@/lib/collaborationClient";
+import { discoverLanSessions, isTauriDesktop, type LanSession } from "@/lib/tauriLan";
 import { importExtensionSupported } from "@/lib/stlImport";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import type { GridSize, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
@@ -658,14 +659,14 @@ export default function Home() {
     );
   };
 
-  const joinProject = async (code: string, name: string) => {
-    const joined = await joinCollaboration(code, name);
+  const joinProject = async (code: string, name: string, serviceOrigin?: string) => {
+    const joined = await joinCollaboration(code, name, serviceOrigin);
     const project = newProject(joined.snapshot.name ? `Shared: ${joined.snapshot.name}` : "Shared design", projects.length, joined.snapshot.shapes.length);
     const revision = Date.now();
     await saveProjectShapes(project.id, joined.snapshot.shapes, revision);
     setProjectShapesById((current) => ({ ...current, [project.id]: { revision, shapes: joined.snapshot.shapes } }));
     setProjects((current) => [{ ...project, revision, updatedAt: revision }, ...current]);
-    setCollaborationSession({ code: joined.code, participantId: joined.participantId, name: name.trim(), role: "guest" });
+    setCollaborationSession({ code: joined.code, participantId: joined.participantId, name: name.trim(), role: "guest", serviceOrigin: joined.serviceOrigin });
     openEditor(project.id, { allowMissingFromStorage: true });
   };
   const hostProject = async (snapshot: { name: string; shapes: WorkplaneShape[] }) => {
@@ -821,7 +822,7 @@ function Dashboard({
   onDownloadFolderChange: (value: string) => void;
   onDownloadModeChange: (value: DownloadMode) => void;
   onImportFile: () => void;
-  onJoinCollaboration: (code: string, name: string) => Promise<void>;
+  onJoinCollaboration: (code: string, name: string, serviceOrigin?: string) => Promise<void>;
   onChallenges: () => void;
   onLearn: () => void;
   onStartTutorial: (tutorialId: string) => void;
@@ -842,6 +843,9 @@ function Dashboard({
   const [joinCode, setJoinCode] = useState("");
   const [joinName, setJoinName] = useState("");
   const [joinError, setJoinError] = useState("");
+  const [joinServiceOrigin, setJoinServiceOrigin] = useState<string | undefined>();
+  const [lanSessions, setLanSessions] = useState<LanSession[]>([]);
+  const [lanSessionsLoading, setLanSessionsLoading] = useState(false);
   const projectPendingDelete = projects.find((project) => project.id === projectPendingDeleteId) ?? null;
   const projectPendingRename = projects.find((project) => project.id === projectPendingRenameId) ?? null;
 
@@ -850,6 +854,28 @@ function Dashboard({
     if (projects.some((project) => project.id === projectPendingDeleteId)) return;
     setProjectPendingDeleteId(null);
   }, [projectPendingDeleteId, projects]);
+
+  useEffect(() => {
+    if (!joinOpen || !isTauriDesktop()) return;
+    let cancelled = false;
+    const refresh = async () => {
+      setLanSessionsLoading(true);
+      try {
+        const sessions = await discoverLanSessions();
+        if (!cancelled) setLanSessions(sessions);
+      } catch {
+        if (!cancelled) setLanSessions([]);
+      } finally {
+        if (!cancelled) setLanSessionsLoading(false);
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [joinOpen]);
 
   const confirmProjectDelete = () => {
     if (!projectPendingDelete) return;
@@ -959,7 +985,7 @@ function Dashboard({
                   </span>
                   <span>Import file</span>
                 </button>
-                <button className="dashboard-action-tile" type="button" onClick={() => { setJoinError(""); setJoinOpen(true); }}>
+                <button className="dashboard-action-tile" type="button" onClick={() => { setJoinError(""); setJoinServiceOrigin(undefined); setJoinOpen(true); }}>
                   <span className="dashboard-action-icon"><UsersRound size={24} strokeWidth={2.4} /></span>
                   <span>Join collaboration</span>
                 </button>
@@ -1086,7 +1112,7 @@ function Dashboard({
             onSubmit={(event) => {
               event.preventDefault();
               setJoinError("");
-              void onJoinCollaboration(joinCode, joinName).catch((error) => setJoinError(error instanceof Error ? error.message : "Could not join"));
+              void onJoinCollaboration(joinCode, joinName, joinServiceOrigin).catch((error) => setJoinError(error instanceof Error ? error.message : "Could not join"));
             }}
           >
             <header>
@@ -1095,9 +1121,28 @@ function Dashboard({
               <button type="button" aria-label="Cancel joining collaboration" onClick={() => setJoinOpen(false)}><X size={18} /></button>
             </header>
             <p>Ask the student who started the design for their invite code, then choose the name they will see.</p>
+            {isTauriDesktop() ? (
+              <section className="collaboration-nearby-sessions" aria-live="polite">
+                <div>
+                  <strong>Nearby SketchForge sessions</strong>
+                  <span>{lanSessionsLoading ? "Looking on this network…" : "Choose one, then enter its invite code."}</span>
+                </div>
+                {lanSessions.length ? (
+                  <div className="collaboration-nearby-session-list">
+                    {lanSessions.map((session) => (
+                      <button type="button" key={`${session.serviceUrl}-${session.code}`} className={joinServiceOrigin === session.serviceUrl ? "is-selected" : ""} onClick={() => { setJoinCode(session.code); setJoinServiceOrigin(session.serviceUrl); setJoinError(""); }}>
+                        <UsersRound size={17} />
+                        <span><strong>{session.hostName}</strong><small>Invite code {session.code}</small></span>
+                        <ArrowRight size={16} />
+                      </button>
+                    ))}
+                  </div>
+                ) : <small className="collaboration-nearby-empty">No nearby session yet. Make sure the other student has started sharing and both computers are on the same network.</small>}
+              </section>
+            ) : null}
             <label>
               <span><KeyRound size={15} /> Invite code</span>
-              <input autoFocus aria-label="Invite code" value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value.toUpperCase())} placeholder="ABCD-EFGH" autoComplete="off" spellCheck={false} />
+              <input autoFocus aria-label="Invite code" value={joinCode} onChange={(event) => { setJoinCode(event.currentTarget.value.toUpperCase()); setJoinServiceOrigin(undefined); }} placeholder="ABCD-EFGH" autoComplete="off" spellCheck={false} />
             </label>
             <label>
               <span>Your display name</span>
