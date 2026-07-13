@@ -8067,6 +8067,7 @@ export function SketchForgeEditor({
       {onStartCollaboration ? <div className="collaboration-start">{collaborationSession?.role === "host" ? <><span>Invite code: {collaborationSession.code}</span><button type="button" onClick={() => { collaborationRef.current?.end(); window.setTimeout(() => onEndCollaboration?.(), 50); setNotice("Collaboration ended; your local copy was kept"); }}>End collaboration</button></> : collaborationSession?.role === "guest" ? <span>Joined: {collaborationSession.code}</span> : <button type="button" onClick={() => void onStartCollaboration({ name: projectName, shapes }).then((code) => { setCollaborationCode(code); setNotice(`Invite code: ${code}`); }).catch((error) => setNotice(error instanceof Error ? error.message : "Could not start collaboration"))}>{collaborationCode ? `Invite code: ${collaborationCode}` : "Start collaboration"}</button>}</div> : null}
       <SecondaryToolbar
         toolbarMode={toolbarMode}
+        sharedSession={Boolean(collaborationSession)}
         onToolbarModeChange={(mode) => {
           setToolbarMode(mode);
           setTopPanel(null);
@@ -8075,22 +8076,22 @@ export function SketchForgeEditor({
         canUndo={historyIndex > 0 || Boolean(edgeModifier) || rulerCanUndo}
         canRedo={historyIndex < history.length - 1}
         canGroup={selectedShapes.length > 1 && selectedShapes.every((shape) => !shape.locked)}
-        canIntersect={selectedShapes.some((shape) => !shape.locked && !shape.hole) && selectedShapes.some((shape) => !shape.locked && Boolean(shape.hole))}
+        canIntersect={!collaborationSession && selectedShapes.some((shape) => !shape.locked && !shape.hole) && selectedShapes.some((shape) => !shape.locked && Boolean(shape.hole))}
         canUngroup={selectedShapes.some((shape) => Boolean(shape.groupedShapes?.length))}
         hasClipboard={clipboard.length > 0 || systemClipboardSupported}
         hasSelection={hasSelection}
         alignMode={alignMode}
         canAlign={selectedShapes.length > 1}
         canDistribute={selectedShapes.length > 2}
-        canEdgeModify={selectedShapes.length === 1 && Boolean(selectedShape && !selectedShape.locked && !selectedShape.hole)}
+        canEdgeModify={!collaborationSession && selectedShapes.length === 1 && Boolean(selectedShape && !selectedShape.locked && !selectedShape.hole)}
         edgeModifierKind={edgeModifier?.kind ?? null}
         mirrorMode={mirrorMode}
         sketchActive={sketchActive}
         sketchTool={sketchTool}
         sketchCanUndo={sketchHistoryIndex > 0}
         sketchCanRedo={sketchHistoryIndex < sketchHistory.length - 1}
-        canEditSketch={selectedShapes.length === 1 && Boolean(selectedShape?.sketchProfile)}
-        onStartSketch={() => beginSketch()}
+        canEditSketch={!collaborationSession && selectedShapes.length === 1 && Boolean(selectedShape?.sketchProfile)}
+        onStartSketch={() => collaborationSession ? setNotice("Sketch tools are unavailable during collaboration") : beginSketch()}
         onEditSketch={beginSketchEdit}
         onSketchTool={setActiveSketchTool}
         onSketchImage={() => {
@@ -8368,6 +8369,7 @@ function SketchReferenceIcon({ name }: { name: SketchReferenceIconName }) {
 function SecondaryToolbar({
   toolbarMode,
   onToolbarModeChange,
+  sharedSession,
   alignMode,
   canAlign,
   canDistribute,
@@ -8422,6 +8424,7 @@ function SecondaryToolbar({
 }: {
   toolbarMode: ToolbarMode;
   onToolbarModeChange: (mode: ToolbarMode) => void;
+  sharedSession: boolean;
   alignMode: boolean;
   canAlign: boolean;
   canDistribute: boolean;
@@ -8683,7 +8686,7 @@ function SecondaryToolbar({
               {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : "Save failed"}
             </div>
           ) : null}
-          <button className="action-icon-button" aria-label="Import" title="Import" onClick={() => onTopPanel("import")}>
+          <button className="action-icon-button" aria-label="Import" title={sharedSession ? "Import is unavailable during collaboration" : "Import"} onClick={() => onTopPanel("import")} disabled={sharedSession}>
             <ToolbarImportIcon />
           </button>
           <button className="action-icon-button" aria-label="Export" title="Export" onClick={() => onTopPanel("export")}>
@@ -8805,6 +8808,7 @@ function SecondaryToolbar({
           role="tab"
           aria-selected={toolbarMode === "sketch"}
           onClick={() => selectToolbarMode("sketch")}
+          disabled={sharedSession}
         >
           Sketch
         </button>
