@@ -42,7 +42,11 @@ describe("shape catalog", () => {
       "printable-cable-guide",
       "printable-spacer",
     ]);
-    expect(makeShapeFromAsset(byId("printable-name-tag"))).toMatchObject({ kind: "box", width: 70, depth: 28, height: 3, radius: 3 });
+    const nameTag = makeShapeFromAsset(byId("printable-name-tag"));
+    expect(nameTag).toMatchObject({ kind: "box", width: 70, depth: 28, height: 5, groupedBaseWidth: 70, groupedBaseDepth: 28, groupedBaseHeight: 5 });
+    expect(nameTag.groupedShapes?.map((shape) => shape.name)).toEqual(["Name tag plaque", "Keyring hole", "NAME label"]);
+    expect(nameTag.groupedShapes?.[1]).toMatchObject({ kind: "cylinder", hole: true, width: 6, height: 8 });
+    expect(nameTag.groupedShapes?.[2]).toMatchObject({ kind: "text", text: "NAME", height: 1 });
     const phoneStand = makeShapeFromAsset(byId("printable-phone-stand"));
     expect(phoneStand).toMatchObject({ kind: "box", width: 70, depth: 70, height: 50, groupedBaseWidth: 70, groupedBaseDepth: 70, groupedBaseHeight: 50 });
     expect(phoneStand.groupedShapes).toHaveLength(3);

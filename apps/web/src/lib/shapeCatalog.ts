@@ -96,6 +96,27 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
   const width = isNameTag || isPhoneStand ? 70 : asset.kind === "text" ? 86 : size;
   const depth = isNameTag ? 28 : isPhoneStand ? 60 : asset.kind === "text" ? 28 : size;
 
+  if (isNameTag) {
+    const color = asset.color;
+    const child = (id: string, name: string, kind: WorkplaneShape["kind"], x: number, z: number, elevation: number, childWidth: number, childDepth: number, childHeight: number, overrides: Partial<WorkplaneShape> = {}): WorkplaneShape => ({
+      id: createLocalId(id), name, kind, color: overrides.color ?? color, x, z, elevation,
+      size: Math.max(childWidth, childDepth), width: childWidth, depth: childDepth, height: childHeight,
+      rotation: 0, rotationX: 0, rotationZ: 0, locked: false, hidden: false, ...overrides,
+    });
+    return {
+      id: createLocalId(asset.id), name: asset.name, kind: "box", color,
+      x: point?.x ?? 0, z: point?.z ?? 0, elevation: point?.elevation ?? 0,
+      size: 70, width: 70, depth: 28, height: 5, rotation: 0, rotationX: 0, rotationZ: 0,
+      groupedBaseWidth: 70, groupedBaseDepth: 28, groupedBaseHeight: 5,
+      groupedShapes: [
+        child("name-tag-plaque", "Name tag plaque", "box", 0, 0, 0, 70, 28, 4, { radius: 4, steps: 10 }),
+        child("name-tag-hole", "Keyring hole", "cylinder", -28, 0, -2, 6, 6, 8, { hole: true, color: "#b8c2cc", sides: 48 }),
+        child("name-tag-label", "NAME label", "text", 5, 0, 4, 42, 14, 1, { color: "#ffffff", text: "NAME", font: "Sans" }),
+      ],
+      locked: false, hidden: false,
+    };
+  }
+
   if (isPhoneStand) {
     const color = asset.color;
     const child = (id: string, name: string, x: number, z: number, elevation: number, childWidth: number, childDepth: number, childHeight: number, rotationX = 0): WorkplaneShape => ({
