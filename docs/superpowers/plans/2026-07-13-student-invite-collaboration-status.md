@@ -30,3 +30,12 @@
 3. ✅ Added UDP LAN session announcements and native discovery. The desktop join dialog presents nearby students' sessions, fills the selected invite code, and still requires that code; a host's own session is excluded from its picker. No addresses, URLs, QR codes, accounts, or cloud service are exposed to students.
 4. ✅ Connected the editor to the native service and discovery command only when it runs inside Tauri. Browser/LAN development mode keeps its existing service origin and manual join behaviour unchanged.
 5. 🟡 Built and smoke-tested Windows installers. The compiled desktop executable was launched and its bundled `/healthz` endpoint returned `{ ok: true }`. `npm run test:desktop:service` then verified room creation, invite-code join, guest-to-host edit propagation, host-to-guest reverse propagation (the transport used by undo), and host end-session propagation. `npm run ci` remains clean (12 files / 72 tests); Rust formatting and `cargo check` are clean; the Windows static export succeeds. Built artifacts: `src-tauri/target/debug/bundle/msi/SketchForge LAN_0.1.0_x64_en-US.msi` and `src-tauri/target/debug/bundle/nsis/SketchForge LAN_0.1.0_x64-setup.exe`. Remaining release acceptance: install the setup executable on two separate school-LAN desktops and manually confirm discovery and the visible editor flow; Windows Firewall/private-network permission must be allowed if prompted.
+
+## Decision — Parked (2026-07-14)
+
+- Collaboration is not a current core-product priority. The individual student modelling experience, templates, challenges, import/export, and classroom workflow take precedence.
+- The existing browser collaboration branch and its LAN room service are retained as optional work, isolated from `main`.
+- Tauri is not required for the intended student collaboration workflow and should not be expanded further without a new explicit decision.
+- If collaboration is revisited, the preferred architecture is two normal browsers connecting to one always-on **school-LAN collaboration service**. Students use temporary invite codes; neither student runs terminal commands or needs a desktop installation.
+- Browser-only, code-only, LAN-only collaboration cannot be peer-hosted by one browser: browsers cannot listen for LAN connections or discover peers. The always-on LAN service is the required infrastructure.
+- Online collaboration is intentionally deferred. It would require a public hosted relay, session expiry/rate limiting, and a separate security/privacy decision; Cloudflare is an optional provider, not a requirement.
