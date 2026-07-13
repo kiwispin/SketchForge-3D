@@ -1,0 +1,20 @@
+services:
+  sketchforge:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "${SKETCHFORGE_PORT:-3100}:80"
+    restart: unless-stopped
+
+  collaboration:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "scripts/collaboration-server.mjs"]
+    environment:
+      COLLAB_PORT: 3101
+    volumes:
+      - ../..:/app:ro
+    ports:
+      - "${SKETCHFORGE_COLLAB_PORT:-3101}:3101"
+    restart: unless-stopped

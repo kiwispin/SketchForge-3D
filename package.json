@@ -39,12 +39,16 @@
     "tailwind-merge": "^3.3.0",
     "tailwindcss": "^4.1.8",
     "three": "^0.184.0",
-    "three-bvh-csg": "^0.0.18"
+    "three-bvh-csg": "^0.0.18",
+    "ws": "^8.21.0",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.31"
   },
   "devDependencies": {
     "@types/node": "^22.15.18",
     "@types/react": "^19.1.4",
     "@types/react-dom": "^19.1.5",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.8"
   }
