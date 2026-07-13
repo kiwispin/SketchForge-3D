@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShapeAsset } from "@/types/sketchforge";
-import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
+import { connectorShapeAssets, makeShapeFromAsset, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
 
 describe("shape catalog", () => {
   it("does not expose removed decorative shapes in the toolbar catalog", () => {
@@ -18,6 +18,18 @@ describe("shape catalog", () => {
     expect(basic?.shapes.map((asset) => asset.kind)).not.toContain("text");
     expect(text?.shapes).toHaveLength(1);
     expect(text?.shapes[0]).toMatchObject({ id: "text", kind: "text", name: "Text" });
+  });
+
+  it("offers a classroom connector pair with compatible peg and socket dimensions", () => {
+    const connectors = shapeLibraryCategories.find((category) => category.id === "connectors");
+    const peg = connectorShapeAssets.find((asset) => asset.id === "connector-peg");
+    const socket = connectorShapeAssets.find((asset) => asset.id === "connector-socket");
+
+    expect(connectors?.shapes.map((asset) => asset.id)).toEqual(["connector-peg", "connector-socket"]);
+    expect(peg).toBeDefined();
+    expect(socket).toBeDefined();
+    expect(makeShapeFromAsset(peg!)).toMatchObject({ name: "Peg", kind: "cylinder", width: 8, depth: 8, height: 16, hole: undefined, sides: 48 });
+    expect(makeShapeFromAsset(socket!)).toMatchObject({ name: "Socket", kind: "cylinder", width: 10, depth: 10, height: 12, hole: true, sides: 48 });
   });
 
   it("creates placed shapes from toolbar assets", () => {

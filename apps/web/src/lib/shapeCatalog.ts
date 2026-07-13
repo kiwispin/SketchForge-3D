@@ -4,7 +4,7 @@ import type { ShapeAsset, WorkplaneShape } from "@/types/sketchforge";
 
 export type ToolbarShapeAsset = ShapeAsset & { menuIcon: string };
 export type ShapeLibraryCategory = {
-  id: "basic" | "text";
+  id: "basic" | "connectors" | "text";
   label: string;
   shapes: ToolbarShapeAsset[];
 };
@@ -23,8 +23,14 @@ export const toolbarShapeAssets: ToolbarShapeAsset[] = [
   { id: "tube", name: "Tube", src: "assets/sketchforge/shape-icons-gray/tube.png", menuIcon: "assets/sketchforge/shape-icons-gray/tube.png", kind: "tube", color: "#ce7013" },
 ];
 
+export const connectorShapeAssets: ToolbarShapeAsset[] = [
+  { id: "connector-peg", name: "Peg", src: "assets/sketchforge/shape-icons-gray/cylinder.png", menuIcon: "assets/sketchforge/shape-icons-gray/cylinder.png", kind: "cylinder", color: "#2563eb" },
+  { id: "connector-socket", name: "Socket", src: "assets/sketchforge/shape-icons-gray/cylinder.png", menuIcon: "assets/sketchforge/shape-icons-gray/cylinder-hole.png", kind: "cylinder", color: "#94a3b8", hole: true },
+];
+
 export const shapeLibraryCategories: ShapeLibraryCategory[] = [
   { id: "basic", label: "Basic Shapes", shapes: toolbarShapeAssets.filter((shape) => shape.kind !== "text") },
+  { id: "connectors", label: "Connectors", shapes: connectorShapeAssets },
   { id: "text", label: "Text", shapes: toolbarShapeAssets.filter((shape) => shape.kind === "text") },
 ];
 
@@ -69,10 +75,12 @@ export function sceneShape(shape: Partial<WorkplaneShape> & Pick<WorkplaneShape,
 }
 
 export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: number; elevation?: number }): WorkplaneShape {
+  const isConnectorPeg = asset.id === "connector-peg";
+  const isConnectorSocket = asset.id === "connector-socket";
   const roundProfile = asset.kind === "sphere" || asset.kind === "torus" || asset.kind === "ring" || asset.kind === "halfSphere";
   const flatProfile = asset.kind === "torus" || asset.kind === "ring" || asset.kind === "text";
-  const size = roundProfile ? 22 : 20;
-  const height = asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
+  const size = isConnectorPeg ? 8 : isConnectorSocket ? 10 : roundProfile ? 22 : 20;
+  const height = isConnectorPeg ? 16 : isConnectorSocket ? 12 : asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
   const width = asset.kind === "text" ? 86 : size;
   const depth = asset.kind === "text" ? 28 : size;
 
@@ -96,7 +104,7 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
     text: asset.kind === "text" ? "TEXT" : undefined,
     font: asset.kind === "text" ? "Multilanguage" : undefined,
     steps: asset.kind === "box" ? 10 : asset.kind === "sphere" ? 24 : asset.kind === "halfSphere" ? 32 : undefined,
-    sides: asset.kind === "cylinder" || asset.kind === "cone" ? 96 : asset.kind === "roundRoof" ? 64 : asset.kind === "pyramid" ? 4 : undefined,
+    sides: asset.kind === "cylinder" || asset.kind === "cone" ? (isConnectorPeg || isConnectorSocket ? 48 : 96) : asset.kind === "roundRoof" ? 64 : asset.kind === "pyramid" ? 4 : undefined,
     bevel: asset.kind === "cylinder" ? 0 : asset.kind === "tube" || asset.kind === "ring" ? 4 : undefined,
     segments: asset.kind === "cylinder" ? 1 : undefined,
     topRadius: asset.kind === "cone" ? 0 : undefined,
