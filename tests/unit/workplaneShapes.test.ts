@@ -8,6 +8,7 @@ import {
   mirroredAxisCount,
   mirrorSign,
   normalizeDegrees,
+  proportionalResizeDimensions,
   proportionalResizeScale,
   preservesEdgeTreatmentSize,
   resizedImportedCoordinates,
@@ -62,6 +63,30 @@ describe("workplane shape helpers", () => {
     expect(proportionalResizeScale(50, 100, 100, 150)).toBe(2);
     expect(proportionalResizeScale(50, 100, 60, 200)).toBe(2);
     expect(proportionalResizeScale(50, 100, 25, 80)).toBe(0.5);
+  });
+
+  it("applies proportional resize to width, depth, and height", () => {
+    expect(proportionalResizeDimensions(20, 40, 10, 30, 48, 0.1, 220)).toEqual({
+      scale: 1.5,
+      width: 30,
+      depth: 60,
+      height: 15,
+    });
+  });
+
+  it("limits proportional resize using the smallest and largest 3D dimensions", () => {
+    expect(proportionalResizeDimensions(20, 40, 10, 2, 4, 5, 100)).toEqual({
+      scale: 0.5,
+      width: 10,
+      depth: 20,
+      height: 5,
+    });
+    expect(proportionalResizeDimensions(20, 40, 10, 100, 200, 5, 100)).toEqual({
+      scale: 2.5,
+      width: 50,
+      depth: 100,
+      height: 25,
+    });
   });
 
   it("canonicalizes mirror flags and nested group rotations", () => {

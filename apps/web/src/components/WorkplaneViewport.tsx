@@ -18,7 +18,7 @@ import { AlignOverlay, MirrorOverlay, type AlignOverlayState, type MirrorOverlay
 import { ShapeInspector, SnapGridControl, type ShapeInspectorUpdateOptions } from "@/components/workplane/ShapeInspector";
 import { WorkspaceSettingsModal } from "@/components/workplane/WorkspaceSettingsModal";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
-import { cleanNearZero, cleanRotationDegrees, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeScale, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
+import { cleanNearZero, cleanRotationDegrees, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
@@ -825,21 +825,22 @@ function resizeAnchorPointForFrame(frame: SelectionFrame, signs: ResizeSigns) {
   );
 }
 
-function resizeCenterFromAnchor(frame: SelectionFrame, anchor: THREE.Vector3, signs: ResizeSigns, width: number, depth: number) {
+function resizeCenterFromAnchor(frame: SelectionFrame, anchor: THREE.Vector3, signs: ResizeSigns, width: number, depth: number, height = frame.height) {
   return anchor
     .clone()
-    .add(frame.yAxis.clone().multiplyScalar(frame.height / 2))
+    .add(frame.yAxis.clone().multiplyScalar(height / 2))
     .add(frame.xAxis.clone().multiplyScalar(signs.x ? (signs.x * width) / 2 : 0))
     .add(frame.zAxis.clone().multiplyScalar(signs.z ? (signs.z * depth) / 2 : 0));
 }
 
-function resizedShapePatchFromFrame(shape: WorkplaneShape, center: THREE.Vector3, width: number, depth: number): Partial<WorkplaneShape> {
+function resizedShapePatchFromFrame(shape: WorkplaneShape, center: THREE.Vector3, width: number, depth: number, height = shape.height): Partial<WorkplaneShape> {
   const patch: Partial<WorkplaneShape> = {
     x: cleanNearZero(center.x, 0.0005),
     z: cleanNearZero(center.z, 0.0005),
-    elevation: cleanNearZero(center.y - shape.height / 2, 0.0005),
+    elevation: cleanNearZero(center.y - height / 2, 0.0005),
     width,
     depth,
+    height,
     size: resizedShapeSize(width, depth),
   };
   if (shape.kind === "cone") {
@@ -1061,18 +1062,19 @@ function resizeShapeFromFrameHandle(
 
   let nextWidth = axisResize(width, localDelta.x, signs.x);
   let nextDepth = axisResize(depth, localDelta.z, signs.z);
+  let nextHeight = shape.height;
 
   if (shiftKey && signs.x && signs.z) {
-    const scale = proportionalResizeScale(width, depth, nextWidth, nextDepth);
-    const limitedScale = clamp(scale, MIN_SHAPE_SIZE / Math.max(MIN_SHAPE_SIZE, Math.min(width, depth)), maxSize / Math.max(width, depth));
-    nextWidth = snapDimension(width * limitedScale, step, MIN_SHAPE_SIZE, maxSize);
-    nextDepth = snapDimension(depth * limitedScale, step, MIN_SHAPE_SIZE, maxSize);
+    const proportional = proportionalResizeDimensions(width, depth, shape.height, nextWidth, nextDepth, MIN_SHAPE_SIZE, maxSize);
+    nextWidth = proportional.width;
+    nextDepth = proportional.depth;
+    nextHeight = proportional.height;
   }
 
   const nextCenter = altKey
     ? frame.center.clone()
-    : resizeCenterFromAnchor(frame, transform.scaleAnchorPoint ?? resizeAnchorPointForFrame(frame, signs), signs, nextWidth, nextDepth);
-  return resizedShapePatchFromFrame(shape, nextCenter, nextWidth, nextDepth);
+    : resizeCenterFromAnchor(frame, transform.scaleAnchorPoint ?? resizeAnchorPointForFrame(frame, signs), signs, nextWidth, nextDepth, nextHeight);
+  return resizedShapePatchFromFrame(shape, nextCenter, nextWidth, nextDepth, nextHeight);
 }
 
 function resizeSelectionFromHandle(
@@ -1105,42 +1107,41 @@ function resizeSelectionFromHandle(
 
   let nextX = axisResize(frame.width, localDelta.x, signs.x);
   let nextZ = axisResize(frame.depth, localDelta.z, signs.z);
+  let nextHeight = frame.height;
+  let heightScale = 1;
   if (shiftKey && signs.x && signs.z) {
-    const scale = proportionalResizeScale(frame.width, frame.depth, nextX.size, nextZ.size);
-    const limitedScale = clamp(scale, MIN_SHAPE_SIZE / Math.max(MIN_SHAPE_SIZE, Math.min(frame.width, frame.depth)), 260 / Math.max(frame.width, frame.depth));
-    const width = snapDimension(frame.width * limitedScale, step, MIN_SHAPE_SIZE, 260);
-    const depth = snapDimension(frame.depth * limitedScale, step, MIN_SHAPE_SIZE, 260);
+    const proportional = proportionalResizeDimensions(frame.width, frame.depth, frame.height, nextX.size, nextZ.size, MIN_SHAPE_SIZE, 260);
     nextX = {
-      size: width,
-      scale: width / Math.max(MIN_SHAPE_SIZE, frame.width),
+      size: proportional.width,
+      scale: proportional.scale,
     };
     nextZ = {
-      size: depth,
-      scale: depth / Math.max(MIN_SHAPE_SIZE, frame.depth),
+      size: proportional.depth,
+      scale: proportional.scale,
     };
+    nextHeight = proportional.height;
+    heightScale = proportional.scale;
   }
 
   const nextCenter = altKey
     ? frame.center.clone()
-    : resizeCenterFromAnchor(frame, transform.scaleAnchorPoint ?? resizeAnchorPointForFrame(frame, signs), signs, nextX.size, nextZ.size);
+    : resizeCenterFromAnchor(frame, transform.scaleAnchorPoint ?? resizeAnchorPointForFrame(frame, signs), signs, nextX.size, nextZ.size, nextHeight);
 
   return transform.items.map((item) => {
     const localCenter = frameLocalPoint(frame, item.startCenter);
     const nextItemCenter = nextCenter
       .clone()
       .add(frame.xAxis.clone().multiplyScalar(localCenter.x * nextX.scale))
-      .add(frame.yAxis.clone().multiplyScalar(localCenter.y))
+      .add(frame.yAxis.clone().multiplyScalar(localCenter.y * heightScale))
       .add(frame.zAxis.clone().multiplyScalar(localCenter.z * nextZ.scale));
-    const width = snapDimension(shapeWidth(item.startShape) * nextX.scale, step, MIN_SHAPE_SIZE, 260);
-    const depth = snapDimension(shapeDepth(item.startShape) * nextZ.scale, step, MIN_SHAPE_SIZE, 260);
-    const patch = {
-      x: nextItemCenter.x,
-      z: nextItemCenter.z,
-      elevation: cleanNearZero(nextItemCenter.y - item.startShape.height / 2, 0.0005),
-      width,
-      depth,
-      size: resizedShapeSize(width, depth),
-    } satisfies Partial<WorkplaneShape>;
+    const width = shiftKey
+      ? shapeWidth(item.startShape) * nextX.scale
+      : snapDimension(shapeWidth(item.startShape) * nextX.scale, step, MIN_SHAPE_SIZE, 260);
+    const depth = shiftKey
+      ? shapeDepth(item.startShape) * nextZ.scale
+      : snapDimension(shapeDepth(item.startShape) * nextZ.scale, step, MIN_SHAPE_SIZE, 260);
+    const height = item.startShape.height * heightScale;
+    const patch = resizedShapePatchFromFrame(item.startShape, nextItemCenter, width, depth, height);
     return {
       id: item.id,
       patch,
@@ -3968,10 +3969,10 @@ function syncTransformOverlay(
       ...footprintGuides,
     ],
     handles: [
-      { key: "near-left", className: "corner", kind: "scale" as const, x: bottom.nearLeft.x, y: bottom.nearLeft.y, title: "Resize" },
-      { key: "near-right", className: "corner", kind: "scale" as const, x: bottom.nearRight.x, y: bottom.nearRight.y, title: "Resize" },
-      { key: "far-right", className: "corner", kind: "scale" as const, x: bottom.farRight.x, y: bottom.farRight.y, title: "Resize" },
-      { key: "far-left", className: "corner", kind: "scale" as const, x: bottom.farLeft.x, y: bottom.farLeft.y, title: "Resize" },
+      { key: "near-left", className: "corner", kind: "scale" as const, x: bottom.nearLeft.x, y: bottom.nearLeft.y, title: "Resize (hold Shift to scale proportionally)" },
+      { key: "near-right", className: "corner", kind: "scale" as const, x: bottom.nearRight.x, y: bottom.nearRight.y, title: "Resize (hold Shift to scale proportionally)" },
+      { key: "far-right", className: "corner", kind: "scale" as const, x: bottom.farRight.x, y: bottom.farRight.y, title: "Resize (hold Shift to scale proportionally)" },
+      { key: "far-left", className: "corner", kind: "scale" as const, x: bottom.farLeft.x, y: bottom.farLeft.y, title: "Resize (hold Shift to scale proportionally)" },
       { key: "near-mid", className: "edge dark", kind: "scale" as const, x: mid.near.x, y: mid.near.y, title: "Resize" },
       { key: "right-mid", className: "edge dark", kind: "scale" as const, x: mid.right.x, y: mid.right.y, title: "Resize" },
       { key: "far-mid", className: "edge dark", kind: "scale" as const, x: mid.far.x, y: mid.far.y, title: "Resize" },

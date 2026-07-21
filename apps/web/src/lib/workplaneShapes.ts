@@ -90,6 +90,28 @@ export function proportionalResizeScale(startWidth: number, startDepth: number, 
   return Math.abs(widthScale - 1) >= Math.abs(depthScale - 1) ? widthScale : depthScale;
 }
 
+export function proportionalResizeDimensions(
+  startWidth: number,
+  startDepth: number,
+  startHeight: number,
+  nextWidth: number,
+  nextDepth: number,
+  minSize: number,
+  maxSize: number,
+) {
+  const dimensions = [startWidth, startDepth, startHeight].map((dimension) => Math.max(0.001, dimension));
+  const requestedScale = proportionalResizeScale(startWidth, startDepth, nextWidth, nextDepth);
+  const minScale = minSize / Math.min(...dimensions);
+  const maxScale = maxSize / Math.max(...dimensions);
+  const scale = Math.min(maxScale, Math.max(minScale, requestedScale));
+  return {
+    scale,
+    width: startWidth * scale,
+    depth: startDepth * scale,
+    height: startHeight * scale,
+  };
+}
+
 export function fallbackSolidColor(shape: WorkplaneShape) {
   if (shape.kind === "cylinder") return "#d97813";
   if (shape.kind === "sphere") return "#0098c7";
