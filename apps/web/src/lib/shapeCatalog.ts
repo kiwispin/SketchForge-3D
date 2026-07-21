@@ -1,6 +1,6 @@
-import { canonicalizeShape } from "@/lib/workplaneShapes";
+import { canonicalizeShape, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { createLocalId } from "@/lib/localIds";
-import type { ShapeAsset, WorkplaneShape } from "@/types/sketchforge";
+import type { ShapeAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export type ToolbarShapeAsset = ShapeAsset & { menuIcon: string };
 export type ShapeLibraryCategory = {
@@ -8,6 +8,96 @@ export type ShapeLibraryCategory = {
   label: string;
   shapes: ToolbarShapeAsset[];
 };
+
+const AUTOMATIC_PLACEMENT_CLEARANCE = 2;
+
+type HorizontalFootprint = {
+  halfWidth: number;
+  halfDepth: number;
+};
+
+function horizontalFootprint(shape: WorkplaneShape): HorizontalFootprint {
+  const width = shapeWidth(shape);
+  const depth = shapeDepth(shape);
+  const radians = ((shape.rotation ?? 0) * Math.PI) / 180;
+  const cosine = Math.abs(Math.cos(radians));
+  const sine = Math.abs(Math.sin(radians));
+  return {
+    halfWidth: (width * cosine + depth * sine) / 2,
+    halfDepth: (width * sine + depth * cosine) / 2,
+  };
+}
+
+function verticalRangesOverlap(a: WorkplaneShape, b: WorkplaneShape) {
+  const aBottom = a.elevation ?? 0;
+  const bBottom = b.elevation ?? 0;
+  return aBottom < bBottom + b.height - 0.01 && aBottom + a.height > bBottom + 0.01;
+}
+
+function overlapsPlacedShape(
+  x: number,
+  z: number,
+  footprint: HorizontalFootprint,
+  draft: WorkplaneShape,
+  existing: WorkplaneShape,
+) {
+  if (existing.hidden || existing.hole || !verticalRangesOverlap(draft, existing)) {
+    return false;
+  }
+  const existingFootprint = horizontalFootprint(existing);
+  return (
+    Math.abs(x - existing.x) < footprint.halfWidth + existingFootprint.halfWidth + AUTOMATIC_PLACEMENT_CLEARANCE &&
+    Math.abs(z - existing.z) < footprint.halfDepth + existingFootprint.halfDepth + AUTOMATIC_PLACEMENT_CLEARANCE
+  );
+}
+
+/**
+ * Finds the closest grid point to the workplane origin where a newly clicked
+ * library shape is clear of visible solid shapes at the same elevation.
+ * Dragging bypasses this helper so intentional overlaps remain possible.
+ */
+export function automaticShapePlacement(
+  asset: ShapeAsset,
+  shapes: WorkplaneShape[],
+  workspace: Pick<WorkplaneWorkspaceSettings, "width" | "depth">,
+  elevation = 0,
+) {
+  const draft = makeShapeFromAsset(asset, { x: 0, z: 0, elevation });
+  const footprint = horizontalFootprint(draft);
+  const xLimit = workspace.width / 2 - footprint.halfWidth - AUTOMATIC_PLACEMENT_CLEARANCE;
+  const zLimit = workspace.depth / 2 - footprint.halfDepth - AUTOMATIC_PLACEMENT_CLEARANCE;
+  if (xLimit < 0 || zLimit < 0) {
+    return null;
+  }
+
+  const step = Math.max(2, Math.min(5, Math.min(footprint.halfWidth, footprint.halfDepth)));
+  const maxRing = Math.ceil(Math.max(xLimit, zLimit) / step);
+  for (let ring = 0; ring <= maxRing; ring += 1) {
+    const candidates: Array<{ x: number; z: number }> = [];
+    for (let gridX = -ring; gridX <= ring; gridX += 1) {
+      for (let gridZ = -ring; gridZ <= ring; gridZ += 1) {
+        if (Math.max(Math.abs(gridX), Math.abs(gridZ)) !== ring) {
+          continue;
+        }
+        const x = gridX * step;
+        const z = gridZ * step;
+        if (Math.abs(x) <= xLimit && Math.abs(z) <= zLimit) {
+          candidates.push({ x, z });
+        }
+      }
+    }
+    candidates.sort((a, b) => a.x ** 2 + a.z ** 2 - (b.x ** 2 + b.z ** 2));
+    const placement = candidates.find(({ x, z }) => !shapes.some((shape) => overlapsPlacedShape(x, z, footprint, draft, shape)));
+    if (placement) {
+      return {
+        x: Object.is(placement.x, -0) ? 0 : placement.x,
+        z: Object.is(placement.z, -0) ? 0 : placement.z,
+        elevation,
+      };
+    }
+  }
+  return null;
+}
 
 export const toolbarShapeAssets: ToolbarShapeAsset[] = [
   { id: "box", name: "Box", src: "assets/sketchforge/box-red.png", menuIcon: "assets/sketchforge/box-red.png", kind: "box", color: "#d41721" },

@@ -1863,6 +1863,14 @@ button {
   transform: translateY(-1px);
 }
 
+.shape-menu-item[draggable="true"] {
+  cursor: grab;
+}
+
+.shape-menu-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 .shape-menu-icon {
   display: grid;
   flex: 0 0 auto;

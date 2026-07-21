@@ -67,7 +67,7 @@ import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifier
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
 import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
-import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
@@ -6144,8 +6144,15 @@ export function SketchForgeEditor({
 
   const addShape = useCallback(
     (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number }) => {
-      const nextShape = makeShapeFromAsset(asset, point ?? { x: 0, z: 0, elevation: placementElevation });
-      commitShapes([...shapes, nextShape], nextShape.id, `${asset.name} added`);
+      const automaticPlacement = point
+        ? point
+        : automaticShapePlacement(asset, shapes, workspaceSettingsRef.current, placementElevation);
+      const nextShape = makeShapeFromAsset(asset, automaticPlacement ?? { x: 0, z: 0, elevation: placementElevation });
+      commitShapes(
+        [...shapes, nextShape],
+        nextShape.id,
+        automaticPlacement ? `${asset.name} added` : `${asset.name} added at centre (no clear space found)`,
+      );
     },
     [commitShapes, placementElevation, shapes],
   );
@@ -8557,7 +8564,8 @@ function SecondaryToolbar({
                     key={shape.id}
                     type="button"
                     style={{ "--shape-accent": shape.color } as CSSProperties}
-                    draggable={false}
+                    draggable
+                    title="Click to add in a clear space, or drag onto the workplane to place exactly"
                     onClick={() => {
                       if (suppressNextShapeClickRef.current) {
                         suppressNextShapeClickRef.current = false;
@@ -8607,8 +8615,14 @@ function SecondaryToolbar({
                       addShapeFromMenu(shape);
                     }}
                     onDragStart={(event) => {
+                      suppressNextShapeClickRef.current = true;
                       event.dataTransfer.effectAllowed = "copy";
                       event.dataTransfer.setData("application/x-sketchforge-shape", JSON.stringify(shape));
+                    }}
+                    onDragEnd={() => {
+                      window.setTimeout(() => {
+                        suppressNextShapeClickRef.current = false;
+                      }, 250);
                     }}
                   >
                     <span className="shape-menu-icon" aria-hidden="true">
