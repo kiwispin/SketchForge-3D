@@ -88,7 +88,7 @@ import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceF
 import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
 import { buildSketchRevolveMesh, DEFAULT_SKETCH_REVOLVE_SETTINGS, normalizeSketchRevolveSettings, type SketchRevolveMesh } from "@/lib/sketchRevolve";
 import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
-import { makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { importedShapeFromSvg, invalidSvgMeshReason } from "@/lib/svgImport";
 import { toSvgProjection, type SvgProjectionLayer } from "@/lib/svgExport";
@@ -6670,11 +6670,24 @@ export function SketchForgeEditor({
   const addShape = useCallback(
     (asset: ShapeAsset, point?: PlacementPoint) => {
       const shape = makeShapeFromAsset(asset);
+      // A clicked library shape on the base workplane goes to the nearest clear
+      // spot; dragged shapes (explicit point) and custom workplanes keep
+      // upstream's placement at the given point / workplane origin.
+      const searchClearSpace = !point && placementWorkplaneIsBase(placementWorkplane);
+      const automaticPlacement = searchClearSpace
+        ? automaticShapePlacement(asset, shapes, workspaceSettingsRef.current, placementWorkplane.origin.y)
+        : null;
+      const basePoint = point
+        ?? (automaticPlacement ? { x: automaticPlacement.x, y: automaticPlacement.elevation, z: automaticPlacement.z } : placementWorkplane.origin);
       const nextShape = {
         ...shape,
-        ...placementPatchForNewShape(shape, placementWorkplane, point ?? placementWorkplane.origin),
+        ...placementPatchForNewShape(shape, placementWorkplane, basePoint),
       };
-      commitShapes([...shapes, nextShape], nextShape.id, `${asset.name} added`);
+      commitShapes(
+        [...shapes, nextShape],
+        nextShape.id,
+        searchClearSpace && !automaticPlacement ? `${asset.name} added at centre (no clear space found)` : `${asset.name} added`,
+      );
     },
     [commitShapes, placementWorkplane, shapes],
   );
@@ -9349,7 +9362,8 @@ function SecondaryToolbar({
                     key={shape.id}
                     type="button"
                     style={{ "--shape-accent": shape.color } as CSSProperties}
-                    draggable={false}
+                    draggable
+                    title="Click to add in a clear space, or drag onto the workplane to place exactly"
                     onClick={() => {
                       if (suppressNextShapeClickRef.current) {
                         suppressNextShapeClickRef.current = false;
@@ -9399,8 +9413,14 @@ function SecondaryToolbar({
                       addShapeFromMenu(shape);
                     }}
                     onDragStart={(event) => {
+                      suppressNextShapeClickRef.current = true;
                       event.dataTransfer.effectAllowed = "copy";
                       event.dataTransfer.setData("application/x-sketchforge-shape", JSON.stringify(shape));
+                    }}
+                    onDragEnd={() => {
+                      window.setTimeout(() => {
+                        suppressNextShapeClickRef.current = false;
+                      }, 250);
                     }}
                   >
                     <span className="shape-menu-icon" aria-hidden="true">

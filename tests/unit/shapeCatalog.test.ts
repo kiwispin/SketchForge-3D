@@ -1,8 +1,47 @@
 import { describe, expect, it } from "vitest";
-import type { ShapeAsset } from "@/types/sketchforge";
-import { connectorShapeAssets, makeShapeFromAsset, printablePartShapeAssets, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
+import type { ShapeAsset, WorkplaneShape } from "@/types/sketchforge";
+import { automaticShapePlacement, connectorShapeAssets, makeShapeFromAsset, printablePartShapeAssets, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
+
+const workspace = { width: 200, depth: 200 };
+
+function placedBox(overrides: Partial<WorkplaneShape> = {}): WorkplaneShape {
+  return {
+    id: "existing-box",
+    name: "Existing box",
+    kind: "box",
+    color: "#d41721",
+    x: 0,
+    z: 0,
+    elevation: 0,
+    size: 80,
+    width: 80,
+    depth: 80,
+    height: 20,
+    rotation: 0,
+    locked: false,
+    hidden: false,
+    ...overrides,
+  };
+}
 
 describe("shape catalog", () => {
+  it("uses the centre for automatic placement when it is clear", () => {
+    const box = toolbarShapeAssets.find((asset) => asset.id === "box")!;
+    expect(automaticShapePlacement(box, [], workspace)).toEqual({ x: 0, z: 0, elevation: 0 });
+  });
+
+  it("finds a nearby clear placement instead of putting a new shape inside a centre object", () => {
+    const box = toolbarShapeAssets.find((asset) => asset.id === "box")!;
+    const placement = automaticShapePlacement(box, [placedBox()], workspace)!;
+    expect(placement).not.toMatchObject({ x: 0, z: 0 });
+    expect(Math.abs(placement.x) >= 52 || Math.abs(placement.z) >= 52).toBe(true);
+  });
+
+  it("allows centre placement when an existing object is above the current workplane", () => {
+    const box = toolbarShapeAssets.find((asset) => asset.id === "box")!;
+    expect(automaticShapePlacement(box, [placedBox({ elevation: 30 })], workspace)).toEqual({ x: 0, z: 0, elevation: 0 });
+  });
+
   it("does not expose removed decorative shapes in the toolbar catalog", () => {
     const kinds = toolbarShapeAssets.map((asset) => asset.kind);
 
