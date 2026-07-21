@@ -54,6 +54,7 @@ import {
   cloneWorkplaneShapeTreeWithFreshIds,
   cleanNearZero,
   cleanRotationDegrees,
+  duplicateAxisOffset,
   fallbackSolidColor,
   meshYawDegrees,
   mirroredAxisCount,
@@ -6839,14 +6840,16 @@ export function SketchForgeEditor({
       setNotice("Select a shape first");
       return;
     }
-    const duplicates = selectedShapes.map((shape) => {
-      const duplicate = cloneWorkplaneShapeTreeWithFreshIds(shape, "copy");
-      return {
-        ...duplicate,
-        x: Math.min(110, shape.x + 8),
-        z: Math.min(110, shape.z + 8),
-      };
-    });
+    const workspace = workspaceSettingsRef.current;
+    const xLimit = Math.max(0, workspace.width / 2 - 6);
+    const zLimit = Math.max(0, workspace.depth / 2 - 6);
+    const offsetX = duplicateAxisOffset(selectedShapes.map((shape) => shape.x), -xLimit, xLimit);
+    const offsetZ = duplicateAxisOffset(selectedShapes.map((shape) => shape.z), -zLimit, zLimit);
+    const duplicates = selectedShapes.map((shape) => ({
+      ...cloneWorkplaneShapeTreeWithFreshIds(shape, "copy"),
+      x: shape.x + offsetX,
+      z: shape.z + offsetZ,
+    }));
     commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Duplicated ${duplicates.length} shape${duplicates.length === 1 ? "" : "s"}`);
   }, [commitShapes, hasSelection, selectedShapes, shapes]);
 
