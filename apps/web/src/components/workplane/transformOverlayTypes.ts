@@ -118,3 +118,26 @@ export function measureKeyForHandle(kind: TransformHandleKind, handleKey: string
   }
   return handleKey;
 }
+
+export const MIN_LIFT_HANDLE_SCREEN_GAP = 32;
+
+export function separatedLiftHandlePoint(
+  heightPoint: { x: number; y: number },
+  projectedLiftPoint: { x: number; y: number },
+  lower: boolean,
+  minimumGap = MIN_LIFT_HANDLE_SCREEN_GAP,
+) {
+  const deltaX = projectedLiftPoint.x - heightPoint.x;
+  const deltaY = projectedLiftPoint.y - heightPoint.y;
+  const distance = Math.hypot(deltaX, deltaY);
+  if (distance >= minimumGap) {
+    return projectedLiftPoint;
+  }
+  const direction = distance > 0.5
+    ? { x: deltaX / distance, y: deltaY / distance }
+    : { x: 0, y: lower ? 1 : -1 };
+  return {
+    x: heightPoint.x + direction.x * minimumGap,
+    y: heightPoint.y + direction.y * minimumGap,
+  };
+}

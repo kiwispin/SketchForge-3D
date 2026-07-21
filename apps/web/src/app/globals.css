@@ -3286,16 +3286,26 @@ button {
 
 .transform-handle.height-lift {
   border: 0;
-  width: 0;
-  height: 0;
+  width: 28px;
+  height: 28px;
   background: transparent;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-bottom: 13px solid #293743;
   box-shadow: none;
 }
 
-.transform-handle.height-lift.lower {
+.transform-handle.height-lift::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: translate(-50%, -50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 13px solid #293743;
+}
+
+.transform-handle.height-lift.lower::before {
   border-bottom: 0;
   border-top: 13px solid #293743;
 }

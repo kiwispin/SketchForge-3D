@@ -24,6 +24,7 @@ import {
   TransformOverlay,
   getElevationMeasureKey,
   measureKeyForHandle,
+  separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
@@ -3829,7 +3830,7 @@ function syncTransformOverlay(
   const bottomCenterPoint = project(bottomCenterWorld);
   const topPoint = project(topCenterWorld);
   const heightPoint = project(showLowerHandles ? bottomCenterWorld : topCenterWorld);
-  const liftPoint = project(liftHandle);
+  const liftPoint = separatedLiftHandlePoint(heightPoint, project(liftHandle), showLowerHandles);
   const centerPoint = project(frame.center);
   const footprintGuides = [
     { x1: bottom.nearLeft.x, y1: bottom.nearLeft.y, x2: bottom.nearRight.x, y2: bottom.nearRight.y },
@@ -3978,7 +3979,7 @@ function syncTransformOverlay(
       { key: "far-mid", className: "edge dark", kind: "scale" as const, x: mid.far.x, y: mid.far.y, title: "Resize" },
       { key: "left-mid", className: "edge dark", kind: "scale" as const, x: mid.left.x, y: mid.left.y, title: "Resize" },
       { key: heightHandleKey, className: "height-top", kind: "height" as const, x: heightPoint.x, y: heightPoint.y, title: "Height" },
-      { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, title: "Lift" },
+      { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, title: "Move up or down" },
     ],
     rotateHandles: [
       { key: "rotate-left", className: "screen-left", x: rotateLeft.x, y: rotateLeft.y, angle: ROTATION_UPPER_HANDLE_ICON_ANGLE },

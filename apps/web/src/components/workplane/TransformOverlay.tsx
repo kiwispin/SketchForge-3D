@@ -9,6 +9,7 @@ import {
 export {
   getElevationMeasureKey,
   measureKeyForHandle,
+  separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
