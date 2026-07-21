@@ -9,6 +9,7 @@ import {
 export {
   getElevationMeasureKey,
   measureKeyForHandle,
+  projectedMoveHandle,
   separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
@@ -181,7 +182,11 @@ export function TransformOverlay({
         <button
           key={handle.key}
           className={`transform-handle ${handle.className}`}
-          style={{ "--overlay-x": `${handle.x}px`, "--overlay-y": `${handle.y}px` } as CSSProperties}
+          style={{
+            "--overlay-x": `${handle.x}px`,
+            "--overlay-y": `${handle.y}px`,
+            "--move-handle-angle": `${handle.angle ?? 0}deg`,
+          } as CSSProperties}
           title={handle.title}
           onPointerEnter={() => onHoverMeasure(handle.kind === "lift" ? null : handleMeasureKey(handle))}
           onPointerLeave={() => onHoverMeasure(null)}
@@ -198,7 +203,13 @@ export function TransformOverlay({
               onBeginLiftEdit(handle.key, handle.x + 42, handle.y - 32);
             }
           }}
-        />
+        >
+          {handle.kind === "move" ? (
+            <svg viewBox="0 0 36 18" aria-hidden="true" focusable="false">
+              <path d="M5 9h26M25 3l6 6-6 6M11 3 5 9l6 6" />
+            </svg>
+          ) : null}
+        </button>
       ))}
       {box.rotateHandles.map((handle) => (
         <button

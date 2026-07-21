@@ -51,6 +51,7 @@ import {
   canonicalizeShape,
   cleanNearZero,
   cleanRotationDegrees,
+  duplicateAxisOffset,
   fallbackSolidColor,
   mirroredAxisCount,
   mirrorSign,
@@ -6271,11 +6272,16 @@ export function SketchForgeEditor({
       setNotice("Select a shape first");
       return;
     }
+    const workspace = workspaceSettingsRef.current;
+    const xLimit = Math.max(0, workspace.width / 2 - 6);
+    const zLimit = Math.max(0, workspace.depth / 2 - 6);
+    const offsetX = duplicateAxisOffset(selectedShapes.map((shape) => shape.x), -xLimit, xLimit);
+    const offsetZ = duplicateAxisOffset(selectedShapes.map((shape) => shape.z), -zLimit, zLimit);
     const duplicates = selectedShapes.map((shape) => ({
       ...shape,
       id: createLocalId(`${shape.id}-copy`),
-      x: Math.min(110, shape.x + 8),
-      z: Math.min(110, shape.z + 8),
+      x: shape.x + offsetX,
+      z: shape.z + offsetZ,
     }));
     commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Duplicated ${duplicates.length} shape${duplicates.length === 1 ? "" : "s"}`);
   }, [commitShapes, hasSelection, selectedShapes, shapes]);

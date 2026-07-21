@@ -3310,6 +3310,44 @@ button {
   border-top: 13px solid #293743;
 }
 
+.transform-handle.move-axis {
+  z-index: 4;
+  width: 40px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: grab;
+  transform: translate3d(var(--overlay-x, 0), var(--overlay-y, 0), 0) translate(-50%, -50%) rotate(var(--move-handle-angle, 0deg));
+}
+
+.transform-handle.move-axis:active {
+  cursor: grabbing;
+}
+
+.transform-handle.move-axis svg {
+  display: block;
+  width: 36px;
+  height: 18px;
+  overflow: visible;
+  fill: none;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.transform-handle.move-axis.axis-x svg {
+  stroke: #d64242;
+}
+
+.transform-handle.move-axis.axis-z svg {
+  stroke: #2476c8;
+}
+
+.transform-handle.move-axis:hover svg {
+  filter: brightness(0.8);
+}
+
 .rotate-handle {
   z-index: 3;
   width: 42px;

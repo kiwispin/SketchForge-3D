@@ -4,6 +4,8 @@ import {
   canonicalizeShape,
   cleanNearZero,
   cleanRotationDegrees,
+  constrainedAxisMoveDelta,
+  duplicateAxisOffset,
   fallbackSolidColor,
   mirroredAxisCount,
   mirrorSign,
@@ -57,6 +59,17 @@ describe("workplane shape helpers", () => {
     expect(shapeWidth(base)).toBe(18);
     expect(shapeDepth(base)).toBe(24);
     expect(resizedShapeSize(18, 24)).toBe(24);
+  });
+
+  it("uses a subtle duplicate offset and reverses it near a workplane edge", () => {
+    expect(duplicateAxisOffset([0, 10], -94, 94)).toBe(2);
+    expect(duplicateAxisOffset([80, 94], -94, 94)).toBe(-2);
+    expect(duplicateAxisOffset([-94, 94], -94, 94)).toBe(0);
+  });
+
+  it("constrains a shared axis movement without changing selection spacing", () => {
+    expect(constrainedAxisMoveDelta([0, 20], 10, -50, 25)).toBe(5);
+    expect(constrainedAxisMoveDelta([-45, -20], -10, -50, 50)).toBe(-5);
   });
 
   it("uses proportional scale instead of square dimensions while shift-resizing", () => {

@@ -21,6 +21,37 @@ export function cleanNearZero(value: number, epsilon = 0.005) {
   return Math.abs(value) < epsilon ? 0 : value;
 }
 
+export const DUPLICATE_PLACEMENT_OFFSET = 2;
+
+export function duplicateAxisOffset(
+  values: number[],
+  min: number,
+  max: number,
+  offset = DUPLICATE_PLACEMENT_OFFSET,
+) {
+  if (values.every((value) => value + offset <= max)) {
+    return offset;
+  }
+  if (values.every((value) => value - offset >= min)) {
+    return -offset;
+  }
+  return 0;
+}
+
+export function constrainedAxisMoveDelta(
+  startValues: number[],
+  requestedDelta: number,
+  min: number,
+  max: number,
+) {
+  if (startValues.length === 0) {
+    return 0;
+  }
+  const minimumDelta = Math.max(...startValues.map((value) => min - value));
+  const maximumDelta = Math.min(...startValues.map((value) => max - value));
+  return Math.min(maximumDelta, Math.max(minimumDelta, requestedDelta));
+}
+
 export function shapeWidth(shape: WorkplaneShape) {
   return shape.width ?? shape.size;
 }

@@ -18,12 +18,13 @@ import { AlignOverlay, MirrorOverlay, type AlignOverlayState, type MirrorOverlay
 import { ShapeInspector, SnapGridControl, type ShapeInspectorUpdateOptions } from "@/components/workplane/ShapeInspector";
 import { WorkspaceSettingsModal } from "@/components/workplane/WorkspaceSettingsModal";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
-import { cleanNearZero, cleanRotationDegrees, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
+import { cleanNearZero, cleanRotationDegrees, constrainedAxisMoveDelta, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
   getElevationMeasureKey,
   measureKeyForHandle,
+  projectedMoveHandle,
   separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
@@ -325,6 +326,9 @@ type TransformDragState = {
   scaleSigns?: ResizeSigns;
   scaleAnchorPoint?: THREE.Vector3;
   scaleStartPoint?: THREE.Vector3;
+  movePlane?: THREE.Plane;
+  moveStartPoint?: THREE.Vector3;
+  moveAxis?: THREE.Vector3;
   rotationAxisVector?: THREE.Vector3;
   rotationPivot?: THREE.Vector3;
   rotationPlaneCenter?: THREE.Vector3;
@@ -1888,7 +1892,17 @@ export function WorkplaneViewport({
       const scaleStartPoint = scalePlane ? toRawPlanePoint(event.clientX, event.clientY, scalePlane) ?? undefined : undefined;
       const scaleSigns = kind === "scale" ? resizeSignsForHandle(resizeHandleKey) : undefined;
       const scaleAnchorPoint = kind === "scale" && scaleSigns ? resizeAnchorPointForFrame(frame, scaleSigns) : undefined;
+      const movePlane = kind === "move" ? new THREE.Plane(new THREE.Vector3(0, 1, 0), -frame.center.y) : undefined;
+      const moveStartPoint = movePlane ? toRawPlanePoint(event.clientX, event.clientY, movePlane) ?? undefined : undefined;
+      const moveAxis = kind === "move"
+        ? handleKey === "move-x"
+          ? new THREE.Vector3(1, 0, 0)
+          : new THREE.Vector3(0, 0, 1)
+        : undefined;
       if (kind === "scale" && !scaleStartPoint) {
+        return;
+      }
+      if (kind === "move" && !moveStartPoint) {
         return;
       }
       rememberResizeAnchor(shape.id, kind, resizeHandleKey);
@@ -1939,6 +1953,9 @@ export function WorkplaneViewport({
         scaleSigns,
         scaleAnchorPoint,
         scaleStartPoint,
+        movePlane,
+        moveStartPoint,
+        moveAxis,
         rotationAxisVector: kind === "rotate" ? axisVector : undefined,
         rotationPivot: kind === "rotate" ? pivot : undefined,
         rotationPlaneCenter: kind === "rotate" ? rotationPlaneCenter : undefined,
@@ -1988,6 +2005,30 @@ export function WorkplaneViewport({
 
       const shape = transform.startShape;
       const step = snapStep(snapRef.current);
+      if (transform.kind === "move") {
+        const point = transform.movePlane ? toRawPlanePoint(clientX, clientY, transform.movePlane) : null;
+        if (!point || !transform.moveStartPoint || !transform.moveAxis) {
+          return true;
+        }
+        const requestedDelta = snapValue(
+          point.clone().sub(transform.moveStartPoint).dot(transform.moveAxis),
+          step,
+        );
+        const movingAlongX = Math.abs(transform.moveAxis.x) > 0.5;
+        const limit = Math.max(
+          0,
+          (movingAlongX ? workspaceRef.current.width : workspaceRef.current.depth) / 2 - 6,
+        );
+        const startValues = transform.items.map((item) => movingAlongX ? item.startShape.x : item.startShape.z);
+        const delta = constrainedAxisMoveDelta(startValues, requestedDelta, -limit, limit);
+        transform.items.forEach((item) =>
+          onUpdateShape(item.id, movingAlongX
+            ? { x: cleanNearZero(item.startShape.x + delta, 0.0005) }
+            : { z: cleanNearZero(item.startShape.z + delta, 0.0005) }),
+        );
+        return true;
+      }
+
       if (transform.kind === "height") {
         const state = threeRef.current;
         const yBounds = selectionWorldYBounds(transform.selectionFrame);
@@ -3011,7 +3052,7 @@ export function WorkplaneViewport({
               rotationReadout={rotationReadout}
               showRotationWheel={activeRotationWheel}
               hideSelectionChrome={activeTransformKind === "rotate"}
-              hideDimensionMarks={activeTransformKind === "scale"}
+              hideDimensionMarks={activeTransformKind === "scale" || activeTransformKind === "move"}
               rotationWheelAxis={rotationWheelAxis}
               pinnedRotationWheelView={pinnedRotationWheelView}
               onBeginTransform={beginTransform}
@@ -3832,6 +3873,12 @@ function syncTransformOverlay(
   const heightPoint = project(showLowerHandles ? bottomCenterWorld : topCenterWorld);
   const liftPoint = separatedLiftHandlePoint(heightPoint, project(liftHandle), showLowerHandles);
   const centerPoint = project(frame.center);
+  const xMoveAxisPoint = project(new THREE.Vector3(worldMaxX, worldCenterY, worldCenterZ));
+  const zMoveAxisPoint = project(new THREE.Vector3(worldCenterX, worldCenterY, worldMaxZ));
+  const xMoveEdgeDistance = Math.hypot(xMoveAxisPoint.x - centerPoint.x, xMoveAxisPoint.y - centerPoint.y);
+  const zMoveEdgeDistance = Math.hypot(zMoveAxisPoint.x - centerPoint.x, zMoveAxisPoint.y - centerPoint.y);
+  const moveXPoint = projectedMoveHandle(centerPoint, xMoveAxisPoint, 0, xMoveEdgeDistance + 28);
+  const moveZPoint = projectedMoveHandle(centerPoint, zMoveAxisPoint, Math.PI / 2, zMoveEdgeDistance + 28);
   const footprintGuides = [
     { x1: bottom.nearLeft.x, y1: bottom.nearLeft.y, x2: bottom.nearRight.x, y2: bottom.nearRight.y },
     { x1: bottom.nearRight.x, y1: bottom.nearRight.y, x2: bottom.farRight.x, y2: bottom.farRight.y },
@@ -3978,6 +4025,8 @@ function syncTransformOverlay(
       { key: "right-mid", className: "edge dark", kind: "scale" as const, x: mid.right.x, y: mid.right.y, title: "Resize" },
       { key: "far-mid", className: "edge dark", kind: "scale" as const, x: mid.far.x, y: mid.far.y, title: "Resize" },
       { key: "left-mid", className: "edge dark", kind: "scale" as const, x: mid.left.x, y: mid.left.y, title: "Resize" },
+      { key: "move-x", className: "move-axis axis-x", kind: "move" as const, x: moveXPoint.x, y: moveXPoint.y, angle: moveXPoint.angle, title: "Move left or right (X axis)" },
+      { key: "move-z", className: "move-axis axis-z", kind: "move" as const, x: moveZPoint.x, y: moveZPoint.y, angle: moveZPoint.angle, title: "Move forward or back (Z axis)" },
       { key: heightHandleKey, className: "height-top", kind: "height" as const, x: heightPoint.x, y: heightPoint.y, title: "Height" },
       { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, title: "Move up or down" },
     ],

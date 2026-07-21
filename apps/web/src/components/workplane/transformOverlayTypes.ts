@@ -1,6 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 
-export type TransformHandleKind = "scale" | "height" | "lift" | "rotate";
+export type TransformHandleKind = "scale" | "height" | "lift" | "move" | "rotate";
 export type RotationAxis = "x" | "y" | "z";
 export type RotationWheelView = { x: number; y: number; radius: number };
 
@@ -45,7 +45,7 @@ export type TransformOverlayState = {
   width: number;
   height: number;
   guides: Array<{ x1: number; y1: number; x2: number; y2: number }>;
-  handles: Array<{ key: string; className: string; kind: TransformHandleKind; x: number; y: number; title: string }>;
+  handles: Array<{ key: string; className: string; kind: TransformHandleKind; x: number; y: number; title: string; angle?: number }>;
   rotateHandles: Array<{ key: string; className: string; x: number; y: number; angle: number }>;
   dimensions: Record<string, DimensionMark[]>;
   rotationWheel: RotationWheelView | null;
@@ -120,6 +120,24 @@ export function measureKeyForHandle(kind: TransformHandleKind, handleKey: string
 }
 
 export const MIN_LIFT_HANDLE_SCREEN_GAP = 32;
+export const MOVE_HANDLE_SCREEN_OFFSET = 36;
+
+export function projectedMoveHandle(
+  origin: { x: number; y: number },
+  projectedAxisPoint: { x: number; y: number },
+  fallbackAngle: number,
+  offset = MOVE_HANDLE_SCREEN_OFFSET,
+) {
+  const deltaX = projectedAxisPoint.x - origin.x;
+  const deltaY = projectedAxisPoint.y - origin.y;
+  const distance = Math.hypot(deltaX, deltaY);
+  const angle = distance > 0.5 ? Math.atan2(deltaY, deltaX) : fallbackAngle;
+  return {
+    x: origin.x + Math.cos(angle) * offset,
+    y: origin.y + Math.sin(angle) * offset,
+    angle: angle * 180 / Math.PI,
+  };
+}
 
 export function separatedLiftHandlePoint(
   heightPoint: { x: number; y: number },
