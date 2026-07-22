@@ -8,7 +8,7 @@ import { createLocalId } from "@/lib/localIds";
 import { isProjectFileName, parseProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { importExtensionSupported } from "@/lib/stlImport";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
-import type { GridSize, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { GridSize, ProjectDriveFile, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 type AppView = "dashboard" | "editor";
 type ViewMode = "grid" | "list";
@@ -27,6 +27,7 @@ type DashboardProject = {
   revision?: number;
   workspace?: WorkplaneWorkspaceSettings;
   snapGrid?: GridSize;
+  drive?: ProjectDriveFile | null;
 };
 
 type StoredDashboardProject = Partial<DashboardProject> & {
@@ -168,6 +169,7 @@ function readStoredProjects() {
           revision,
           workspace: normalizeWorkspaceSettings(project.workspace),
           snapGrid: normalizeSnapGrid(project.snapGrid),
+          drive: parseProjectDriveFile(project.drive),
         };
       });
     return { projects, legacyShapes };
@@ -198,6 +200,7 @@ function mergeProjectForStorage(project: DashboardProject, storedProject?: Dashb
     updatedAt: Math.max(project.updatedAt, storedProject.updatedAt),
     workspace: project.workspace ?? storedProject.workspace,
     snapGrid: project.snapGrid ?? storedProject.snapGrid,
+    drive: project.drive ?? storedProject.drive,
   };
 }
 
@@ -214,6 +217,18 @@ function projectForStorage(project: DashboardProject): DashboardProject {
     revision: project.revision,
     workspace: normalizeWorkspaceSettings(project.workspace),
     snapGrid: normalizeSnapGrid(project.snapGrid),
+    drive: project.drive ?? null,
+  };
+}
+
+function parseProjectDriveFile(value: unknown): ProjectDriveFile | null {
+  if (!value || typeof value !== "object") return null;
+  const drive = value as Partial<ProjectDriveFile>;
+  if (typeof drive.fileId !== "string" || typeof drive.fileName !== "string") return null;
+  return {
+    fileId: drive.fileId,
+    fileName: drive.fileName,
+    savedAt: typeof drive.savedAt === "number" ? drive.savedAt : Date.now(),
   };
 }
 
@@ -543,6 +558,12 @@ export default function Home() {
     openEditor(project.id, { allowMissingFromStorage: true });
   };
 
+  const updateProjectDriveFile = useCallback((snapshot: { projectId: string; drive: ProjectDriveFile }) => {
+    setProjects((current) =>
+      current.map((project) => (project.id === snapshot.projectId ? { ...project, drive: snapshot.drive } : project)),
+    );
+  }, []);
+
   const importProjectFilePayload = useCallback(
     (payload: ParsedProjectFile, sourceName?: string) => {
       const takenNames = new Set(projects.map((project) => project.name));
@@ -739,6 +760,8 @@ export default function Home() {
             onProjectSnapshot={updateProjectSnapshot}
             onProjectWorkspaceChange={updateProjectWorkspace}
             onProjectFileImport={importProjectFilePayload}
+            onProjectDriveFileChange={updateProjectDriveFile}
+            driveFile={activeProject?.drive ?? null}
             projectId={activeProjectId}
             projectName={activeProject?.name}
             projectRevision={activeProjectShapeEntry?.revision ?? activeProject?.revision ?? 0}

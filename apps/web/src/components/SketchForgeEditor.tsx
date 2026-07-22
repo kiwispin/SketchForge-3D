@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Download, X } from "lucide-react";
+import { Check, CloudUpload, Download, X } from "lucide-react";
 import type manifoldModule from "manifold-3d";
 import type { ManifoldToplevel } from "manifold-3d";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -67,6 +67,7 @@ import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifier
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
 import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
+import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
@@ -81,7 +82,7 @@ import {
   type SketchForgeMcpViewFace,
 } from "@/lib/sketchforgeMcpProtocol";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectSaveStatus, ShapeAsset, SketchImage, SketchPoint, SketchProfile, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectDriveFile, ProjectSaveStatus, ShapeAsset, SketchImage, SketchPoint, SketchProfile, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export { importedShapeFromStl, importedShapeFromSvg };
 
@@ -5140,6 +5141,8 @@ export function SketchForgeEditor({
   onProjectSnapshot,
   onProjectWorkspaceChange,
   onProjectFileImport,
+  onProjectDriveFileChange,
+  driveFile = null,
   saveStatus = null,
   projectId,
   projectName = "SketchForge design",
@@ -5154,6 +5157,8 @@ export function SketchForgeEditor({
   onProjectSnapshot?: (snapshot: { image: string; projectId: string; shapes: number }) => void;
   onProjectWorkspaceChange?: (snapshot: { projectId: string; workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => void;
   onProjectFileImport?: (payload: ParsedProjectFile) => void;
+  onProjectDriveFileChange?: (snapshot: { projectId: string; drive: ProjectDriveFile }) => void;
+  driveFile?: ProjectDriveFile | null;
   saveStatus?: ProjectSaveStatus | null;
   projectId?: string | null;
   projectName?: string;
@@ -5180,6 +5185,8 @@ export function SketchForgeEditor({
   const [mirrorPreviewAxis, setMirrorPreviewAxis] = useState<AlignAxis | null>(null);
   const [activeMode, setActiveMode] = useState("3D Design");
   const [notice, setNotice] = useState("Ready");
+  const [driveSaving, setDriveSaving] = useState(false);
+  const [driveFileLink, setDriveFileLink] = useState<ProjectDriveFile | null>(driveFile);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sketchImageInputRef = useRef<HTMLInputElement | null>(null);
   const booleanAutomationRunRef = useRef<string | null>(null);
@@ -5397,6 +5404,17 @@ export function SketchForgeEditor({
   useEffect(() => {
     projectInfoRef.current = { projectId: projectId ?? null, projectName };
   }, [projectId, projectName]);
+
+  useEffect(() => {
+    setDriveFileLink(driveFile ?? null);
+  }, [driveFile, projectId]);
+
+  useEffect(() => {
+    if (topPanel === "export" && isDriveConfigured()) {
+      // Warm up the Google sign-in script so the pop-up opens from the click.
+      void preloadGoogleIdentity().catch(() => undefined);
+    }
+  }, [topPanel]);
 
   useEffect(() => {
     historyIndexRef.current = historyIndex;
@@ -7731,6 +7749,50 @@ export function SketchForgeEditor({
     setMenuOpen(false);
   }, [projectName]);
 
+  const saveProjectToGoogleDrive = useCallback(
+    (options?: { copy?: boolean }) => {
+      if (driveSaving) return;
+      if (!isDriveConfigured()) {
+        setNotice("Google Drive saving isn't set up for this SketchForge build yet");
+        return;
+      }
+      const fileName = projectFileName(projectName);
+      const content = serializeProjectFile({
+        name: projectName,
+        workspace: workspaceSettingsRef.current,
+        snapGrid: currentSnapRef.current,
+        shapes: shapesRef.current,
+      });
+      const existingFileId = options?.copy ? null : (driveFileLink?.fileId ?? null);
+      setDriveSaving(true);
+      setNotice("Saving to Google Drive…");
+      saveProjectToDrive({ fileName, content, existingFileId })
+        .then((result) => {
+          const drive: ProjectDriveFile = { fileId: result.fileId, fileName: result.fileName, savedAt: Date.now() };
+          if (!options?.copy) {
+            setDriveFileLink(drive);
+            if (projectId) {
+              onProjectDriveFileChange?.({ projectId, drive });
+            }
+          }
+          setNotice(
+            options?.copy
+              ? `Saved a copy of ${result.fileName} to Google Drive`
+              : result.replacedMissingFile
+                ? `Drive file was missing — saved ${result.fileName} as a new Drive file`
+                : `Saved ${result.fileName} to Google Drive`,
+          );
+        })
+        .catch((error: unknown) => {
+          setNotice(error instanceof DriveError ? error.message : "Could not save to Google Drive — use Download instead");
+        })
+        .finally(() => {
+          setDriveSaving(false);
+        });
+    },
+    [driveFileLink, driveSaving, onProjectDriveFileChange, projectId, projectName],
+  );
+
   const makeCopy = useCallback(() => {
     if (shapes.length === 0) {
       setNotice("Nothing to copy yet");
@@ -8267,6 +8329,10 @@ export function SketchForgeEditor({
           onExportStep={exportStepDesign}
           preflight={exportPreflight}
           onSaveProject={saveProjectToFile}
+          onSaveToDrive={saveProjectToGoogleDrive}
+          driveConfigured={isDriveConfigured()}
+          driveSaving={driveSaving}
+          driveFile={driveFileLink}
           onRepeat={repeatSelected}
           stepExporting={stepExporting}
           onImportFiles={selectFiles}
@@ -8897,6 +8963,10 @@ function TopActionPanel({
   onExportStep,
   preflight,
   onSaveProject,
+  onSaveToDrive,
+  driveConfigured,
+  driveSaving,
+  driveFile,
   onRepeat,
   stepExporting,
   onImportFiles,
@@ -8911,6 +8981,10 @@ function TopActionPanel({
   onExportStep: () => void;
   preflight: PrintabilityReport;
   onSaveProject: () => void;
+  onSaveToDrive: (options?: { copy?: boolean }) => void;
+  driveConfigured: boolean;
+  driveSaving: boolean;
+  driveFile: ProjectDriveFile | null;
   onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void;
   stepExporting: boolean;
   onImportFiles: (files: FileList | File[]) => void;
@@ -8962,9 +9036,31 @@ function TopActionPanel({
       ) : null}
       {panel === "export" ? (
         <div className="top-action-body">
+          {driveConfigured ? (
+            <>
+              <button onClick={() => onSaveToDrive()} disabled={driveSaving}>
+                <CloudUpload size={18} />
+                {driveSaving ? "Saving to Google Drive…" : "Save to Google Drive"}
+              </button>
+              {driveFile ? (
+                <p className="export-step-note drive-save-note">
+                  Saved to Drive as {driveFile.fileName}.{" "}
+                  <a href={driveFileViewUrl(driveFile.fileId)} target="_blank" rel="noreferrer">
+                    View in Drive
+                  </a>
+                  {" · "}
+                  <button type="button" className="drive-link-button" onClick={() => onSaveToDrive({ copy: true })} disabled={driveSaving}>
+                    Save a copy
+                  </button>
+                </p>
+              ) : (
+                <p className="export-step-note">Signs into your Google account and saves this design into My Drive → SketchForge.</p>
+              )}
+            </>
+          ) : null}
           <button onClick={onSaveProject}>
             <Download size={18} />
-            Save project (.sketchforge)
+            {driveConfigured ? "Download project (.sketchforge)" : "Save project (.sketchforge)"}
           </button>
           <p className="export-step-note">Project files reopen in SketchForge with editable shapes, groups, holes, and workspace settings.</p>
           <p>{shapeCount} {scopeLabel} solid shape{shapeCount === 1 ? "" : "s"} ready to export.</p>

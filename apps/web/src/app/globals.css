@@ -2109,6 +2109,35 @@ button {
   background: #eef8fc;
 }
 
+.top-action-body .drive-save-note a {
+  color: #0a6aad;
+  font-weight: 800;
+}
+
+.top-action-body .drive-link-button {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  color: #0a6aad;
+  background: none;
+  border: none;
+  border-radius: 0;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.top-action-body .drive-link-button:hover {
+  background: none;
+  color: #084f81;
+}
+
+.top-action-body .drive-link-button:disabled {
+  color: #8aa4b5;
+  cursor: default;
+}
+
 .repeat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
