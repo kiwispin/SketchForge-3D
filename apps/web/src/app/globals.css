@@ -3589,41 +3589,22 @@ button {
   color: rgba(47, 61, 70, 0.86);
 }
 
-.transform-guides .rotate-gizmo-arc-casing {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 6;
-  stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
+.rotate-handle-icon,
+.rotate-handle-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
-.transform-guides .rotate-gizmo-head-casing {
-  fill: rgba(255, 255, 255, 0.92);
-  stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 2.4;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
+.rotate-handle-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
-.transform-guides .rotate-gizmo-arc-fg {
-  fill: none;
-  stroke: #37454f;
-  stroke-width: 3;
-  stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.transform-guides .rotate-gizmo-head-fg {
-  fill: #37454f;
-  stroke: none;
-}
-
-.transform-guides .rotate-gizmo-arc.hovered .rotate-gizmo-arc-fg {
-  stroke: #101c25;
-}
-
-.transform-guides .rotate-gizmo-arc.hovered .rotate-gizmo-head-fg {
-  fill: #101c25;
+.rotate-handle-icon svg {
+  fill: currentColor;
 }
 
 .rotation-edit {

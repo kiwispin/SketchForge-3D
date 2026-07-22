@@ -50,7 +50,6 @@ export type TransformOverlayState = {
   axisShafts: Array<{ axis: GizmoAxis; x1: number; y1: number; x2: number; y2: number }>;
   handles: Array<{ key: string; className: string; kind: TransformHandleKind; x: number; y: number; title: string; angle?: number }>;
   rotateHandles: Array<{ key: string; className: string; x: number; y: number; angle: number }>;
-  rotateArcs: Array<{ key: string; d: string; arrow1: string; arrow2: string }>;
   dimensions: Record<string, DimensionMark[]>;
   rotationWheel: RotationWheelView | null;
   rotationWheels: Record<RotationAxis, RotationWheelView>;
