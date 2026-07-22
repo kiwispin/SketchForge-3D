@@ -29,6 +29,7 @@ import {
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
+  type GizmoAxis,
   type PinnedRotationWheelView,
   type RotationAxis,
   type RotationPlaneView,
@@ -3879,6 +3880,34 @@ function syncTransformOverlay(
   const zMoveEdgeDistance = Math.hypot(zMoveAxisPoint.x - centerPoint.x, zMoveAxisPoint.y - centerPoint.y);
   const moveXPoint = projectedMoveHandle(centerPoint, xMoveAxisPoint, 0, xMoveEdgeDistance + 28);
   const moveZPoint = projectedMoveHandle(centerPoint, zMoveAxisPoint, Math.PI / 2, zMoveEdgeDistance + 28);
+  // Unreal-style gizmo shafts: a colored line from the selection center to the
+  // base of each axis arrow cone (the cone itself lives in the handle button).
+  const liftAngle = Math.atan2(liftPoint.y - heightPoint.y, liftPoint.x - heightPoint.x);
+  const gizmoShaft = (
+    axis: GizmoAxis,
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    startGap: number,
+    endGap: number,
+  ) => {
+    const deltaX = to.x - from.x;
+    const deltaY = to.y - from.y;
+    const length = Math.max(1, Math.hypot(deltaX, deltaY));
+    const unitX = deltaX / length;
+    const unitY = deltaY / length;
+    return {
+      axis,
+      x1: from.x + unitX * startGap,
+      y1: from.y + unitY * startGap,
+      x2: to.x - unitX * endGap,
+      y2: to.y - unitY * endGap,
+    };
+  };
+  const axisShafts = [
+    gizmoShaft("x", centerPoint, moveXPoint, 12, 8),
+    gizmoShaft("z", centerPoint, moveZPoint, 12, 8),
+    gizmoShaft("y", heightPoint, liftPoint, 6, 8),
+  ];
   const footprintGuides = [
     { x1: bottom.nearLeft.x, y1: bottom.nearLeft.y, x2: bottom.nearRight.x, y2: bottom.nearRight.y },
     { x1: bottom.nearRight.x, y1: bottom.nearRight.y, x2: bottom.farRight.x, y2: bottom.farRight.y },
@@ -4016,6 +4045,7 @@ function syncTransformOverlay(
       { x1: topPoint.x, y1: topPoint.y, x2: bottomCenterPoint.x, y2: bottomCenterPoint.y },
       ...footprintGuides,
     ],
+    axisShafts,
     handles: [
       { key: "near-left", className: "corner", kind: "scale" as const, x: bottom.nearLeft.x, y: bottom.nearLeft.y, title: "Resize (hold Shift to scale proportionally)" },
       { key: "near-right", className: "corner", kind: "scale" as const, x: bottom.nearRight.x, y: bottom.nearRight.y, title: "Resize (hold Shift to scale proportionally)" },
@@ -4028,7 +4058,7 @@ function syncTransformOverlay(
       { key: "move-x", className: "move-axis axis-x", kind: "move" as const, x: moveXPoint.x, y: moveXPoint.y, angle: moveXPoint.angle, title: "Move left or right (X axis)" },
       { key: "move-z", className: "move-axis axis-z", kind: "move" as const, x: moveZPoint.x, y: moveZPoint.y, angle: moveZPoint.angle, title: "Move forward or back (Z axis)" },
       { key: heightHandleKey, className: "height-top", kind: "height" as const, x: heightPoint.x, y: heightPoint.y, title: "Height" },
-      { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, title: "Move up or down" },
+      { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, angle: liftAngle * 180 / Math.PI, title: "Move up or down" },
     ],
     rotateHandles: [
       { key: "rotate-left", className: "screen-left", x: rotateLeft.x, y: rotateLeft.y, angle: ROTATION_UPPER_HANDLE_ICON_ANGLE },

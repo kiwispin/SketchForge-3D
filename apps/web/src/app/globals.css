@@ -3470,30 +3470,90 @@ button {
   cursor: ns-resize;
 }
 
+/* Unreal-style translate gizmo: X red, depth (Z) green, up (Y) blue; the
+   hovered or dragged axis turns yellow — shaft and cone together. */
+:root {
+  --gizmo-x: #e5231c;
+  --gizmo-y: #2b6bf3;
+  --gizmo-z: #17b52f;
+  --gizmo-hover: #f2c400;
+}
+
+.transform-guides line.gizmo-shaft-casing {
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 6;
+  stroke-dasharray: none;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.transform-guides line.gizmo-shaft {
+  stroke-width: 3;
+  stroke-dasharray: none;
+  stroke-linecap: round;
+}
+
+.transform-guides line.gizmo-shaft.gizmo-axis-x {
+  stroke: var(--gizmo-x);
+}
+
+.transform-guides line.gizmo-shaft.gizmo-axis-y {
+  stroke: var(--gizmo-y);
+}
+
+.transform-guides line.gizmo-shaft.gizmo-axis-z {
+  stroke: var(--gizmo-z);
+}
+
+.transform-guides line.gizmo-shaft.hovered {
+  stroke: var(--gizmo-hover);
+}
+
+.transform-handle .gizmo-cone {
+  display: block;
+  width: 24px;
+  height: 24px;
+  overflow: visible;
+}
+
+.transform-handle .gizmo-cone path {
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.transform-handle.move-axis .gizmo-cone,
+.transform-handle.height-lift .gizmo-cone {
+  margin: 0 auto;
+}
+
+.transform-handle.move-axis.axis-x .gizmo-cone path {
+  fill: var(--gizmo-x);
+}
+
+.transform-handle.move-axis.axis-z .gizmo-cone path {
+  fill: var(--gizmo-z);
+}
+
+.transform-handle.height-lift .gizmo-cone path {
+  fill: var(--gizmo-y);
+}
+
+.transform-handle.gizmo-hovered .gizmo-cone path,
+.transform-handle.move-axis:hover .gizmo-cone path,
+.transform-handle.height-lift:hover .gizmo-cone path {
+  fill: var(--gizmo-hover);
+}
+
 .transform-handle.height-lift {
+  z-index: 4;
   border: 0;
   width: 28px;
   height: 28px;
   background: transparent;
   box-shadow: none;
-}
-
-.transform-handle.height-lift::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 0;
-  height: 0;
-  transform: translate(-50%, -50%);
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-bottom: 13px solid #293743;
-}
-
-.transform-handle.height-lift.lower::before {
-  border-bottom: 0;
-  border-top: 13px solid #293743;
+  transform: translate3d(var(--overlay-x, 0), var(--overlay-y, 0), 0) translate(-50%, -50%) rotate(var(--move-handle-angle, 0deg));
 }
 
 .transform-handle.move-axis {
@@ -3509,29 +3569,6 @@ button {
 
 .transform-handle.move-axis:active {
   cursor: grabbing;
-}
-
-.transform-handle.move-axis svg {
-  display: block;
-  width: 36px;
-  height: 18px;
-  overflow: visible;
-  fill: none;
-  stroke-width: 2.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.transform-handle.move-axis.axis-x svg {
-  stroke: #d64242;
-}
-
-.transform-handle.move-axis.axis-z svg {
-  stroke: #2476c8;
-}
-
-.transform-handle.move-axis:hover svg {
-  filter: brightness(0.8);
 }
 
 .rotate-handle {
