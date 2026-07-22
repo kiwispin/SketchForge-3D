@@ -1482,6 +1482,41 @@ button {
   border-bottom-color: #159fd0;
 }
 
+.toolbar-workspace-tabs .project-name-input,
+.toolbar-workspace-tabs .project-name-static {
+  align-self: center;
+  width: 210px;
+  margin-left: 14px;
+  padding: 3px 8px;
+  color: #264d68;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-workspace-tabs .project-name-input {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: text;
+}
+
+.toolbar-workspace-tabs .project-name-input:hover {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: #cfdde8;
+}
+
+.toolbar-workspace-tabs .project-name-input:focus {
+  background: #ffffff;
+  border-color: #55add8;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 156, 222, 0.14);
+}
+
 .tool-group {
   display: flex;
   height: var(--editor-toolbar-tools-height);
@@ -4242,6 +4277,100 @@ button {
   background: transparent;
   border: 0;
   cursor: pointer;
+}
+
+.drive-open-modal {
+  position: fixed;
+  z-index: 90;
+}
+
+.drive-open-card {
+  width: 440px;
+  height: auto;
+  max-height: min(560px, calc(100vh - 104px));
+  display: flex;
+  flex-direction: column;
+}
+
+.drive-open-body {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+
+.drive-open-body p {
+  margin: 0;
+  color: #51697c;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.drive-open-body .drive-open-error {
+  color: #b3261e;
+}
+
+.drive-open-retry {
+  justify-self: start;
+  min-height: 34px;
+  padding: 0 14px;
+  color: #173b5a;
+  background: #f7fafc;
+  border: 1px solid #d8e3ea;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drive-open-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drive-open-list button {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  color: #173b5a;
+  background: #f7fafc;
+  border: 1px solid #d8e3ea;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drive-open-list button:hover:not(:disabled) {
+  background: #eef8fc;
+}
+
+.drive-open-list button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.drive-open-name {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-open-date {
+  flex: 0 0 auto;
+  color: #6f8698;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .workspace-modal-layout {

@@ -1,11 +1,12 @@
 "use client";
 
-import { Clock3, EllipsisVertical, FileUp, GraduationCap, Grid3X3, HomeIcon, List, Pencil, Plus, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Clock3, CloudDownload, EllipsisVertical, FileUp, GraduationCap, Grid3X3, HomeIcon, List, Pencil, Plus, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
 import { tutorials } from "@/lib/tutorials";
 import { createLocalId } from "@/lib/localIds";
 import { isProjectFileName, parseProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
+import { DriveError, downloadProjectFromDrive, isDriveConfigured, listProjectsFromDrive, type DriveProjectFileInfo } from "@/lib/googleDrive";
 import { importExtensionSupported } from "@/lib/stlImport";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import type { GridSize, ProjectDriveFile, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
@@ -38,6 +39,11 @@ type ProjectShapeCacheEntry = {
   revision: number;
   shapes: WorkplaneShape[];
 };
+
+type DriveOpenDialogState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; files: DriveProjectFileInfo[]; openingFileId?: string; message?: string };
 
 type ProjectShapeRecord = ProjectShapeCacheEntry & {
   id: string;
@@ -274,6 +280,7 @@ export default function Home() {
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
   const [projectSaveStatus, setProjectSaveStatus] = useState<ProjectSaveStatus>("idle");
   const [launchTutorial, setLaunchTutorial] = useState<{ projectId: string; tutorialId: string } | null>(null);
+  const [driveDialog, setDriveDialog] = useState<DriveOpenDialogState | null>(null);
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
   const nextProjectRevisionRef = useRef(0);
@@ -564,8 +571,23 @@ export default function Home() {
     );
   }, []);
 
+  const openDriveDialog = useCallback(() => {
+    setDriveDialog({ status: "loading" });
+    listProjectsFromDrive()
+      .then((files) => {
+        setDriveDialog((current) => (current ? { status: "ready", files } : current));
+      })
+      .catch((error: unknown) => {
+        setDriveDialog((current) =>
+          current
+            ? { status: "error", message: error instanceof DriveError ? error.message : "Could not load files from Google Drive" }
+            : current,
+        );
+      });
+  }, []);
+
   const importProjectFilePayload = useCallback(
-    (payload: ParsedProjectFile, sourceName?: string) => {
+    (payload: ParsedProjectFile, sourceName?: string, driveLink?: ProjectDriveFile) => {
       const takenNames = new Set(projects.map((project) => project.name));
       let name = payload.name;
       for (let suffix = 2; takenNames.has(name); suffix += 1) {
@@ -574,6 +596,7 @@ export default function Home() {
       const project = newProject(name, projects.length, payload.shapes.length);
       project.workspace = payload.workspace;
       project.snapGrid = payload.snapGrid;
+      project.drive = driveLink ?? null;
       const revision = project.revision ?? project.updatedAt;
       setProjectShapesById((current) => ({
         ...current,
@@ -591,6 +614,29 @@ export default function Home() {
       openEditor(project.id, { allowMissingFromStorage: true });
     },
     [projects],
+  );
+
+  const openDriveFile = useCallback(
+    (file: DriveProjectFileInfo) => {
+      setDriveDialog((current) => (current?.status === "ready" ? { ...current, openingFileId: file.fileId, message: undefined } : current));
+      downloadProjectFromDrive(file.fileId)
+        .then((text) => {
+          importProjectFilePayload(parseProjectFile(text), file.fileName, {
+            fileId: file.fileId,
+            fileName: file.fileName,
+            savedAt: Date.now(),
+          });
+          setDriveDialog(null);
+        })
+        .catch((error: unknown) => {
+          const message =
+            error instanceof DriveError || error instanceof Error ? error.message : `Could not open ${file.fileName}`;
+          setDriveDialog((current) =>
+            current?.status === "ready" ? { ...current, openingFileId: undefined, message } : current,
+          );
+        });
+    },
+    [importProjectFilePayload],
   );
 
   const importFileFromDashboard = useCallback(
@@ -712,6 +758,52 @@ export default function Home() {
           event.currentTarget.value = "";
         }}
       />
+      {driveDialog ? (
+        <div className="workspace-modal drive-open-modal" role="dialog" aria-label="Open from Google Drive">
+          <button className="workspace-modal-backdrop" aria-label="Close" onClick={() => setDriveDialog(null)} />
+          <div className="workspace-modal-card drive-open-card">
+            <div className="workspace-modal-header">
+              <strong>Open from Google Drive</strong>
+              <button aria-label="Close" onClick={() => setDriveDialog(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="drive-open-body">
+              {driveDialog.status === "loading" ? <p>Loading your SketchForge files from Google Drive…</p> : null}
+              {driveDialog.status === "error" ? (
+                <>
+                  <p className="drive-open-error">{driveDialog.message}</p>
+                  <button className="drive-open-retry" type="button" onClick={openDriveDialog}>
+                    Try again
+                  </button>
+                </>
+              ) : null}
+              {driveDialog.status === "ready" ? (
+                driveDialog.files.length === 0 ? (
+                  <p>No SketchForge projects in this Google Drive yet. Save a design to Drive first, then it will show up here.</p>
+                ) : (
+                  <>
+                    <p>Opening a file creates a new project linked to it — saves go back to the same Drive file.</p>
+                    {driveDialog.message ? <p className="drive-open-error">{driveDialog.message}</p> : null}
+                    <ul className="drive-open-list">
+                      {driveDialog.files.map((file) => (
+                        <li key={file.fileId}>
+                          <button type="button" onClick={() => openDriveFile(file)} disabled={Boolean(driveDialog.openingFileId)}>
+                            <span className="drive-open-name">{file.fileName}</span>
+                            <span className="drive-open-date">
+                              {driveDialog.openingFileId === file.fileId ? "Opening…" : formatUpdated(file.modifiedAt)}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
       {view === "dashboard" ? (
         <Dashboard
           dashboardSection={dashboardSection}
@@ -730,6 +822,7 @@ export default function Home() {
           onDownloadFolderChange={setDownloadFolder}
           onDownloadModeChange={setDownloadMode}
           onImportFile={() => dashboardImportInputRef.current?.click()}
+          onOpenFromDrive={isDriveConfigured() ? openDriveDialog : undefined}
           onChallenges={() => {
             setDashboardSection("challenges");
             setDashboardNotice("");
@@ -761,6 +854,8 @@ export default function Home() {
             onProjectWorkspaceChange={updateProjectWorkspace}
             onProjectFileImport={importProjectFilePayload}
             onProjectDriveFileChange={updateProjectDriveFile}
+            onProjectRename={(snapshot) => renameProject(snapshot.projectId, snapshot.name)}
+            onOpenFromDrive={openDriveDialog}
             driveFile={activeProject?.drive ?? null}
             projectId={activeProjectId}
             projectName={activeProject?.name}
@@ -791,6 +886,7 @@ function Dashboard({
   onDownloadFolderChange,
   onDownloadModeChange,
   onImportFile,
+  onOpenFromDrive,
   onChallenges,
   onLearn,
   onStartTutorial,
@@ -819,6 +915,7 @@ function Dashboard({
   onDownloadFolderChange: (value: string) => void;
   onDownloadModeChange: (value: DownloadMode) => void;
   onImportFile: () => void;
+  onOpenFromDrive?: () => void;
   onChallenges: () => void;
   onLearn: () => void;
   onStartTutorial: (tutorialId: string) => void;
@@ -952,6 +1049,14 @@ function Dashboard({
                   </span>
                   <span>Import file</span>
                 </button>
+                {onOpenFromDrive ? (
+                  <button className="dashboard-action-tile" type="button" onClick={onOpenFromDrive}>
+                    <span className="dashboard-action-icon">
+                      <CloudDownload size={24} strokeWidth={2.4} />
+                    </span>
+                    <span>Open from Drive</span>
+                  </button>
+                ) : null}
                 <button className="dashboard-action-tile" type="button" onClick={onWorkspace}>
                   <span className="dashboard-action-icon">
                     <Clock3 size={24} strokeWidth={2.4} />

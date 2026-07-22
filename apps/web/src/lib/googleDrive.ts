@@ -1,3 +1,5 @@
+import { isProjectFileName } from "@/lib/projectFile";
+
 // Direct browser-to-Google-Drive saving for .sketchforge projects.
 //
 // Uses the Google Identity Services (GIS) token flow with only the narrow
@@ -304,4 +306,50 @@ export async function saveProjectToDrive(options: {
 }): Promise<DriveSaveResult> {
   const token = await requestDriveAccessToken();
   return uploadProjectToDrive(token, options);
+}
+
+export type DriveProjectFileInfo = { fileId: string; fileName: string; modifiedAt: number };
+
+// With the drive.file scope this only ever sees files SketchForge itself
+// created (on any device), so no filtering beyond the extension is needed.
+export async function listDriveProjectFiles(token: string): Promise<DriveProjectFileInfo[]> {
+  const query = "trashed = false and mimeType != 'application/vnd.google-apps.folder'";
+  const url =
+    `${DRIVE_FILES_URL}?q=${encodeURIComponent(query)}` +
+    `&fields=${encodeURIComponent("files(id,name,modifiedTime)")}` +
+    `&orderBy=${encodeURIComponent("modifiedTime desc")}&pageSize=100&spaces=drive`;
+  const response = await driveFetch(token, url, { method: "GET" });
+  if (!response.ok) {
+    throw driveErrorFromResponse(response.status, await response.text());
+  }
+  const payload = (await response.json().catch(() => null)) as {
+    files?: { id?: string; name?: string; modifiedTime?: string }[];
+  } | null;
+  return (payload?.files ?? [])
+    .filter((file) => typeof file.id === "string" && typeof file.name === "string" && isProjectFileName(file.name))
+    .map((file) => ({
+      fileId: file.id as string,
+      fileName: file.name as string,
+      modifiedAt: Date.parse(file.modifiedTime ?? "") || 0,
+    }));
+}
+
+export async function downloadDriveProjectFile(token: string, fileId: string): Promise<string> {
+  const response = await driveFetch(token, `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?alt=media`, {
+    method: "GET",
+  });
+  if (!response.ok) {
+    throw driveErrorFromResponse(response.status, await response.text());
+  }
+  return response.text();
+}
+
+export async function listProjectsFromDrive(): Promise<DriveProjectFileInfo[]> {
+  const token = await requestDriveAccessToken();
+  return listDriveProjectFiles(token);
+}
+
+export async function downloadProjectFromDrive(fileId: string): Promise<string> {
+  const token = await requestDriveAccessToken();
+  return downloadDriveProjectFile(token, fileId);
 }

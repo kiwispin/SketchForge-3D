@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CloudUpload, Download, X } from "lucide-react";
+import { Check, CloudDownload, CloudUpload, Download, X } from "lucide-react";
 import type manifoldModule from "manifold-3d";
 import type { ManifoldToplevel } from "manifold-3d";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -5142,6 +5142,8 @@ export function SketchForgeEditor({
   onProjectWorkspaceChange,
   onProjectFileImport,
   onProjectDriveFileChange,
+  onProjectRename,
+  onOpenFromDrive,
   driveFile = null,
   saveStatus = null,
   projectId,
@@ -5158,6 +5160,8 @@ export function SketchForgeEditor({
   onProjectWorkspaceChange?: (snapshot: { projectId: string; workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => void;
   onProjectFileImport?: (payload: ParsedProjectFile) => void;
   onProjectDriveFileChange?: (snapshot: { projectId: string; drive: ProjectDriveFile }) => void;
+  onProjectRename?: (snapshot: { projectId: string; name: string }) => void;
+  onOpenFromDrive?: () => void;
   driveFile?: ProjectDriveFile | null;
   saveStatus?: ProjectSaveStatus | null;
   projectId?: string | null;
@@ -8168,6 +8172,8 @@ export function SketchForgeEditor({
         onWorkplaneTool={activateWorkplaneTool}
         workplaneMode={workplaneMode}
         saveStatus={saveStatus}
+        projectName={projectName}
+        onRenameProject={projectId && onProjectRename ? (name: string) => onProjectRename({ projectId, name }) : undefined}
         onTopPanel={(panel) => {
           setTopPanel(panel);
           setMenuOpen(false);
@@ -8330,6 +8336,10 @@ export function SketchForgeEditor({
           preflight={exportPreflight}
           onSaveProject={saveProjectToFile}
           onSaveToDrive={saveProjectToGoogleDrive}
+          onOpenFromDrive={() => {
+            setTopPanel(null);
+            onOpenFromDrive?.();
+          }}
           driveConfigured={isDriveConfigured()}
           driveSaving={driveSaving}
           driveFile={driveFileLink}
@@ -8458,6 +8468,8 @@ function SecondaryToolbar({
   onTopPanel,
   onAddShape,
   saveStatus,
+  projectName,
+  onRenameProject,
 }: {
   toolbarMode: ToolbarMode;
   onToolbarModeChange: (mode: ToolbarMode) => void;
@@ -8512,6 +8524,8 @@ function SecondaryToolbar({
   onTopPanel: (panel: TopPanel) => void;
   onAddShape: (shape: ShapeAsset) => void;
   saveStatus?: ProjectSaveStatus | null;
+  projectName: string;
+  onRenameProject?: (name: string) => void;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "printableParts" | "text">("basic");
@@ -8854,8 +8868,65 @@ function SecondaryToolbar({
         >
           Sketch
         </button>
+        {onRenameProject ? (
+          <ProjectNameField name={projectName} onRename={onRenameProject} />
+        ) : (
+          <span className="project-name-static" title="Design name">{projectName}</span>
+        )}
       </div>
     </div>
+  );
+}
+
+function ProjectNameField({ name, onRename }: { name: string; onRename: (name: string) => void }) {
+  const [draft, setDraft] = useState(name);
+  const [editing, setEditing] = useState(false);
+  const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(name);
+    }
+  }, [editing, name]);
+
+  const commit = () => {
+    setEditing(false);
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      setDraft(name);
+      return;
+    }
+    const next = draft.trim();
+    if (!next || next === name) {
+      setDraft(name);
+      return;
+    }
+    onRename(next);
+  };
+
+  return (
+    <input
+      className="project-name-input"
+      aria-label="Design name"
+      title="Design name — click to rename"
+      value={draft}
+      maxLength={80}
+      spellCheck={false}
+      onFocus={(event) => {
+        setEditing(true);
+        event.currentTarget.select();
+      }}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          cancelledRef.current = true;
+          event.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -8964,6 +9035,7 @@ function TopActionPanel({
   preflight,
   onSaveProject,
   onSaveToDrive,
+  onOpenFromDrive,
   driveConfigured,
   driveSaving,
   driveFile,
@@ -8982,6 +9054,7 @@ function TopActionPanel({
   preflight: PrintabilityReport;
   onSaveProject: () => void;
   onSaveToDrive: (options?: { copy?: boolean }) => void;
+  onOpenFromDrive: () => void;
   driveConfigured: boolean;
   driveSaving: boolean;
   driveFile: ProjectDriveFile | null;
@@ -9014,6 +9087,12 @@ function TopActionPanel({
       </header>
       {panel === "import" ? (
         <div className="top-action-body">
+          {driveConfigured ? (
+            <button onClick={onOpenFromDrive}>
+              <CloudDownload size={18} />
+              Open from Google Drive
+            </button>
+          ) : null}
           <button
             className="import-drop-zone"
             onClick={onPickFile}
@@ -9044,12 +9123,18 @@ function TopActionPanel({
               </button>
               {driveFile ? (
                 <p className="export-step-note drive-save-note">
-                  Saved to Drive as {driveFile.fileName}.{" "}
+                  Linked to <strong>{driveFile.fileName}</strong> in Google Drive — each save updates that same file.{" "}
                   <a href={driveFileViewUrl(driveFile.fileId)} target="_blank" rel="noreferrer">
                     View in Drive
                   </a>
                   {" · "}
-                  <button type="button" className="drive-link-button" onClick={() => onSaveToDrive({ copy: true })} disabled={driveSaving}>
+                  <button
+                    type="button"
+                    className="drive-link-button"
+                    title="Keep this version in Drive as its own separate file"
+                    onClick={() => onSaveToDrive({ copy: true })}
+                    disabled={driveSaving}
+                  >
                     Save a copy
                   </button>
                 </p>

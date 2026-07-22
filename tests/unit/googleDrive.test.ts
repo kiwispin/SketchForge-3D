@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DriveError,
   buildMultipartBody,
+  downloadDriveProjectFile,
   driveErrorFromResponse,
   driveFileViewUrl,
   escapeDriveQueryValue,
   findOrCreateSketchForgeFolder,
+  listDriveProjectFiles,
   uploadProjectToDrive,
 } from "@/lib/googleDrive";
 
@@ -179,5 +181,46 @@ describe("uploadProjectToDrive", () => {
     const failure = await uploadProjectToDrive("tok", options).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(DriveError);
     expect((failure as DriveError).code).toBe("unknown");
+  });
+});
+
+describe("listDriveProjectFiles", () => {
+  it("returns only .sketchforge files, newest first as Drive orders them", async () => {
+    const calls = stubFetchSequence([
+      jsonResponse(200, {
+        files: [
+          { id: "f1", name: "Bracket.sketchforge", modifiedTime: "2026-07-22T01:00:00.000Z" },
+          { id: "f2", name: "notes.txt", modifiedTime: "2026-07-21T01:00:00.000Z" },
+          { id: "f3", name: "Rocket.sketchforge.json", modifiedTime: "2026-07-20T01:00:00.000Z" },
+          { id: "f4", name: "broken-entry" },
+        ],
+      }),
+    ]);
+    const files = await listDriveProjectFiles("tok");
+    expect(files.map((file) => file.fileId)).toEqual(["f1", "f3"]);
+    expect(files[0]).toEqual({
+      fileId: "f1",
+      fileName: "Bracket.sketchforge",
+      modifiedAt: Date.parse("2026-07-22T01:00:00.000Z"),
+    });
+    expect(calls[0].url).toContain("orderBy=modifiedTime%20desc");
+  });
+
+  it("maps Drive errors when the listing fails", async () => {
+    stubFetchSequence([jsonResponse(403, { error: { message: "Access denied", errors: [{ reason: "forbidden" }] } })]);
+    await expect(listDriveProjectFiles("tok")).rejects.toMatchObject({ code: "permission" });
+  });
+});
+
+describe("downloadDriveProjectFile", () => {
+  it("downloads the file content as text", async () => {
+    const calls = stubFetchSequence([new Response('{"format":"sketchforge-project"}', { status: 200 })]);
+    await expect(downloadDriveProjectFile("tok", "file-1")).resolves.toBe('{"format":"sketchforge-project"}');
+    expect(calls[0].url).toContain("/files/file-1?alt=media");
+  });
+
+  it("maps a deleted file to not-found", async () => {
+    stubFetchSequence([jsonResponse(404, { error: { message: "File not found" } })]);
+    await expect(downloadDriveProjectFile("tok", "file-gone")).rejects.toMatchObject({ code: "not-found" });
   });
 });
