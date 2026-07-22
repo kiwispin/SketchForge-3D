@@ -8878,6 +8878,14 @@ function SecondaryToolbar({
   );
 }
 
+function timeAgoLabel(timestamp: number) {
+  const age = Date.now() - timestamp;
+  if (age < 60_000) return "just now";
+  if (age < 3_600_000) return `${Math.max(1, Math.round(age / 60_000))} min ago`;
+  if (age < 86_400_000) return "today";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(timestamp));
+}
+
 function ProjectNameField({ name, onRename }: { name: string; onRename: (name: string) => void }) {
   const [draft, setDraft] = useState(name);
   const [editing, setEditing] = useState(false);
@@ -9129,28 +9137,28 @@ function TopActionPanel({
                 {driveSaving ? "Saving to Google Drive…" : "Save to Google Drive"}
               </button>
               {driveFile ? (
-                <>
-                  <p className="panel-note">
-                    Linked to <strong>{driveFile.fileName}</strong> — each save updates this file.
-                  </p>
-                  <p className="panel-note panel-note-actions">
+                <div className="drive-status-card">
+                  <div className="drive-status-file">
+                    <Check size={15} strokeWidth={3} />
+                    <span className="drive-status-name" title={driveFile.fileName}>{driveFile.fileName}</span>
+                  </div>
+                  <div className="drive-status-meta">Saved to Drive · {timeAgoLabel(driveFile.savedAt)}</div>
+                  <div className="drive-status-actions">
                     <a href={driveFileViewUrl(driveFile.fileId)} target="_blank" rel="noreferrer">
                       View in Drive
                     </a>
-                    <span aria-hidden="true">·</span>
                     <button
                       type="button"
-                      className="drive-link-button"
                       title="Keep this version in Drive as its own separate file"
                       onClick={() => onSaveToDrive({ copy: true })}
                       disabled={driveSaving}
                     >
                       Save a copy
                     </button>
-                  </p>
-                </>
+                  </div>
+                </div>
               ) : (
-                <p className="panel-note">Saves this design into My Drive → SketchForge on your Google account.</p>
+                <p className="panel-note">Files go to My Drive → SketchForge.</p>
               )}
             </section>
           ) : null}
@@ -9164,22 +9172,33 @@ function TopActionPanel({
           </section>
           <section className="panel-section">
             <div className="panel-section-label">3D printing &amp; CAD</div>
-            <p className="panel-note">
-              {shapeCount} {scopeLabel} solid shape{shapeCount === 1 ? "" : "s"} ready to export.
-            </p>
-            <PrintabilityPreflight report={preflight} />
+            {preflight.checkedCount === 0 ? (
+              <p className="panel-note">Add a solid shape to enable exporting.</p>
+            ) : preflight.issues.length === 0 ? (
+              <p className="panel-note export-ready-line">
+                <Check size={14} strokeWidth={3} />
+                {shapeCount} solid shape{shapeCount === 1 ? "" : "s"}
+                {scopeLabel === "selected" ? " selected" : ""} · ready to print
+              </p>
+            ) : (
+              <PrintabilityPreflight report={preflight} />
+            )}
             <div className="export-format-row">
-              <button title="Best for most 3D printing" onClick={() => onExport("stl")}>
+              <button title="Best for most 3D printing" onClick={() => onExport("stl")} disabled={shapeCount === 0}>
                 STL
               </button>
-              <button title="Mesh with named parts" onClick={() => onExport("obj")}>
+              <button title="Mesh with named parts" onClick={() => onExport("obj")} disabled={shapeCount === 0}>
                 OBJ
               </button>
-              <button title="Exact CAD geometry (boxes, cylinders, spheres, cones)" onClick={onExportStep} disabled={stepExporting}>
+              <button
+                title="Exact CAD geometry (boxes, cylinders, spheres, cones)"
+                onClick={onExportStep}
+                disabled={stepExporting || shapeCount === 0}
+              >
                 {stepExporting ? "STEP…" : "STEP"}
               </button>
             </div>
-            <p className="panel-note">Use STL for 3D printing. STEP keeps simple shapes as exact CAD geometry for other CAD tools.</p>
+            <p className="panel-note">STL for 3D printing · STEP for other CAD tools</p>
           </section>
         </div>
       ) : null}

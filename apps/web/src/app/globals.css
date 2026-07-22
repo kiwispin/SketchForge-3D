@@ -2181,10 +2181,89 @@ button {
   font-weight: 800;
 }
 
-.panel-note-actions {
+.drive-status-card {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  background: #f2f9fd;
+  border: 1px solid #cfe6f3;
+  border-radius: 4px;
+}
+
+.drive-status-file {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: #1d4a66;
+}
+
+.drive-status-file svg {
+  flex: none;
+  color: #0d99d6;
+}
+
+.drive-status-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-status-meta {
+  padding-left: 22px;
+  color: #62798c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.drive-status-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
+  padding-left: 22px;
+}
+
+.drive-status-actions a,
+.top-action-body .drive-status-actions button {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  color: #0a6aad;
+  background: none;
+  border: none;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.top-action-body .drive-status-actions button:hover {
+  background: none;
+  color: #084f81;
+}
+
+.top-action-body .drive-status-actions button:disabled {
+  color: #8aa4b5;
+  cursor: default;
+}
+
+.top-action-body .export-ready-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  color: #17623a;
+  font-weight: 700;
+}
+
+.export-ready-line svg {
+  flex: none;
+}
+
+.top-action-body .export-format-row button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .top-action-body .panel-primary-button {
@@ -2206,30 +2285,6 @@ button {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-}
-
-.top-action-body .drive-link-button {
-  display: inline;
-  min-height: 0;
-  padding: 0;
-  color: #0a6aad;
-  background: none;
-  border: none;
-  border-radius: 0;
-  font: inherit;
-  font-weight: 800;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.top-action-body .drive-link-button:hover {
-  background: none;
-  color: #084f81;
-}
-
-.top-action-body .drive-link-button:disabled {
-  color: #8aa4b5;
-  cursor: default;
 }
 
 .repeat-grid {
