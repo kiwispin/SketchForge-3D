@@ -3592,8 +3592,8 @@ button {
 .rotate-handle-icon,
 .rotate-handle-icon svg {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 30px;
+  height: 30px;
 }
 
 .rotate-handle-icon {
@@ -3601,10 +3601,26 @@ button {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+  filter: drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.95)) drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.95));
 }
 
-.rotate-handle-icon svg {
-  fill: currentColor;
+.rotate-arc {
+  fill: none;
+  stroke: #37454f;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+}
+
+.rotate-arrow {
+  fill: #37454f;
+}
+
+.rotate-handle:hover .rotate-arc {
+  stroke: #101c25;
+}
+
+.rotate-handle:hover .rotate-arrow {
+  fill: #101c25;
 }
 
 .rotation-edit {

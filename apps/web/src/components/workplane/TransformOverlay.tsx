@@ -265,8 +265,10 @@ export function TransformOverlay({
           }}
         >
           <span className="rotate-handle-icon" aria-hidden="true">
-            <svg viewBox="0 0 150 150" focusable="false">
-              <path d="m145.4 67.6-12.1 7.7c-6.6-10.8-22.1-27.4-43.6-31.5-3.7-0.7-8-1.3-14.1-1.3-21.5 0-41.5 9.8-55.1 28.9l-3.3 4.1-12.4-7.9c-1.3-0.7-3 0.1-2.9 1.8l1.1 36.1c0.3 1.7 2 2.5 3.1 1.7l30.2-17.6c1.4-0.6 1.4-2.9 0-3.5l-12.1-6.7c9.7-14.8 26.4-28.5 51.2-28.6 20.5-0.1 37.4 9.8 50.7 28.6l-12 6.5c-1.6 0.6-1.5 3.3 0 3.8l30.2 17.4c1.4 0.7 3 0 3-1.7l0.8-36c0-1.5-1.5-2.6-2.7-1.8z" />
+            <svg viewBox="0 0 44 44" focusable="false">
+              <path className="rotate-arc" d="M7.9 20.87 A15 15 0 0 1 36.1 20.87" />
+              <path className="rotate-arrow" d="M5.51 27.45 L4.14 19.5 L11.66 22.24 Z" />
+              <path className="rotate-arrow" d="M38.49 27.45 L32.34 22.24 L39.86 19.5 Z" />
             </svg>
           </span>
         </button>
