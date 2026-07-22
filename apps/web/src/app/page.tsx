@@ -263,6 +263,10 @@ function projectNameFromFileName(fileName: string) {
   return fileName.replace(/\.[^.]+$/, "").trim() || "Imported design";
 }
 
+function projectFileNameStem(fileName: string) {
+  return fileName.replace(/\.sketchforge(\.json)?$/i, "").trim();
+}
+
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<AppView>("dashboard");
@@ -588,10 +592,13 @@ export default function Home() {
 
   const importProjectFilePayload = useCallback(
     (payload: ParsedProjectFile, sourceName?: string, driveLink?: ProjectDriveFile) => {
+      // The file's own name is what the student sees in Drive or their folder,
+      // so it wins over the (possibly stale) name embedded in the payload.
+      const baseName = (sourceName && isProjectFileName(sourceName) ? projectFileNameStem(sourceName) : "") || payload.name;
       const takenNames = new Set(projects.map((project) => project.name));
-      let name = payload.name;
+      let name = baseName;
       for (let suffix = 2; takenNames.has(name); suffix += 1) {
-        name = `${payload.name} (${suffix})`;
+        name = `${baseName} (${suffix})`;
       }
       const project = newProject(name, projects.length, payload.shapes.length);
       project.workspace = payload.workspace;
@@ -621,11 +628,42 @@ export default function Home() {
       setDriveDialog((current) => (current?.status === "ready" ? { ...current, openingFileId: file.fileId, message: undefined } : current));
       downloadProjectFromDrive(file.fileId)
         .then((text) => {
-          importProjectFilePayload(parseProjectFile(text), file.fileName, {
-            fileId: file.fileId,
-            fileName: file.fileName,
-            savedAt: Date.now(),
-          });
+          const payload = parseProjectFile(text);
+          const drive: ProjectDriveFile = { fileId: file.fileId, fileName: file.fileName, savedAt: Date.now() };
+          const linked = projects.find((project) => project.drive?.fileId === file.fileId);
+          if (linked) {
+            // This Drive file already has a project on this device — refresh it
+            // with the Drive content instead of piling up duplicates.
+            const revision = Math.max(Date.now(), (linked.revision ?? 0) + 1);
+            const name = projectFileNameStem(file.fileName) || linked.name;
+            setProjectShapesById((current) => ({
+              ...current,
+              [linked.id]: { revision, shapes: payload.shapes },
+            }));
+            void saveProjectShapes(linked.id, payload.shapes, revision).catch(() => {
+              setDashboardNotice("Could not update project shape storage");
+            });
+            setProjects((current) =>
+              current.map((project) =>
+                project.id === linked.id
+                  ? {
+                      ...project,
+                      name,
+                      shapes: payload.shapes.length,
+                      revision,
+                      updatedAt: revision,
+                      workspace: payload.workspace,
+                      snapGrid: payload.snapGrid,
+                      drive,
+                    }
+                  : project,
+              ),
+            );
+            setDashboardNotice(`Opened ${file.fileName} from Google Drive`);
+            openEditor(linked.id, { allowMissingFromStorage: true });
+          } else {
+            importProjectFilePayload(payload, file.fileName, drive);
+          }
           setDriveDialog(null);
         })
         .catch((error: unknown) => {
@@ -636,7 +674,7 @@ export default function Home() {
           );
         });
     },
-    [importProjectFilePayload],
+    [importProjectFilePayload, projects],
   );
 
   const importFileFromDashboard = useCallback(

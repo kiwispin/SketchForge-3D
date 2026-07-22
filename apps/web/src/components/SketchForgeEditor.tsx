@@ -5158,7 +5158,7 @@ export function SketchForgeEditor({
   onProjectShapesChange?: (snapshot: { projectId: string; shapes: WorkplaneShape[] }) => void;
   onProjectSnapshot?: (snapshot: { image: string; projectId: string; shapes: number }) => void;
   onProjectWorkspaceChange?: (snapshot: { projectId: string; workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => void;
-  onProjectFileImport?: (payload: ParsedProjectFile) => void;
+  onProjectFileImport?: (payload: ParsedProjectFile, sourceName?: string) => void;
   onProjectDriveFileChange?: (snapshot: { projectId: string; drive: ProjectDriveFile }) => void;
   onProjectRename?: (snapshot: { projectId: string; name: string }) => void;
   onOpenFromDrive?: () => void;
@@ -7821,7 +7821,7 @@ export function SketchForgeEditor({
       }
       try {
         const parsed = parseProjectFile(await file.text());
-        onProjectFileImport(parsed);
+        onProjectFileImport(parsed, file.name);
         setTopPanel(null);
       } catch (error) {
         setNotice(error instanceof Error ? error.message : `Could not open ${file.name}`);
@@ -9088,81 +9088,99 @@ function TopActionPanel({
       {panel === "import" ? (
         <div className="top-action-body">
           {driveConfigured ? (
-            <button onClick={onOpenFromDrive}>
-              <CloudDownload size={18} />
-              Open from Google Drive
-            </button>
+            <section className="panel-section">
+              <div className="panel-section-label">Google Drive</div>
+              <button onClick={onOpenFromDrive}>
+                <CloudDownload size={18} />
+                Open from Google Drive
+              </button>
+            </section>
           ) : null}
-          <button
-            className="import-drop-zone"
-            onClick={onPickFile}
-            onDragOver={(event) => {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              if (event.dataTransfer.files.length > 0) {
-                onImportFiles(event.dataTransfer.files);
-              }
-            }}
-          >
-            <ToolbarImportIcon />
-            <strong>Drop STL, STEP, SVG, or .sketchforge files</strong>
-            <span>or click to choose from your computer</span>
-          </button>
+          <section className="panel-section">
+            {driveConfigured ? <div className="panel-section-label">This computer</div> : null}
+            <button
+              className="import-drop-zone"
+              onClick={onPickFile}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (event.dataTransfer.files.length > 0) {
+                  onImportFiles(event.dataTransfer.files);
+                }
+              }}
+            >
+              <ToolbarImportIcon />
+              <strong>Drop STL, STEP, SVG, or .sketchforge files</strong>
+              <span>or click to choose from your computer</span>
+            </button>
+          </section>
         </div>
       ) : null}
       {panel === "export" ? (
         <div className="top-action-body">
           {driveConfigured ? (
-            <>
-              <button onClick={() => onSaveToDrive()} disabled={driveSaving}>
+            <section className="panel-section">
+              <div className="panel-section-label">Google Drive</div>
+              <button className="panel-primary-button" onClick={() => onSaveToDrive()} disabled={driveSaving}>
                 <CloudUpload size={18} />
                 {driveSaving ? "Saving to Google Drive…" : "Save to Google Drive"}
               </button>
               {driveFile ? (
-                <p className="export-step-note drive-save-note">
-                  Linked to <strong>{driveFile.fileName}</strong> in Google Drive — each save updates that same file.{" "}
-                  <a href={driveFileViewUrl(driveFile.fileId)} target="_blank" rel="noreferrer">
-                    View in Drive
-                  </a>
-                  {" · "}
-                  <button
-                    type="button"
-                    className="drive-link-button"
-                    title="Keep this version in Drive as its own separate file"
-                    onClick={() => onSaveToDrive({ copy: true })}
-                    disabled={driveSaving}
-                  >
-                    Save a copy
-                  </button>
-                </p>
+                <>
+                  <p className="panel-note">
+                    Linked to <strong>{driveFile.fileName}</strong> — each save updates this file.
+                  </p>
+                  <p className="panel-note panel-note-actions">
+                    <a href={driveFileViewUrl(driveFile.fileId)} target="_blank" rel="noreferrer">
+                      View in Drive
+                    </a>
+                    <span aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      className="drive-link-button"
+                      title="Keep this version in Drive as its own separate file"
+                      onClick={() => onSaveToDrive({ copy: true })}
+                      disabled={driveSaving}
+                    >
+                      Save a copy
+                    </button>
+                  </p>
+                </>
               ) : (
-                <p className="export-step-note">Signs into your Google account and saves this design into My Drive → SketchForge.</p>
+                <p className="panel-note">Saves this design into My Drive → SketchForge on your Google account.</p>
               )}
-            </>
+            </section>
           ) : null}
-          <button onClick={onSaveProject}>
-            <Download size={18} />
-            {driveConfigured ? "Download project (.sketchforge)" : "Save project (.sketchforge)"}
-          </button>
-          <p className="export-step-note">Project files reopen in SketchForge with editable shapes, groups, holes, and workspace settings.</p>
-          <p>{shapeCount} {scopeLabel} solid shape{shapeCount === 1 ? "" : "s"} ready to export.</p>
-          <PrintabilityPreflight report={preflight} />
-          <button onClick={() => onExport("stl")}>
-            <Download size={18} />
-            Download STL
-          </button>
-          <button onClick={() => onExport("obj")}>
-            <ToolbarExportIcon />
-            Download OBJ
-          </button>
-          <button onClick={onExportStep} disabled={stepExporting}>
-            <ToolbarExportIcon />
-            {stepExporting ? "Building STEP…" : "Download STEP (B-Rep)"}
-          </button>
-          <p className="export-step-note">STEP keeps boxes, cylinders, spheres and cones as exact CAD geometry (OpenCascade). Other shapes are skipped.</p>
+          <section className="panel-section">
+            <div className="panel-section-label">Project file</div>
+            <button onClick={onSaveProject}>
+              <Download size={18} />
+              {driveConfigured ? "Download project" : "Save project"}
+            </button>
+            <p className="panel-note">A .sketchforge file that reopens with everything still editable.</p>
+          </section>
+          <section className="panel-section">
+            <div className="panel-section-label">3D printing &amp; CAD</div>
+            <p className="panel-note">
+              {shapeCount} {scopeLabel} solid shape{shapeCount === 1 ? "" : "s"} ready to export.
+            </p>
+            <PrintabilityPreflight report={preflight} />
+            <div className="export-format-row">
+              <button title="Best for most 3D printing" onClick={() => onExport("stl")}>
+                STL
+              </button>
+              <button title="Mesh with named parts" onClick={() => onExport("obj")}>
+                OBJ
+              </button>
+              <button title="Exact CAD geometry (boxes, cylinders, spheres, cones)" onClick={onExportStep} disabled={stepExporting}>
+                {stepExporting ? "STEP…" : "STEP"}
+              </button>
+            </div>
+            <p className="panel-note">Use STL for 3D printing. STEP keeps simple shapes as exact CAD geometry for other CAD tools.</p>
+          </section>
         </div>
       ) : null}
       {panel === "repeat" ? <RepeatPanel onRepeat={onRepeat} /> : null}

@@ -2144,9 +2144,68 @@ button {
   background: #eef8fc;
 }
 
-.top-action-body .drive-save-note a {
+.panel-section {
+  display: grid;
+  gap: 8px;
+}
+
+.panel-section + .panel-section {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid #e4ecf2;
+}
+
+.panel-section-label {
+  color: #7b91a3;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.top-action-body .panel-note {
+  color: #62798c;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.top-action-body .panel-note strong {
+  color: #40586c;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.top-action-body .panel-note a {
   color: #0a6aad;
   font-weight: 800;
+}
+
+.panel-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.top-action-body .panel-primary-button {
+  color: #ffffff;
+  background: #0d99d6;
+  border-color: #0b86bc;
+}
+
+.top-action-body .panel-primary-button:hover {
+  background: #0b86bc;
+}
+
+.top-action-body .panel-primary-button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.export-format-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
 }
 
 .top-action-body .drive-link-button {
