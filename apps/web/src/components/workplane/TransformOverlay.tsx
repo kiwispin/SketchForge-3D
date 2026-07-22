@@ -59,6 +59,7 @@ export function TransformOverlay({
   onCancelRotationEdit,
 }: TransformOverlayProps) {
   const [hoveredGizmoAxis, setHoveredGizmoAxis] = useState<GizmoAxis | null>(null);
+  const [hoveredRotateKey, setHoveredRotateKey] = useState<string | null>(null);
   const marks = measureKey ? (box.dimensions[measureKey] ?? []) : [];
   const visibleMarks = (hideDimensionMarks ? [] : marks).filter((mark) => mark.key !== editingDimension?.key);
   const handleMeasureKey = (handle: TransformOverlayState["handles"][number]) => measureKeyForHandle(handle.kind, handle.key, box);
@@ -145,6 +146,16 @@ export function TransformOverlay({
               x2={shaft.x2}
               y2={shaft.y2}
             />
+          </g>
+        ))}
+        {(box.rotateArcs ?? []).map((arc) => (
+          <g key={`rotate-arc-${arc.key}`} className={`rotate-gizmo-arc ${hoveredRotateKey === arc.key ? "hovered" : ""}`}>
+            <path className="rotate-gizmo-arc-casing" d={arc.d} />
+            <path className="rotate-gizmo-head-casing" d={arc.arrow1} />
+            <path className="rotate-gizmo-head-casing" d={arc.arrow2} />
+            <path className="rotate-gizmo-arc-fg" d={arc.d} />
+            <path className="rotate-gizmo-head-fg" d={arc.arrow1} />
+            <path className="rotate-gizmo-head-fg" d={arc.arrow2} />
           </g>
         ))}
       </svg>
@@ -255,23 +266,26 @@ export function TransformOverlay({
           className={`rotate-handle ${handle.className}`}
           style={{ "--overlay-x": `${handle.x}px`, "--overlay-y": `${handle.y}px`, "--rotate-handle-angle": `${handle.angle}deg` } as CSSProperties}
           title="Rotate"
-          onPointerDown={(event) => onBeginTransform("rotate", handle.key, event)}
+          onPointerEnter={() => setHoveredRotateKey(handle.key)}
+          onPointerLeave={() => setHoveredRotateKey(null)}
+          onPointerDown={(event) => {
+            setHoveredRotateKey(handle.key);
+            onBeginTransform("rotate", handle.key, event);
+          }}
           onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
-          onPointerUp={onFinishTransform}
-          onPointerCancel={onFinishTransform}
+          onPointerUp={(event) => {
+            setHoveredRotateKey(null);
+            onFinishTransform(event);
+          }}
+          onPointerCancel={(event) => {
+            setHoveredRotateKey(null);
+            onFinishTransform(event);
+          }}
           onClick={(event) => {
             event.stopPropagation();
             onBeginRotationEdit(handle.key, handle.x + 34, handle.y - 28);
           }}
-        >
-          <span className="rotate-handle-icon" aria-hidden="true">
-            <svg viewBox="0 0 44 44" focusable="false">
-              <path className="rotate-arc" d="M7.9 20.87 A15 15 0 0 1 36.1 20.87" />
-              <path className="rotate-arrow" d="M5.51 27.45 L4.14 19.5 L11.66 22.24 Z" />
-              <path className="rotate-arrow" d="M38.49 27.45 L32.34 22.24 L39.86 19.5 Z" />
-            </svg>
-          </span>
-        </button>
+        />
       ))}
       {!hideDimensionMarks && rotationReadout ? (
         <div className="rotation-readout" style={{ "--overlay-x": `${rotationReadout.x}px`, "--overlay-y": `${rotationReadout.y}px` } as CSSProperties}>

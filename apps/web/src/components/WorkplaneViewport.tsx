@@ -4037,6 +4037,66 @@ function syncTransformOverlay(
     z: makePlaneView(zFaceCenter, xFootAxis, yFootAxis),
   };
 
+  // Resting rotation handles: a short arc of each axis's rotation ellipse,
+  // passing through the handle point and centered on the projected shape
+  // center. Because it lies in the real rotation plane (with foreshortening),
+  // it reads as "spin around this axis, this way" and previews the drag dial.
+  const buildRotateArc = (planeAxis: RotationAxis, handle: { x: number; y: number }) => {
+    const plane = rotationPlanes[planeAxis];
+    const det = plane.a * plane.d - plane.b * plane.c;
+    if (Math.abs(det) < 0.02) return null; // plane seen edge-on
+    const dx = handle.x - centerPoint.x;
+    const dy = handle.y - centerPoint.y;
+    // Solve [[a,c],[b,d]] · [cos;sin] = [dx;dy] for the handle's ellipse angle.
+    const cosPart = (plane.d * dx - plane.c * dy) / det;
+    const sinPart = (-plane.b * dx + plane.a * dy) / det;
+    const radius = Math.hypot(cosPart, sinPart);
+    if (radius < 0.001) return null;
+    const phiHandle = Math.atan2(sinPart, cosPart);
+    const ax = plane.a * radius;
+    const ay = plane.b * radius;
+    const bx = plane.c * radius;
+    const by = plane.d * radius;
+    const pointAt = (phi: number) => ({
+      x: centerPoint.x + Math.cos(phi) * ax + Math.sin(phi) * bx,
+      y: centerPoint.y + Math.cos(phi) * ay + Math.sin(phi) * by,
+    });
+    const tangentAt = (phi: number) => ({ x: -Math.sin(phi) * ax + Math.cos(phi) * bx, y: -Math.sin(phi) * ay + Math.cos(phi) * by });
+    const span = THREE.MathUtils.degToRad(30);
+    const steps = 10;
+    const start = phiHandle - span;
+    const end = phiHandle + span;
+    let d = "";
+    for (let i = 0; i <= steps; i += 1) {
+      const phi = start + ((end - start) * i) / steps;
+      const p = pointAt(phi);
+      d += `${i === 0 ? "M" : "L"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+    }
+    const arrowHead = (phi: number, direction: number) => {
+      const p = pointAt(phi);
+      const t = tangentAt(phi);
+      const tl = Math.hypot(t.x, t.y) || 1;
+      const ux = (t.x / tl) * direction;
+      const uy = (t.y / tl) * direction;
+      const px = -uy;
+      const py = ux;
+      const length = 8;
+      const width = 4.6;
+      const tip = { x: p.x + ux * length, y: p.y + uy * length };
+      const c1 = { x: p.x + px * width, y: p.y + py * width };
+      const c2 = { x: p.x - px * width, y: p.y - py * width };
+      return `M${tip.x.toFixed(2)} ${tip.y.toFixed(2)} L${c1.x.toFixed(2)} ${c1.y.toFixed(2)} L${c2.x.toFixed(2)} ${c2.y.toFixed(2)} Z`;
+    };
+    return { d, arrow1: arrowHead(start, -1), arrow2: arrowHead(end, 1) };
+  };
+  const rotateArcs = [
+    { key: "rotate-left", arc: buildRotateArc("x", rotateLeft) },
+    { key: "rotate-right", arc: buildRotateArc("z", rotateRight) },
+    { key: "rotate-bottom", arc: buildRotateArc("y", rotateBottom) },
+  ]
+    .filter((entry): entry is { key: string; arc: { d: string; arrow1: string; arrow2: string } } => entry.arc !== null)
+    .map((entry) => ({ key: entry.key, ...entry.arc }));
+
   const next = {
     id: frame.ids.join("|"),
     width: rect.width,
@@ -4065,6 +4125,7 @@ function syncTransformOverlay(
       { key: "rotate-right", className: "screen-right", x: rotateRight.x, y: rotateRight.y, angle: ROTATION_UPPER_HANDLE_ICON_ANGLE },
       { key: "rotate-bottom", className: "screen-bottom", x: rotateBottom.x, y: rotateBottom.y, angle: ROTATION_BOTTOM_HANDLE_ICON_ANGLE },
     ],
+    rotateArcs,
     dimensions: dimensionMarks,
     rotationWheel: rotationWheels.y,
     rotationWheels,
