@@ -25,6 +25,7 @@ import {
   getElevationMeasureKey,
   measureKeyForHandle,
   projectedMoveHandle,
+  projectedRotationArc,
   separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
@@ -896,8 +897,6 @@ function signedAngleAroundAxis(start: THREE.Vector3, current: THREE.Vector3, axi
 
 const ROTATION_HANDLE_SIDE_HYSTERESIS = 0.22;
 const ROTATION_HANDLE_DOMINANCE_HYSTERESIS = 0.18;
-const ROTATION_UPPER_HANDLE_ICON_ANGLE = 0;
-const ROTATION_BOTTOM_HANDLE_ICON_ANGLE = 0;
 
 function signedRotationSide(value: number, previous: RotationHandleSide | undefined, positiveSide: RotationHandleSide, negativeSide: RotationHandleSide) {
   if (previous === positiveSide && value > -ROTATION_HANDLE_SIDE_HYSTERESIS) {
@@ -3991,9 +3990,9 @@ function syncTransformOverlay(
     }
     return new THREE.Vector3(worldCenterX, y, worldMinZ);
   };
-  const rotateLeft = screenOffsetFromCenter(project(sidePoint(rotationSides.x, worldMaxY)), 24);
-  const rotateRight = screenOffsetFromCenter(project(sidePoint(rotationSides.z, worldMaxY)), 28);
-  const rotateBottom = screenOffsetFromCenter(project(sidePoint(rotationSides.y, worldMinY)), 34);
+  const rotateLeft = screenOffsetFromCenter(project(sidePoint(rotationSides.x, worldMaxY)), 38);
+  const rotateRight = screenOffsetFromCenter(project(sidePoint(rotationSides.z, worldMaxY)), 40);
+  const rotateBottom = screenOffsetFromCenter(project(sidePoint(rotationSides.y, worldMinY)), 50);
   const xFaceCenter = sidePoint(rotationSides.x, worldCenterY);
   const zFaceCenter = sidePoint(rotationSides.z, worldCenterY);
   const yFaceCenter = verticalBase;
@@ -4061,9 +4060,30 @@ function syncTransformOverlay(
       { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, angle: liftAngle * 180 / Math.PI, title: "Move up or down" },
     ],
     rotateHandles: [
-      { key: "rotate-left", className: "screen-left", x: rotateLeft.x, y: rotateLeft.y, angle: ROTATION_UPPER_HANDLE_ICON_ANGLE },
-      { key: "rotate-right", className: "screen-right", x: rotateRight.x, y: rotateRight.y, angle: ROTATION_UPPER_HANDLE_ICON_ANGLE },
-      { key: "rotate-bottom", className: "screen-bottom", x: rotateBottom.x, y: rotateBottom.y, angle: ROTATION_BOTTOM_HANDLE_ICON_ANGLE },
+      {
+        key: "rotate-x",
+        axis: "x" as const,
+        className: "axis-x",
+        arc: projectedRotationArc(rotationPlanes.x, rotateLeft),
+        editX: rotateLeft.x + 34,
+        editY: rotateLeft.y - 28,
+      },
+      {
+        key: "rotate-z",
+        axis: "z" as const,
+        className: "axis-z",
+        arc: projectedRotationArc(rotationPlanes.z, rotateRight),
+        editX: rotateRight.x + 34,
+        editY: rotateRight.y - 28,
+      },
+      {
+        key: "rotate-y",
+        axis: "y" as const,
+        className: "axis-y",
+        arc: projectedRotationArc(rotationPlanes.y, rotateBottom),
+        editX: rotateBottom.x + 34,
+        editY: rotateBottom.y - 28,
+      },
     ],
     dimensions: dimensionMarks,
     rotationWheel: rotationWheels.y,

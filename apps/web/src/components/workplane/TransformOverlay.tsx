@@ -18,6 +18,7 @@ export {
   getElevationMeasureKey,
   measureKeyForHandle,
   projectedMoveHandle,
+  projectedRotationArc,
   separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
@@ -86,6 +87,10 @@ export function TransformOverlay({
   const pinnedWheel = pinnedRotationWheelView?.axis === rotationWheelAxis ? pinnedRotationWheelView : null;
   const plane = pinnedWheel?.plane ?? box.rotationPlanes[rotationWheelAxis];
   const wheel = pinnedWheel?.wheel ?? box.rotationWheels[rotationWheelAxis] ?? box.rotationWheel;
+  const rotationPath = (points: Array<{ x: number; y: number }>) =>
+    points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
+  const arrowPoints = (points: Array<{ x: number; y: number }>) =>
+    points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
   return (
     <div className={`transform-overlay ${hideSelectionChrome ? "hide-selection-chrome" : ""}`} aria-hidden="true">
       {showRotationWheel && wheel && plane ? (
@@ -249,28 +254,31 @@ export function TransformOverlay({
           </button>
         );
       })}
-      {box.rotateHandles.map((handle) => (
-        <button
-          key={handle.key}
-          className={`rotate-handle ${handle.className}`}
-          style={{ "--overlay-x": `${handle.x}px`, "--overlay-y": `${handle.y}px`, "--rotate-handle-angle": `${handle.angle}deg` } as CSSProperties}
-          title="Rotate"
-          onPointerDown={(event) => onBeginTransform("rotate", handle.key, event)}
-          onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
-          onPointerUp={onFinishTransform}
-          onPointerCancel={onFinishTransform}
-          onClick={(event) => {
-            event.stopPropagation();
-            onBeginRotationEdit(handle.key, handle.x + 34, handle.y - 28);
-          }}
-        >
-          <span className="rotate-handle-icon" aria-hidden="true">
-            <svg viewBox="0 0 150 150" focusable="false">
-              <path d="m145.4 67.6-12.1 7.7c-6.6-10.8-22.1-27.4-43.6-31.5-3.7-0.7-8-1.3-14.1-1.3-21.5 0-41.5 9.8-55.1 28.9l-3.3 4.1-12.4-7.9c-1.3-0.7-3 0.1-2.9 1.8l1.1 36.1c0.3 1.7 2 2.5 3.1 1.7l30.2-17.6c1.4-0.6 1.4-2.9 0-3.5l-12.1-6.7c9.7-14.8 26.4-28.5 51.2-28.6 20.5-0.1 37.4 9.8 50.7 28.6l-12 6.5c-1.6 0.6-1.5 3.3 0 3.8l30.2 17.4c1.4 0.7 3 0 3-1.7l0.8-36c0-1.5-1.5-2.6-2.7-1.8z" />
-            </svg>
-          </span>
-        </button>
-      ))}
+      <svg className="rotation-handle-layer" viewBox={`0 0 ${box.width} ${box.height}`} preserveAspectRatio="none">
+        {box.rotateHandles.map((handle) => {
+          const path = rotationPath(handle.arc.points);
+          return (
+            <g key={handle.key} className={`rotation-arc-handle ${handle.className}`}>
+              <title>{`Rotate around ${handle.axis.toUpperCase()} axis`}</title>
+              <path
+                className="rotation-arc-hit"
+                data-rotation-axis={handle.axis}
+                d={path}
+                onPointerDown={(event) => onBeginTransform("rotate", handle.key, event)}
+                onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
+                onPointerUp={onFinishTransform}
+                onPointerCancel={onFinishTransform}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onBeginRotationEdit(handle.key, handle.editX, handle.editY);
+                }}
+              />
+              <path className="rotation-arc-line" d={path} />
+              <polygon className="rotation-arc-arrow" points={arrowPoints(handle.arc.arrow)} />
+            </g>
+          );
+        })}
+      </svg>
       {!hideDimensionMarks && rotationReadout ? (
         <div className="rotation-readout" style={{ "--overlay-x": `${rotationReadout.x}px`, "--overlay-y": `${rotationReadout.y}px` } as CSSProperties}>
           {rotationReadout.text}
