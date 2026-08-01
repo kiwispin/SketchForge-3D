@@ -932,28 +932,76 @@ type ScreenRotationHandleSlots = {
   y: { x: number; y: number };
 };
 
+function convexHullPoints(points: Array<{ x: number; y: number }>) {
+  const sorted = points
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => ({ x: point.x, y: point.y }))
+    .sort((a, b) => a.x - b.x || a.y - b.y)
+    .filter((point, index, all) => index === 0 || point.x !== all[index - 1].x || point.y !== all[index - 1].y);
+  if (sorted.length <= 2) {
+    return sorted;
+  }
+  const cross = (origin: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+    (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+  const lower: Array<{ x: number; y: number }> = [];
+  sorted.forEach((point) => {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+      lower.pop();
+    }
+    lower.push(point);
+  });
+  const upper: Array<{ x: number; y: number }> = [];
+  [...sorted].reverse().forEach((point) => {
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+      upper.pop();
+    }
+    upper.push(point);
+  });
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
 function screenRotationHandleSlots(
   points: Array<{ x: number; y: number }>,
   rect: DOMRect,
 ): ScreenRotationHandleSlots {
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
+  const hull = convexHullPoints(points);
+  const source = hull.length > 0 ? hull : points;
+  const minX = Math.min(...source.map((point) => point.x));
+  const maxX = Math.max(...source.map((point) => point.x));
+  const minY = Math.min(...source.map((point) => point.y));
+  const maxY = Math.max(...source.map((point) => point.y));
   const width = Math.max(1, maxX - minX);
   const height = Math.max(1, maxY - minY);
-  const topInset = Math.max(14, Math.min(68, width * 0.24));
-  const verticalGap = clamp(height * 0.05, 10, 24);
-  const horizontalGap = clamp(width * 0.03, 8, 16);
-  const topY = minY - verticalGap;
-  const bottomY = maxY - verticalGap;
-  const upperY = topY >= 28 ? topY : maxY + verticalGap;
-  const lowerY = bottomY <= rect.height - 28 ? bottomY : minY - verticalGap;
-  const rightX = maxX + horizontalGap <= rect.width - 28 ? maxX + horizontalGap : minX - horizontalGap;
+  const center = source.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+  center.x /= source.length;
+  center.y /= source.length;
+  const upperBand = source.filter((point) => point.y <= minY + height * 0.52);
+  const lowerBand = source.filter((point) => point.y >= maxY - height * 0.52);
+  const upper = upperBand.length > 0 ? upperBand : source;
+  const lower = lowerBand.length > 0 ? lowerBand : source;
+  const topLeft = upper.reduce((best, point) => (point.x < best.x || (point.x === best.x && point.y < best.y) ? point : best));
+  const topRight = upper.reduce((best, point) => (point.x > best.x || (point.x === best.x && point.y < best.y) ? point : best));
+  const bottomRight = lower.reduce((best, point) => (point.x > best.x || (point.x === best.x && point.y > best.y) ? point : best));
+  const gap = clamp(Math.min(width, height) * 0.06, 10, 24);
+  const outward = (point: { x: number; y: number }) => {
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    const length = Math.max(1, Math.hypot(dx, dy));
+    return { x: point.x + (dx / length) * gap, y: point.y + (dy / length) * gap };
+  };
+  const topLeftSlot = outward(topLeft);
+  const topRightSlot = outward(topRight);
+  const bottomRightSlot = outward(bottomRight);
+  const fallbackTopY = minY - gap;
+  const fallbackBottomY = maxY - gap;
+  const topLeftY = topLeftSlot.y >= 28 ? topLeftSlot.y : fallbackTopY;
+  const topRightY = topRightSlot.y >= 28 ? topRightSlot.y : fallbackTopY;
+  const lowerY = bottomRightSlot.y <= rect.height - 28 ? bottomRightSlot.y : fallbackBottomY;
+  const rightX = bottomRightSlot.x <= rect.width - 28 ? bottomRightSlot.x : minX - gap;
 
   return {
-    x: { x: minX + topInset, y: upperY },
-    z: { x: maxX - topInset, y: upperY },
+    x: { x: topLeftSlot.x, y: topLeftY },
+    z: { x: topRightSlot.x, y: topRightY },
     y: { x: rightX, y: lowerY },
   };
 }
@@ -3826,11 +3874,19 @@ function syncTransformOverlay(
       y: ((1 - projected.y) / 2) * rect.height,
     };
   };
-  const projectedSelectionPoints = projectedCorners.map(({ projected }) => ({
+  const projectedFramePoints = projectedCorners.map(({ projected }) => ({
     x: ((projected.x + 1) / 2) * rect.width,
     y: ((1 - projected.y) / 2) * rect.height,
   }));
-  const rotationSlots = screenRotationHandleSlots(projectedSelectionPoints, rect);
+  const projectedShapePoints = selectedIds.flatMap((id) => {
+    const shape = shapes.find((entry) => entry.id === id && !entry.hidden);
+    const shapeFrame = shape ? selectionFrameForShapes([shape], [shape.id]) : null;
+    if (!shapeFrame) {
+      return [];
+    }
+    return selectionFrameCorners(shapeFrame).map(project);
+  });
+  const rotationSlots = screenRotationHandleSlots(projectedShapePoints.length > 0 ? projectedShapePoints : projectedFramePoints, rect);
 
   const worldMinY = Math.min(...corners.map((corner) => corner.y));
   const worldMaxY = Math.max(...corners.map((corner) => corner.y));
