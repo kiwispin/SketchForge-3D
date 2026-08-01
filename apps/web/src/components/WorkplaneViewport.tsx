@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, Minus, Plus, Trash2 } from "lucide-react";
+import { Box as BoxIcon, Home, Maximize2, Minus, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import * as THREE from "three";
 import { Brush, Evaluator, HOLLOW_INTERSECTION } from "three-bvh-csg";
@@ -19,13 +19,16 @@ import { ShapeInspector, SnapGridControl, type ShapeInspectorUpdateOptions } fro
 import { WorkspaceSettingsModal } from "@/components/workplane/WorkspaceSettingsModal";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
 import { cleanNearZero, cleanRotationDegrees, constrainedAxisMoveDelta, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
+import { planeBasisMatrix, workplanePlane, type WorkplaneOrientation, type WorkplanePlane } from "@/lib/workplanePlanes";
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
   getElevationMeasureKey,
   measureKeyForHandle,
   projectedMoveHandle,
-  screenRotationWheel,
+  projectedRotationWheel,
+  rotationWheelLocalRadius,
+  rotationWheelPoint,
   separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
@@ -138,7 +141,7 @@ type WorkplaneViewportProps = {
   initialSnap?: GridSize;
   initialWorkspace?: WorkplaneWorkspaceSettings;
   workspaceSettingsKey?: string | null;
-  onAddShape: (shape: ShapeAsset, point?: { x: number; z: number; elevation?: number }) => void;
+  onAddShape: (shape: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotationX?: number; rotationZ?: number; surface?: { orientation: WorkplaneOrientation; x: number; y: number; z: number } }) => void;
   onAlignAnchorChange: (id: string) => void;
   onAlignPreview: (axis: AlignAxis, target: AlignTarget) => void;
   onAlignPreviewClear: () => void;
@@ -165,6 +168,7 @@ type WorkplaneViewportProps = {
 
 type WorkspaceSettings = WorkplaneWorkspaceSettings;
 type ViewCubeFace = "top" | "bottom" | "front" | "back" | "right" | "left";
+type ProjectionMode = "perspective" | "orthographic";
 
 function readSavedWorkspaceDefault(key: string | null) {
   if (!key || typeof window === "undefined") {
@@ -190,7 +194,7 @@ function readSavedWorkspaceDefault(key: string | null) {
 type ThreeState = {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
+  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   controls: OrbitControls;
   workplaneLayer: THREE.Group;
   shapeLayer: THREE.Group;
@@ -1217,14 +1221,18 @@ export function WorkplaneViewport({
   const [pinnedMeasureKey, setPinnedMeasureKey] = useState<string | null>(null);
   const [rotationReadout, setRotationReadout] = useState<RotationReadout>(null);
   const [activeRotationWheel, setActiveRotationWheel] = useState(false);
+  const [hoveredRotationWheelAxis, setHoveredRotationWheelAxis] = useState<RotationAxis | null>(null);
   const [activeTransformKind, setActiveTransformKind] = useState<TransformHandleKind | null>(null);
   const [rotationWheelAxis, setRotationWheelAxis] = useState<RotationAxis>("y");
   const [pinnedRotationWheelView, setPinnedRotationWheelView] = useState<PinnedRotationWheelView | null>(null);
   const [editingDimension, setEditingDimension] = useState<EditingDimension>(null);
   const [editingRotation, setEditingRotation] = useState<EditingRotation>(null);
   const [rulerMode, setRulerMode] = useState(false);
+  const [originRulerMode, setOriginRulerMode] = useState(false);
   const [rulerModel, setRulerModel] = useState<RulerModel>({ points: [], segments: [], startPointId: null, hover: null });
   const [rulerOverlay, setRulerOverlay] = useState<RulerOverlayState | null>(null);
+  const [activeWorkplane, setActiveWorkplane] = useState<WorkplanePlane>(() => workplanePlane("ground"));
+  const [projectionMode, setProjectionMode] = useState<ProjectionMode>("perspective");
   const hostRef = useRef<HTMLDivElement | null>(null);
   const threeRef = useRef<ThreeState | null>(null);
   const shapesRef = useRef(shapes);
@@ -1245,6 +1253,8 @@ export function WorkplaneViewport({
   const alignOverlayRef = useRef<AlignOverlayState | null>(null);
   const mirrorOverlayRef = useRef<MirrorOverlayState | null>(null);
   const rulerModeRef = useRef(false);
+  const originRulerModeRef = useRef(false);
+  const activeWorkplaneRef = useRef(activeWorkplane);
   const rulerModelRef = useRef(rulerModel);
   const rulerOverlayRef = useRef<RulerOverlayState | null>(null);
   const rulerIdRef = useRef(0);
@@ -1459,6 +1469,18 @@ export function WorkplaneViewport({
   }, [rulerMode]);
 
   useEffect(() => {
+    originRulerModeRef.current = originRulerMode;
+  }, [originRulerMode]);
+
+  useEffect(() => {
+    activeWorkplaneRef.current = activeWorkplane;
+    rebuildWorkplane(threeRef.current, workspaceRef.current, activeWorkplane);
+    if (threeRef.current) {
+      threeRef.current.needsRender = true;
+    }
+  }, [activeWorkplane]);
+
+  useEffect(() => {
     rulerModelRef.current = rulerModel;
     if (threeRef.current) {
       syncRulerOverlay(threeRef.current, rulerModel, rulerOverlayRef, setRulerOverlay, workspaceRef.current.accuracy);
@@ -1476,7 +1498,7 @@ export function WorkplaneViewport({
 
   useEffect(() => {
     workspaceRef.current = workspace;
-    rebuildWorkplane(threeRef.current, workspace);
+    rebuildWorkplane(threeRef.current, workspace, activeWorkplaneRef.current);
     if (threeRef.current) {
       syncTransformOverlay(
         threeRef.current,
@@ -1655,6 +1677,30 @@ export function WorkplaneViewport({
     };
   }, [toRawPlanePoint]);
   const toPlanePoint = useCallback((clientX: number, clientY: number) => toPlanePointAtY(clientX, clientY, 0), [toPlanePointAtY]);
+  const toWorkplanePlacementPoint = useCallback((clientX: number, clientY: number) => {
+    const state = threeRef.current;
+    const plane = activeWorkplaneRef.current;
+    if (!state) {
+      return null;
+    }
+    const planeEquation = new THREE.Plane().setFromNormalAndCoplanarPoint(plane.normal, plane.origin);
+    const hit = toRawPlanePoint(clientX, clientY, planeEquation);
+    if (!hit) {
+      return null;
+    }
+    const step = snapStep(snapRef.current);
+    const localU = clamp(snapValue(hit.clone().sub(plane.origin).dot(plane.u), step), -workspaceRef.current.width / 2, workspaceRef.current.width / 2);
+    const localV = clamp(snapValue(hit.clone().sub(plane.origin).dot(plane.v), step), -workspaceRef.current.depth / 2, workspaceRef.current.depth / 2);
+    const snapped = plane.origin.clone().addScaledVector(plane.u, localU).addScaledVector(plane.v, localV);
+    return {
+      x: snapped.x,
+      z: snapped.z,
+      elevation: snapped.y,
+      rotationX: plane.rotationX,
+      rotationZ: plane.rotationZ,
+      surface: { orientation: plane.orientation, x: snapped.x, y: snapped.y, z: snapped.z },
+    };
+  }, [toRawPlanePoint]);
 
   const storeRulerModel = useCallback((next: RulerModel) => {
     rulerModelRef.current = next;
@@ -1709,6 +1755,11 @@ export function WorkplaneViewport({
     if (!active) {
       const current = rulerModelRef.current;
       storeRulerModel({ ...current, startPointId: null, hover: null });
+    } else if (originRulerModeRef.current) {
+      const current = rulerModelRef.current;
+      const origin = current.points.find((point) => Math.abs(point.x) < 0.0001 && Math.abs(point.z) < 0.0001) ?? { id: `ruler-origin-${++rulerIdRef.current}`, x: 0, z: 0 };
+      const points = current.points.some((point) => point.id === origin.id) ? current.points : [...current.points, origin];
+      storeRulerModel({ ...current, points, startPointId: origin.id, hover: null });
     }
   }, [storeRulerModel]);
 
@@ -1979,9 +2030,12 @@ export function WorkplaneViewport({
       };
       if (kind === "rotate" && state) {
         const renderRect = state.renderer.domElement.getBoundingClientRect();
+        const readoutPoint = wheel
+          ? rotationWheelPoint(wheel, 0, wheel.radius + 24)
+          : { x: event.clientX - renderRect.left + 18, y: event.clientY - renderRect.top - 18 };
         setRotationReadout({
-          x: wheel?.x ?? event.clientX - renderRect.left + 18,
-          y: wheel ? wheel.y - wheel.radius - 24 : event.clientY - renderRect.top - 18,
+          x: readoutPoint.x,
+          y: readoutPoint.y,
           text: `${Math.round(rotationValueForAxis(shape, rotationAxis))}°`,
           angle: 0,
         });
@@ -2017,6 +2071,7 @@ export function WorkplaneViewport({
 
       const shape = transform.startShape;
       const step = snapStep(snapRef.current);
+      const state = threeRef.current;
       if (transform.kind === "move") {
         const point = transform.movePlane ? toRawPlanePoint(clientX, clientY, transform.movePlane) : null;
         if (!point || !transform.moveStartPoint || !transform.moveAxis) {
@@ -2038,6 +2093,20 @@ export function WorkplaneViewport({
             ? { x: cleanNearZero(item.startShape.x + delta, 0.0005) }
             : { z: cleanNearZero(item.startShape.z + delta, 0.0005) }),
         );
+        const state = threeRef.current;
+        if (state) {
+          const axisLabel = movingAlongX ? "X" : "Z";
+          const readoutWorldPoint = transform.selectionFrame.center
+            .clone()
+            .add(transform.moveAxis.clone().multiplyScalar(Math.max(transform.selectionFrame.width, transform.selectionFrame.depth, 8) * 0.22));
+          const readoutPoint = projectToScreen(readoutWorldPoint, state);
+          setRotationReadout({
+            x: readoutPoint.x + 18,
+            y: readoutPoint.y - 24,
+            text: `Δ${axisLabel} ${formatMeasure(delta, workspaceRef.current.accuracy)}`,
+            angle: 0,
+          });
+        }
         return true;
       }
 
@@ -2071,6 +2140,15 @@ export function WorkplaneViewport({
             elevation: cleanNearZero(clamp(elevation, MIN_ELEVATION, MAX_ELEVATION), 0.0005),
           });
         });
+        if (state) {
+          const readoutPoint = projectToScreen(new THREE.Vector3(transform.selectionFrame.center.x, draggedWorldY, transform.selectionFrame.center.z), state);
+          setRotationReadout({
+            x: readoutPoint.x + 22,
+            y: readoutPoint.y - 26,
+            text: `ΔH ${formatMeasure(nextWorldHeight - yBounds.height, workspaceRef.current.accuracy)}`,
+            angle: 0,
+          });
+        }
         return true;
       }
 
@@ -2114,8 +2192,25 @@ export function WorkplaneViewport({
         if (transform.items.length === 1) {
           const next = resizeShapeFromFrameHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step);
           onUpdateShape(transform.id, next);
+          if (state) {
+            const readoutPoint = projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state);
+            const startWidth = shapeWidth(transform.items[0].startShape);
+            const startDepth = shapeDepth(transform.items[0].startShape);
+            const startHeight = transform.items[0].startShape.height;
+            setRotationReadout({
+              x: readoutPoint.x + 20,
+              y: readoutPoint.y - 24,
+              text: `ΔW ${formatMeasure((next.width ?? startWidth) - startWidth, workspaceRef.current.accuracy)} · ΔD ${formatMeasure((next.depth ?? startDepth) - startDepth, workspaceRef.current.accuracy)} · ΔH ${formatMeasure((next.height ?? startHeight) - startHeight, workspaceRef.current.accuracy)}`,
+              angle: 0,
+            });
+          }
         } else {
-          resizeSelectionFromHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step).forEach(({ id, patch }) => onUpdateShape(id, patch));
+          const patches = resizeSelectionFromHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step);
+          patches.forEach(({ id, patch }) => onUpdateShape(id, patch));
+          if (state) {
+            const readoutPoint = projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state);
+            setRotationReadout({ x: readoutPoint.x + 20, y: readoutPoint.y - 24, text: "Δ selection size", angle: 0 });
+          }
         }
         return true;
       }
@@ -2125,7 +2220,6 @@ export function WorkplaneViewport({
         return true;
       }
 
-      const state = threeRef.current;
       const rotationCenter = transform.rotationScreenCenter ?? transform.wheelCenter;
       if (!state || !rotationCenter) {
         return true;
@@ -2141,7 +2235,9 @@ export function WorkplaneViewport({
         currentPoint && transform.rotationStartVector && transform.rotationStartVector.lengthSq() > 0.000001
           ? THREE.MathUtils.radToDeg(signedAngleAroundAxis(transform.rotationStartVector, currentPoint.sub(planeCenter), axisVector))
           : THREE.MathUtils.radToDeg(unwrapRadians(screenAngle(localClientX, localClientY, rotationCenter) - transform.startScreenAngle)) * (transform.rotationScreenSign ?? 1);
-      const distance = transform.wheelCenter ? Math.hypot(localClientX - transform.wheelCenter.x, localClientY - transform.wheelCenter.y) : Number.POSITIVE_INFINITY;
+      const distance = transform.wheelCenter
+        ? rotationWheelLocalRadius(transform.wheelCenter, { x: localClientX, y: localClientY })
+        : Number.POSITIVE_INFINITY;
       let delta: number;
       if (shiftKey) {
         delta = Math.round(rawDelta / 45) * 45;
@@ -2154,9 +2250,12 @@ export function WorkplaneViewport({
       const deltaQuaternion = new THREE.Quaternion().setFromAxisAngle(axisVector, THREE.MathUtils.degToRad(delta));
       const rotationDelta = deltaQuaternion.clone();
       if (state) {
+        const readoutPoint = transform.wheelCenter
+          ? rotationWheelPoint(transform.wheelCenter, delta, transform.wheelCenter.radius + 24)
+          : { x: localClientX + 18, y: localClientY - 18 };
         setRotationReadout({
-          x: transform.wheelCenter ? transform.wheelCenter.x : localClientX + 18,
-          y: transform.wheelCenter ? transform.wheelCenter.y - transform.wheelCenter.radius - 24 : localClientY - 18,
+          x: readoutPoint.x,
+          y: readoutPoint.y,
           text: `${Number(delta.toFixed(1))}°`,
           angle: delta,
         });
@@ -2201,6 +2300,7 @@ export function WorkplaneViewport({
     }
     transformRef.current = null;
     setActiveRotationWheel(false);
+    setHoveredRotationWheelAxis(null);
     setActiveTransformKind(null);
     setPinnedRotationWheelView(null);
     setRotationReadout(null);
@@ -2857,10 +2957,10 @@ export function WorkplaneViewport({
       if (!asset) {
         return;
       }
-      const point = toPlanePoint(event.clientX, event.clientY);
-      onAddShape(asset, point ? { ...point, elevation: placementElevationRef.current } : { x: 0, z: 0, elevation: placementElevationRef.current });
+      const point = toWorkplanePlacementPoint(event.clientX, event.clientY);
+      onAddShape(asset, point?.surface ? point : point ? { ...point, elevation: placementElevationRef.current } : { x: 0, z: 0, elevation: placementElevationRef.current });
     },
-    [onAddShape, toPlanePoint],
+    [onAddShape, toWorkplanePlacementPoint],
   );
 
   const resetView = useCallback(() => {
@@ -2871,6 +2971,48 @@ export function WorkplaneViewport({
     }
   }, []);
 
+  const fitSelection = useCallback(() => {
+    const state = threeRef.current;
+    const frame = selectionFrameForShapes(shapesRef.current, selectedIdsRef.current);
+    if (!state || !frame) {
+      resetView();
+      return;
+    }
+
+    const currentDirection = state.camera.position.clone().sub(state.controls.target);
+    if (currentDirection.lengthSq() < 0.0001) {
+      currentDirection.copy(CAMERA_HOME).sub(CAMERA_TARGET);
+    }
+    currentDirection.normalize();
+
+    const radius = selectionFrameCorners(frame).reduce(
+      (maximum, corner) => Math.max(maximum, corner.distanceTo(frame.center)),
+      MIN_SHAPE_SIZE,
+    );
+    const target = frame.center.clone();
+
+    state.controls.target.copy(target);
+    if (state.camera instanceof THREE.OrthographicCamera) {
+      const rect = state.renderer.domElement.getBoundingClientRect();
+      const halfWidth = Math.max(MIN_SHAPE_SIZE, frame.width * 0.64);
+      const halfHeight = Math.max(MIN_SHAPE_SIZE, frame.height * 0.64);
+      const zoom = Math.min(rect.width / (halfWidth * 2), rect.height / (halfHeight * 2));
+      state.camera.zoom = clamp(zoom, 0.05, 50);
+      state.camera.position.copy(target).add(currentDirection.multiplyScalar(Math.max(22, state.camera.position.distanceTo(state.controls.target))));
+    } else {
+      const verticalHalfAngle = THREE.MathUtils.degToRad(state.camera.fov) / 2;
+      const horizontalHalfAngle = Math.atan(Math.tan(verticalHalfAngle) * Math.max(0.01, state.camera.aspect));
+      const verticalDistance = radius / Math.max(0.01, Math.tan(verticalHalfAngle));
+      const horizontalDistance = radius / Math.max(0.01, Math.tan(horizontalHalfAngle));
+      const distance = clamp(Math.max(verticalDistance, horizontalDistance) * 1.28, 22, 4200);
+      state.camera.position.copy(target).add(currentDirection.multiplyScalar(distance));
+    }
+    state.camera.lookAt(target);
+    state.camera.updateProjectionMatrix();
+    state.controls.update();
+    state.needsRender = true;
+  }, [resetView]);
+
   const setViewCubeFace = useCallback((face: ViewCubeFace) => {
     const state = threeRef.current;
     if (!state) {
@@ -2879,6 +3021,32 @@ export function WorkplaneViewport({
     setCameraToViewFace(state, face);
     syncViewCube(state, viewCubeRef.current);
   }, []);
+
+  const toggleProjectionMode = useCallback(() => {
+    const nextMode: ProjectionMode = projectionMode === "perspective" ? "orthographic" : "perspective";
+    const state = threeRef.current;
+    if (state) {
+      setCameraProjection(state, nextMode);
+    }
+    setProjectionMode(nextMode);
+  }, [projectionMode]);
+
+  const selectWorkplane = useCallback((orientation: WorkplaneOrientation) => {
+    const frame = selectionFrameForShapes(shapesRef.current, selectedIdsRef.current);
+    const corners = frame ? selectionFrameCorners(frame) : [];
+    const values = {
+      x: corners.length ? corners.map((point) => point.x) : [0],
+      y: corners.length ? corners.map((point) => point.y) : [0],
+      z: corners.length ? corners.map((point) => point.z) : [0],
+    };
+    const origin = new THREE.Vector3(
+      orientation === "right" ? Math.max(...values.x) : orientation === "left" ? Math.min(...values.x) : frame?.center.x ?? 0,
+      orientation === "top" ? Math.max(...values.y) : orientation === "bottom" ? Math.min(...values.y) : frame?.center.y ?? 0,
+      orientation === "front" ? Math.max(...values.z) : orientation === "back" ? Math.min(...values.z) : frame?.center.z ?? 0,
+    );
+    setActiveWorkplane(workplanePlane(orientation, orientation === "ground" ? new THREE.Vector3(0, 0, 0) : origin));
+    onWorkplaneModeChange(true);
+  }, [onWorkplaneModeChange]);
 
   const zoomCamera = useCallback((scale: number) => {
     const state = threeRef.current;
@@ -2900,10 +3068,34 @@ export function WorkplaneViewport({
     rulerModeRef.current = next;
     setRulerMode(next);
     const current = rulerModelRef.current;
-    storeRulerModel({ ...current, startPointId: null, hover: null });
+    if (next && originRulerModeRef.current) {
+      const origin = current.points.find((point) => Math.abs(point.x) < 0.0001 && Math.abs(point.z) < 0.0001) ?? { id: `ruler-origin-${++rulerIdRef.current}`, x: 0, z: 0 };
+      const points = current.points.some((point) => point.id === origin.id) ? current.points : [...current.points, origin];
+      storeRulerModel({ ...current, points, startPointId: origin.id, hover: null });
+    } else {
+      storeRulerModel({ ...current, startPointId: null, hover: null });
+    }
     if (next) {
       onWorkplaneModeChange(false);
       onSelectShape(null);
+    }
+  }, [onSelectShape, onWorkplaneModeChange, storeRulerModel]);
+
+  const toggleOriginRulerMode = useCallback(() => {
+    const next = !originRulerModeRef.current;
+    originRulerModeRef.current = next;
+    setOriginRulerMode(next);
+    if (next) {
+      const current = rulerModelRef.current;
+      const origin = current.points.find((point) => Math.abs(point.x) < 0.0001 && Math.abs(point.z) < 0.0001) ?? { id: `ruler-origin-${++rulerIdRef.current}`, x: 0, z: 0 };
+      const points = current.points.some((point) => point.id === origin.id) ? current.points : [...current.points, origin];
+      storeRulerModel({ ...current, points, startPointId: origin.id, hover: null });
+      rulerModeRef.current = true;
+      setRulerMode(true);
+      onWorkplaneModeChange(false);
+      onSelectShape(null);
+    } else if (rulerModeRef.current) {
+      storeRulerModel({ ...rulerModelRef.current, startPointId: null, hover: null });
     }
   }, [onSelectShape, onWorkplaneModeChange, storeRulerModel]);
 
@@ -2993,9 +3185,19 @@ export function WorkplaneViewport({
       } else if (event.key === "Escape" && rulerModeRef.current) {
         event.preventDefault();
         setRulerActive(false);
-      } else if (key === "f" || event.key === "Home") {
+      } else if (key === "f") {
+        event.preventDefault();
+        if (selectedIdsRef.current.length > 0) {
+          fitSelection();
+        } else {
+          resetView();
+        }
+      } else if (event.key === "Home") {
         event.preventDefault();
         resetView();
+      } else if (key === "o") {
+        event.preventDefault();
+        toggleProjectionMode();
       } else if (event.key === "+" || event.key === "=") {
         event.preventDefault();
         zoomCamera(0.72);
@@ -3007,7 +3209,7 @@ export function WorkplaneViewport({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [resetView, setRulerActive, undoRuler, zoomCamera]);
+  }, [fitSelection, resetView, setRulerActive, toggleProjectionMode, undoRuler, zoomCamera]);
 
   return (
     <main className="workplane-stage">
@@ -3026,6 +3228,12 @@ export function WorkplaneViewport({
         <button aria-label="Home" onClick={resetView}>
           <Home size={28} />
         </button>
+        <button aria-label="Fit selection" title="Fit selection (F)" onClick={fitSelection}>
+          <Maximize2 size={24} />
+        </button>
+        <button className={projectionMode === "orthographic" ? "active" : ""} aria-label={projectionMode === "orthographic" ? "Use perspective view" : "Use orthographic view"} title={projectionMode === "orthographic" ? "Perspective view" : "Orthographic view"} aria-pressed={projectionMode === "orthographic"} onClick={toggleProjectionMode}>
+          <BoxIcon size={23} />
+        </button>
         <button aria-label="Zoom in" onClick={() => zoomCamera(0.7)}>
           <Plus size={33} />
         </button>
@@ -3035,8 +3243,56 @@ export function WorkplaneViewport({
         <button className={rulerMode ? "active" : ""} aria-label="Ruler" title="Ruler" aria-pressed={rulerMode} onClick={toggleRulerMode}>
           <RulerGlyph />
         </button>
+        <button className={originRulerMode ? "active" : ""} aria-label="Ruler from origin" title="Ruler from origin" aria-pressed={originRulerMode} onClick={toggleOriginRulerMode}>
+          <span className="origin-ruler-glyph">0</span>
+        </button>
         {rulerModel.points.length > 0 ? <button aria-label="Clear ruler" title="Clear ruler" onClick={clearRuler}><Trash2 size={23} /></button> : null}
       </div>
+      {workplaneMode ? (
+        <div
+          className="workplane-picker"
+          aria-label="Oriented workplane picker"
+          style={{
+            position: "absolute",
+            top: 132,
+            left: 16,
+            zIndex: 1000,
+            pointerEvents: "auto",
+            width: 220,
+            padding: 10,
+            color: "#294760",
+            background: "rgba(250, 252, 253, 0.96)",
+            border: "1px solid #cfdce5",
+            borderRadius: 6,
+            boxShadow: "0 10px 24px rgba(26, 47, 66, 0.16)",
+          }}
+          onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onPointerUp={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onMouseUp={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
+        >
+          <strong>{activeWorkplane.label}</strong>
+          <div className="workplane-picker-grid">
+            {(["ground", "top", "front", "right", "back", "left", "bottom"] as WorkplaneOrientation[]).map((orientation) => {
+              const plane = workplanePlane(orientation);
+              return (
+                <button
+                  key={orientation}
+                  type="button"
+                  className={activeWorkplane.orientation === orientation ? "active" : ""}
+                  aria-label={`Set workplane ${plane.label}`}
+                  aria-pressed={activeWorkplane.orientation === orientation}
+                  onClick={(event) => { event.preventDefault(); event.stopPropagation(); selectWorkplane(orientation); }}
+                >
+                  {plane.label.replace(" face (XY)", "").replace(" face (XZ)", "").replace(" face (YZ)", "")}
+                </button>
+              );
+            })}
+          </div>
+          <small>Choose a face plane, then drag a shape onto it.</small>
+        </div>
+      ) : null}
 
       <section className={`workplane-wrap ${workplaneMode ? "placing-workplane" : ""} ${rulerMode ? "ruler-mode" : ""} ${modifierActive ? "modifier-edge-pick" : ""}`} aria-label="Workplane">
         <div className="workplane-plane">
@@ -3062,8 +3318,8 @@ export function WorkplaneViewport({
               editingDimension={editingDimension}
               editingRotation={editingRotation}
               rotationReadout={rotationReadout}
-              showRotationWheel={activeRotationWheel}
-              hideSelectionChrome={activeTransformKind === "rotate"}
+              showRotationWheel={activeRotationWheel || hoveredRotationWheelAxis !== null}
+              hideSelectionChrome={false}
               hideDimensionMarks={activeTransformKind === "scale" || activeTransformKind === "move"}
               rotationWheelAxis={rotationWheelAxis}
               pinnedRotationWheelView={pinnedRotationWheelView}
@@ -3078,6 +3334,21 @@ export function WorkplaneViewport({
               onCommitDimensionEdit={commitDimensionEdit}
               onCancelDimensionEdit={cancelDimensionEdit}
               onBeginRotationEdit={beginRotationEdit}
+              onHoverRotationHandle={(axis) => {
+                setRotationWheelAxis(axis);
+                setHoveredRotationWheelAxis(axis);
+                const wheel = transformOverlayRef.current?.rotationWheels[axis];
+                if (wheel) {
+                  const point = rotationWheelPoint(wheel, 0, wheel.radius + 24);
+                  setRotationReadout({ x: point.x, y: point.y, text: "0°", angle: 0 });
+                }
+              }}
+              onLeaveRotationHandle={() => {
+                if (!activeRotationWheel) {
+                  setHoveredRotationWheelAxis(null);
+                  setRotationReadout(null);
+                }
+              }}
               onEditingRotationChange={(value) => setEditingRotation((current) => (current ? { ...current, value } : current))}
               onCommitRotationEdit={commitRotationEdit}
               onCancelRotationEdit={cancelRotationEdit}
@@ -3200,17 +3471,26 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
   raycaster.params.Line = { threshold: 1.15 };
   const pointer = new THREE.Vector2();
   const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  let state!: ThreeState;
 
   const resize = () => {
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
     renderer.setSize(width, height);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
+    const activeCamera = state.camera;
+    if (activeCamera instanceof THREE.PerspectiveCamera) {
+      activeCamera.aspect = width / height;
+    } else {
+      const halfHeight = Math.max(0.01, (activeCamera.top - activeCamera.bottom) / 2);
+      const halfWidth = halfHeight * (width / height);
+      activeCamera.left = -halfWidth;
+      activeCamera.right = halfWidth;
+    }
+    activeCamera.updateProjectionMatrix();
     state.needsRender = true;
   };
 
-  const state = {
+  state = {
     renderer,
     scene,
     camera,
@@ -3262,12 +3542,53 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
     renderer.domElement.removeEventListener("wheel", requestRender);
     renderer.domElement.removeEventListener("pointerdown", requestRender);
   };
-  rebuildWorkplane(state, DEFAULT_WORKSPACE);
+  rebuildWorkplane(state, DEFAULT_WORKSPACE, workplanePlane("ground"));
   return state;
+}
+
+function setCameraProjection(state: ThreeState, mode: ProjectionMode) {
+  const previous = state.camera;
+  const target = state.controls.target.clone();
+  const direction = previous.position.clone().sub(target);
+  const distance = Math.max(22, direction.length());
+  if (direction.lengthSq() < 0.0001) {
+    direction.copy(CAMERA_HOME).sub(CAMERA_TARGET);
+  }
+  direction.normalize();
+  const rect = state.renderer.domElement.getBoundingClientRect();
+  const aspect = Math.max(0.01, rect.width / Math.max(1, rect.height));
+  let next: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  if (mode === "orthographic") {
+    const fov = previous instanceof THREE.PerspectiveCamera ? previous.fov : 38;
+    const halfHeight = previous instanceof THREE.PerspectiveCamera
+      ? distance * Math.tan(THREE.MathUtils.degToRad(fov) / 2)
+      : Math.max(0.01, (previous.top - previous.bottom) / (2 * Math.max(0.01, previous.zoom)));
+    next = new THREE.OrthographicCamera(-halfHeight * aspect, halfHeight * aspect, halfHeight, -halfHeight, 0.1, 6000);
+  } else {
+    const fov = 38;
+    const halfHeight = previous instanceof THREE.OrthographicCamera
+      ? Math.max(0.01, (previous.top - previous.bottom) / (2 * Math.max(0.01, previous.zoom)))
+      : distance * Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+    const perspectiveDistance = halfHeight / Math.max(0.01, Math.tan(THREE.MathUtils.degToRad(fov) / 2));
+    next = new THREE.PerspectiveCamera(fov, aspect, 0.1, 6000);
+    direction.multiplyScalar(Math.max(22, perspectiveDistance));
+  }
+  next.position.copy(target).add(direction);
+  next.up.copy(previous.up);
+  next.lookAt(target);
+  next.updateProjectionMatrix();
+  state.camera = next;
+  state.controls.object = next;
+  state.controls.target.copy(target);
+  state.controls.update();
+  state.needsRender = true;
 }
 
 function resetCamera(state: ThreeState) {
   state.camera.up.set(0, 1, 0);
+  if (state.camera instanceof THREE.OrthographicCamera) {
+    state.camera.zoom = 1;
+  }
   state.camera.position.copy(CAMERA_HOME);
   state.controls.target.copy(CAMERA_TARGET);
   state.camera.lookAt(CAMERA_TARGET);
@@ -3322,7 +3643,7 @@ function syncViewCube(state: ThreeState, cube: HTMLDivElement | null) {
   cube.style.transform = `rotateX(${-pitch}deg) rotateY(${-yaw}deg)`;
 }
 
-function rebuildWorkplane(state: ThreeState | null, workspace: WorkspaceSettings) {
+function rebuildWorkplane(state: ThreeState | null, workspace: WorkspaceSettings, plane: WorkplanePlane) {
   if (!state) {
     return;
   }
@@ -3343,16 +3664,17 @@ function rebuildWorkplane(state: ThreeState | null, workspace: WorkspaceSettings
     }),
   );
   base.name = "WorkplaneBase";
-  base.rotation.x = -Math.PI / 2;
+  base.position.copy(plane.origin);
+  base.quaternion.setFromRotationMatrix(planeBasisMatrix(plane));
   base.receiveShadow = workspace.showShadows;
   state.workplaneLayer.add(base);
 
   if (workspace.showGrid) {
-    state.workplaneLayer.add(createGridLines(workspace.width, workspace.depth, workspace.gridBlockSize));
+    state.workplaneLayer.add(createGridLines(workspace.width, workspace.depth, workspace.gridBlockSize, plane));
   }
 }
 
-function createGridLines(width = WORKPLANE_WIDTH, depth = WORKPLANE_DEPTH, blockSize = DEFAULT_WORKSPACE.gridBlockSize) {
+function createGridLines(width = WORKPLANE_WIDTH, depth = WORKPLANE_DEPTH, blockSize = DEFAULT_WORKSPACE.gridBlockSize, plane = workplanePlane("ground")) {
   const group = new THREE.Group();
   const minor = new THREE.LineBasicMaterial({ color: "#91dff0", transparent: true, opacity: 0.55 });
   const major = new THREE.LineBasicMaterial({ color: "#4bbddf", transparent: true, opacity: 0.7 });
@@ -3361,9 +3683,10 @@ function createGridLines(width = WORKPLANE_WIDTH, depth = WORKPLANE_DEPTH, block
   const majorPoints: number[] = [];
   const axisPoints: number[] = [];
   const borderPoints: number[] = [];
-  const pushLine = (points: number[], from: [number, number, number], to: [number, number, number]) => {
-    points.push(...from, ...to);
+  const pushLine = (points: number[], from: THREE.Vector3, to: THREE.Vector3) => {
+    points.push(from.x, from.y, from.z, to.x, to.y, to.z);
   };
+  const planePoint = (u: number, v: number, offset: number) => plane.origin.clone().addScaledVector(plane.u, u).addScaledVector(plane.v, v).addScaledVector(plane.normal, offset);
   const step = clamp(blockSize, MIN_GRID_BLOCK_SIZE, MAX_GRID_BLOCK_SIZE);
   const majorEvery = 4;
   const xCount = Math.floor(width / step);
@@ -3373,21 +3696,21 @@ function createGridLines(width = WORKPLANE_WIDTH, depth = WORKPLANE_DEPTH, block
     const x = -width / 2 + index * step;
     const centeredX = Math.abs(x) < 0.0001 ? 0 : x;
     const points = centeredX === 0 ? axisPoints : index % majorEvery === 0 ? majorPoints : minorPoints;
-    pushLine(points, [centeredX, 0.04, -depth / 2], [centeredX, 0.04, depth / 2]);
+    pushLine(points, planePoint(centeredX, -depth / 2, 0.04), planePoint(centeredX, depth / 2, 0.04));
   }
 
   for (let index = 0; index <= zCount; index += 1) {
     const z = -depth / 2 + index * step;
     const centeredZ = Math.abs(z) < 0.0001 ? 0 : z;
     const points = centeredZ === 0 ? axisPoints : index % majorEvery === 0 ? majorPoints : minorPoints;
-    pushLine(points, [-width / 2, 0.04, centeredZ], [width / 2, 0.04, centeredZ]);
+    pushLine(points, planePoint(-width / 2, centeredZ, 0.04), planePoint(width / 2, centeredZ, 0.04));
   }
 
   const border = new THREE.LineBasicMaterial({ color: "#58c5e6", transparent: true, opacity: 0.9 });
-  pushLine(borderPoints, [-width / 2, 0.08, -depth / 2], [width / 2, 0.08, -depth / 2]);
-  pushLine(borderPoints, [width / 2, 0.08, -depth / 2], [width / 2, 0.08, depth / 2]);
-  pushLine(borderPoints, [width / 2, 0.08, depth / 2], [-width / 2, 0.08, depth / 2]);
-  pushLine(borderPoints, [-width / 2, 0.08, depth / 2], [-width / 2, 0.08, -depth / 2]);
+  pushLine(borderPoints, planePoint(-width / 2, -depth / 2, 0.08), planePoint(width / 2, -depth / 2, 0.08));
+  pushLine(borderPoints, planePoint(width / 2, -depth / 2, 0.08), planePoint(width / 2, depth / 2, 0.08));
+  pushLine(borderPoints, planePoint(width / 2, depth / 2, 0.08), planePoint(-width / 2, depth / 2, 0.08));
+  pushLine(borderPoints, planePoint(-width / 2, depth / 2, 0.08), planePoint(-width / 2, -depth / 2, 0.08));
 
   group.add(linesFromPoints(minorPoints, minor));
   group.add(linesFromPoints(majorPoints, major));
@@ -3967,21 +4290,27 @@ function syncTransformOverlay(
   const rotateLeft = rotationSlots.x;
   const rotateRight = rotationSlots.z;
   const rotateBottom = rotationSlots.y;
-  const compactRotationWheel = screenRotationWheel(centerPoint, rect);
+  const projectedAxis = (axis: THREE.Vector3) => {
+    const point = project(frame.center.clone().add(axis.clone().normalize()));
+    return { x: point.x - centerPoint.x, y: point.y - centerPoint.y };
+  };
+  const rotationZeroVector = (slot: { x: number; y: number }) => ({
+    x: slot.x - centerPoint.x,
+    y: slot.y - centerPoint.y,
+  });
   const makeWorldPoint = (point: THREE.Vector3) => ({ x: point.x, y: point.y, z: point.z });
   const rotationWheels: Record<RotationAxis, { x: number; y: number; radius: number }> = {
-    x: { ...compactRotationWheel },
-    y: { ...compactRotationWheel },
-    z: { ...compactRotationWheel },
+    x: projectedRotationWheel(centerPoint, projectedAxis(yFootAxis), projectedAxis(zFootAxis), rotationZeroVector(rotateLeft), rect),
+    y: projectedRotationWheel(centerPoint, projectedAxis(xFootAxis), projectedAxis(zFootAxis), rotationZeroVector(rotateBottom), rect),
+    z: projectedRotationWheel(centerPoint, projectedAxis(xFootAxis), projectedAxis(yFootAxis), rotationZeroVector(rotateRight), rect),
   };
   const rotationPlaneCenters: Record<RotationAxis, { x: number; y: number; z: number }> = {
     x: makeWorldPoint(frame.center),
     y: makeWorldPoint(frame.center),
     z: makeWorldPoint(frame.center),
   };
-  // These are screen-space controls, not 3D geometry. Keep the glyphs upright
-  // while the camera orbits; only the selected object's screen frame moves.
-  const rotationIconAngle = () => 0;
+  const rotationIconAngle = (slot: { x: number; y: number }) =>
+    THREE.MathUtils.radToDeg(Math.atan2(slot.y - centerPoint.y, slot.x - centerPoint.x)) + 90;
 
   const next = {
     id: frame.ids.join("|"),
@@ -4012,7 +4341,7 @@ function syncTransformOverlay(
         className: "axis-x",
         x: rotateLeft.x,
         y: rotateLeft.y,
-        angle: rotationIconAngle(),
+        angle: rotationIconAngle(rotateLeft),
         editX: rotateLeft.x + 34,
         editY: rotateLeft.y - 28,
       },
@@ -4022,7 +4351,7 @@ function syncTransformOverlay(
         className: "axis-z",
         x: rotateRight.x,
         y: rotateRight.y,
-        angle: rotationIconAngle(),
+        angle: rotationIconAngle(rotateRight),
         editX: rotateRight.x + 34,
         editY: rotateRight.y - 28,
       },
@@ -4032,7 +4361,7 @@ function syncTransformOverlay(
         className: "axis-y",
         x: rotateBottom.x,
         y: rotateBottom.y,
-        angle: rotationIconAngle(),
+        angle: rotationIconAngle(rotateBottom),
         editX: rotateBottom.x + 34,
         editY: rotateBottom.y - 28,
       },

@@ -2,7 +2,15 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 
 export type TransformHandleKind = "scale" | "height" | "lift" | "move" | "rotate";
 export type RotationAxis = "x" | "y" | "z";
-export type RotationWheelView = { x: number; y: number; radius: number };
+export type RotationWheelView = {
+  x: number;
+  y: number;
+  radius: number;
+  /** Optional affine projection of the unit circle into the selected world plane. */
+  matrix?: [number, number, number, number];
+  /** Screen-space zero direction expressed in the wheel's local circle coordinates. */
+  zeroRadians?: number;
+};
 
 export type RotationHandleView = {
   key: string;
@@ -99,6 +107,8 @@ export type TransformOverlayProps = {
   onCommitDimensionEdit: () => void;
   onCancelDimensionEdit: () => void;
   onBeginRotationEdit: (handleKey: string, x: number, y: number) => void;
+  onHoverRotationHandle: (axis: RotationAxis) => void;
+  onLeaveRotationHandle: () => void;
   onEditingRotationChange: (value: string) => void;
   onCommitRotationEdit: () => void;
   onCancelRotationEdit: () => void;
@@ -121,12 +131,13 @@ export function measureKeyForHandle(kind: TransformHandleKind, handleKey: string
 
 export const MIN_LIFT_HANDLE_SCREEN_GAP = 32;
 export const MOVE_HANDLE_SCREEN_OFFSET = 36;
-export const ROTATION_PROTRACTOR_RADIUS = 76;
+export const ROTATION_PROTRACTOR_RADIUS = 168;
 
 /**
- * Rotation feedback is a compact screen-space control centered on the actual
- * selection pivot. It deliberately does not inherit a projected 3D plane,
- * which previously stretched the guide into detached ellipses while orbiting.
+ * The fallback wheel is a fixed screen-space guide centred on the actual
+ * selection pivot. Axis-specific wheels use projectedRotationWheel below so
+ * the guide can show the selected world plane without inheriting the model's
+ * dimensions.
  */
 export function screenRotationWheel(center: { x: number; y: number }, viewport: { width: number; height: number }): RotationWheelView {
   const maximumRadius = Math.max(42, Math.min(viewport.width, viewport.height) / 2 - 24);
@@ -135,6 +146,73 @@ export function screenRotationWheel(center: { x: number; y: number }, viewport: 
     y: center.y,
     radius: Math.min(ROTATION_PROTRACTOR_RADIUS, maximumRadius),
   };
+}
+
+export function projectedRotationWheel(
+  center: { x: number; y: number },
+  firstAxis: { x: number; y: number },
+  secondAxis: { x: number; y: number },
+  zeroVector: { x: number; y: number },
+  viewport: { width: number; height: number },
+): RotationWheelView {
+  const firstLength = Math.hypot(firstAxis.x, firstAxis.y);
+  const secondLength = Math.hypot(secondAxis.x, secondAxis.y);
+  const majorLength = Math.max(firstLength, secondLength, 0.0001);
+  const wheel = screenRotationWheel(center, viewport);
+  const determinant = firstAxis.x * secondAxis.y - secondAxis.x * firstAxis.y;
+  let zeroRadians = -Math.PI / 2;
+  if (Math.abs(determinant) > 0.0001) {
+    const firstCoefficient = (zeroVector.x * secondAxis.y - zeroVector.y * secondAxis.x) / determinant;
+    const secondCoefficient = (firstAxis.x * zeroVector.y - firstAxis.y * zeroVector.x) / determinant;
+    if (Math.hypot(firstCoefficient, secondCoefficient) > 0.0001) {
+      zeroRadians = Math.atan2(secondCoefficient, firstCoefficient);
+    }
+  }
+  return {
+    ...wheel,
+    matrix: [
+      firstAxis.x / majorLength,
+      firstAxis.y / majorLength,
+      secondAxis.x / majorLength,
+      secondAxis.y / majorLength,
+    ],
+    zeroRadians,
+  };
+}
+
+export function rotationWheelPoint(wheel: RotationWheelView, angleDegrees: number, radius = wheel.radius): { x: number; y: number } {
+  const radians = (wheel.zeroRadians ?? -Math.PI / 2) + angleDegrees * Math.PI / 180;
+  const localX = Math.cos(radians) * radius;
+  const localY = Math.sin(radians) * radius;
+  const matrix = wheel.matrix;
+  if (!matrix) {
+    return { x: wheel.x + localX, y: wheel.y + localY };
+  }
+  return {
+    x: wheel.x + matrix[0] * localX + matrix[2] * localY,
+    y: wheel.y + matrix[1] * localX + matrix[3] * localY,
+  };
+}
+
+/**
+ * Converts a screen-space point back into the wheel's local projected plane
+ * and returns its local radial distance. This keeps coarse/fine snapping on
+ * the annular band correct when the plane is foreshortened by the camera.
+ */
+export function rotationWheelLocalRadius(wheel: RotationWheelView, point: { x: number; y: number }) {
+  const deltaX = point.x - wheel.x;
+  const deltaY = point.y - wheel.y;
+  const matrix = wheel.matrix;
+  if (!matrix) {
+    return Math.hypot(deltaX, deltaY);
+  }
+  const determinant = matrix[0] * matrix[3] - matrix[2] * matrix[1];
+  if (Math.abs(determinant) < 0.0001) {
+    return Math.hypot(deltaX, deltaY);
+  }
+  const localX = (deltaX * matrix[3] - deltaY * matrix[2]) / determinant;
+  const localY = (matrix[0] * deltaY - matrix[1] * deltaX) / determinant;
+  return Math.hypot(localX, localY);
 }
 
 export function projectedMoveHandle(

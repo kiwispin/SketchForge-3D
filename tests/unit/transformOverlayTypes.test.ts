@@ -3,6 +3,9 @@ import {
   MIN_LIFT_HANDLE_SCREEN_GAP,
   ROTATION_PROTRACTOR_RADIUS,
   projectedMoveHandle,
+  projectedRotationWheel,
+  rotationWheelLocalRadius,
+  rotationWheelPoint,
   screenRotationWheel,
   separatedLiftHandlePoint,
 } from "@/components/workplane/transformOverlayTypes";
@@ -50,5 +53,20 @@ describe("transform overlay geometry", () => {
   it("keeps the rotation protractor compact in a small viewport", () => {
     const wheel = screenRotationWheel({ x: 80, y: 60 }, { width: 150, height: 120 });
     expect(wheel).toEqual({ x: 80, y: 60, radius: 42 });
+  });
+
+  it("projects a fixed-size rotation guide into the selected plane", () => {
+    const wheel = projectedRotationWheel(
+      { x: 200, y: 150 },
+      { x: 100, y: 0 },
+      { x: 0, y: 50 },
+      { x: 0, y: -20 },
+      { width: 1200, height: 800 },
+    );
+    expect(wheel.radius).toBe(ROTATION_PROTRACTOR_RADIUS);
+    expect(wheel.matrix?.[0]).toBeCloseTo(1);
+    expect(wheel.matrix?.[3]).toBeCloseTo(0.5);
+    expect(rotationWheelPoint(wheel, 0)).toEqual({ x: 200, y: 66 });
+    expect(rotationWheelLocalRadius(wheel, { x: 200, y: 66 })).toBeCloseTo(ROTATION_PROTRACTOR_RADIUS);
   });
 });
