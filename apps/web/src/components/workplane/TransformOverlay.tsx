@@ -1,8 +1,10 @@
 import type { CSSProperties } from "react";
 import {
   measureKeyForHandle,
+  orthographicFitZoom,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  rotationSnapDelta,
   type TransformOverlayProps,
   type TransformOverlayState,
 } from "@/components/workplane/transformOverlayTypes";
@@ -10,10 +12,13 @@ import {
 export {
   getElevationMeasureKey,
   measureKeyForHandle,
+  orthographicFitZoom,
   projectedMoveHandle,
   projectedRotationWheel,
+  rotationHandleLocalAnchor,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  rotationSnapDelta,
   screenRotationWheel,
   separatedLiftHandlePoint,
   type DimensionMark,
@@ -21,6 +26,7 @@ export {
   type EditingRotation,
   type PinnedRotationWheelView,
   type RotationAxis,
+  type RotationAnchorFrame,
   type RotationReadout,
   type RotationWheelView,
   type TransformHandleKind,
@@ -57,6 +63,7 @@ export function TransformOverlay({
   editingRotation,
   rotationReadout,
   showRotationWheel,
+  activeRotationAxis,
   hideSelectionChrome,
   hideDimensionMarks,
   rotationWheelAxis,
@@ -264,7 +271,7 @@ export function TransformOverlay({
       {box.rotateHandles.map((handle) => (
         <button
           key={handle.key}
-          className={`rotate-handle ${handle.className}`}
+          className={`rotate-handle ${handle.className} ${activeRotationAxis === handle.axis ? "active" : ""}`}
           style={{
             "--overlay-x": `${handle.x}px`,
             "--overlay-y": `${handle.y}px`,

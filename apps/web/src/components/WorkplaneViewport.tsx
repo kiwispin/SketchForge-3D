@@ -19,7 +19,8 @@ import { ShapeInspector, SnapGridControl, type ShapeInspectorUpdateOptions } fro
 import { WorkspaceSettingsModal } from "@/components/workplane/WorkspaceSettingsModal";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
 import { cleanNearZero, cleanRotationDegrees, constrainedAxisMoveDelta, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
-import { planeBasisMatrix, workplanePlane, type WorkplaneOrientation, type WorkplanePlane } from "@/lib/workplanePlanes";
+import { planeBasisMatrix, planeFromFace, workplanePlane, type WorkplaneOrientation, type WorkplanePlane } from "@/lib/workplanePlanes";
+import { viewFaceDirection, viewFaceUp, type ViewCubeFace } from "@/lib/viewCube";
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
@@ -27,8 +28,11 @@ import {
   measureKeyForHandle,
   projectedMoveHandle,
   projectedRotationWheel,
+  rotationHandleLocalAnchor,
+  orthographicFitZoom,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  rotationSnapDelta,
   separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
@@ -141,7 +145,7 @@ type WorkplaneViewportProps = {
   initialSnap?: GridSize;
   initialWorkspace?: WorkplaneWorkspaceSettings;
   workspaceSettingsKey?: string | null;
-  onAddShape: (shape: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotationX?: number; rotationZ?: number; surface?: { orientation: WorkplaneOrientation; x: number; y: number; z: number } }) => void;
+  onAddShape: (shape: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotation?: number; rotationX?: number; rotationZ?: number; surface?: { orientation: WorkplaneOrientation; x: number; y: number; z: number; normal?: [number, number, number] } }) => void;
   onAlignAnchorChange: (id: string) => void;
   onAlignPreview: (axis: AlignAxis, target: AlignTarget) => void;
   onAlignPreviewClear: () => void;
@@ -167,7 +171,6 @@ type WorkplaneViewportProps = {
 };
 
 type WorkspaceSettings = WorkplaneWorkspaceSettings;
-type ViewCubeFace = "top" | "bottom" | "front" | "back" | "right" | "left";
 type ProjectionMode = "perspective" | "orthographic";
 
 function readSavedWorkspaceDefault(key: string | null) {
@@ -486,16 +489,6 @@ function rotationPatchForAxis(axis: RotationAxis, value: number): Partial<Workpl
   return { rotation: normalized };
 }
 
-function rotationAxisVector(axis: RotationAxis) {
-  if (axis === "x") {
-    return new THREE.Vector3(1, 0, 0);
-  }
-  if (axis === "z") {
-    return new THREE.Vector3(0, 0, 1);
-  }
-  return new THREE.Vector3(0, 1, 0);
-}
-
 function quaternionForShape(shape: WorkplaneShape) {
   return new THREE.Quaternion().setFromEuler(
     new THREE.Euler(
@@ -611,7 +604,11 @@ function syncRulerOverlay(
         y2: endScreen.screenY,
         labelX: (startScreen.screenX + endScreen.screenX) / 2,
         labelY: (startScreen.screenY + endScreen.screenY) / 2 - 18,
-        label: formatMeasure(Math.hypot(end.x - start.x, end.z - start.z), accuracy),
+        label: Math.abs(start.x) < 0.0001 && Math.abs(start.z) < 0.0001
+          ? `X ${formatMeasure(end.x, accuracy)} · Z ${formatMeasure(end.z, accuracy)} · ${formatMeasure(Math.hypot(end.x - start.x, end.z - start.z), accuracy)}`
+          : Math.abs(end.x) < 0.0001 && Math.abs(end.z) < 0.0001
+            ? `X ${formatMeasure(start.x, accuracy)} · Z ${formatMeasure(start.z, accuracy)} · ${formatMeasure(Math.hypot(end.x - start.x, end.z - start.z), accuracy)}`
+            : formatMeasure(Math.hypot(end.x - start.x, end.z - start.z), accuracy),
       },
     ];
   });
@@ -693,6 +690,11 @@ function RulerOverlay({
       {overlay.segments.map((segment) => (
         <span key={`${segment.id}-label`} className="ruler-label" style={{ left: segment.labelX, top: segment.labelY }}>
           {segment.label}
+        </span>
+      ))}
+      {overlay.points.filter((point) => Math.abs(point.x) < 0.0001 && Math.abs(point.z) < 0.0001).map((point) => (
+        <span key={`${point.id}-origin-label`} className="ruler-label origin-ruler-label" style={{ left: point.screenX + 10, top: point.screenY - 18 }}>
+          0, 0
         </span>
       ))}
     </div>
@@ -875,8 +877,9 @@ function boundsIntersectRect(bounds: NonNullable<ReturnType<typeof shapeScreenBo
 
 function rotationAxisVectorForFrame(handleKey: string, frame: SelectionFrame) {
   const axis = rotationAxisForHandle(handleKey);
-  void frame;
-  return rotationAxisVector(axis);
+  if (axis === "x") return frame.xAxis.clone().normalize();
+  if (axis === "z") return frame.zAxis.clone().normalize();
+  return frame.yAxis.clone().normalize();
 }
 
 function rayPointOnRotationPlane(state: ThreeState, clientX: number, clientY: number, pivot: THREE.Vector3, axis: THREE.Vector3) {
@@ -900,78 +903,26 @@ type ScreenRotationHandleSlots = {
   y: { x: number; y: number };
 };
 
-function convexHullPoints(points: Array<{ x: number; y: number }>) {
-  const sorted = points
-    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
-    .map((point) => ({ x: point.x, y: point.y }))
-    .sort((a, b) => a.x - b.x || a.y - b.y)
-    .filter((point, index, all) => index === 0 || point.x !== all[index - 1].x || point.y !== all[index - 1].y);
-  if (sorted.length <= 2) {
-    return sorted;
-  }
-  const cross = (origin: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
-    (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
-  const lower: Array<{ x: number; y: number }> = [];
-  sorted.forEach((point) => {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
-      lower.pop();
-    }
-    lower.push(point);
-  });
-  const upper: Array<{ x: number; y: number }> = [];
-  [...sorted].reverse().forEach((point) => {
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
-      upper.pop();
-    }
-    upper.push(point);
-  });
-  return lower.slice(0, -1).concat(upper.slice(0, -1));
-}
-
 function screenRotationHandleSlots(
-  points: Array<{ x: number; y: number }>,
+  frame: SelectionFrame,
+  project: (point: THREE.Vector3) => { x: number; y: number },
   rect: DOMRect,
 ): ScreenRotationHandleSlots {
-  const hull = convexHullPoints(points);
-  const source = hull.length > 0 ? hull : points;
-  const minX = Math.min(...source.map((point) => point.x));
-  const maxX = Math.max(...source.map((point) => point.x));
-  const minY = Math.min(...source.map((point) => point.y));
-  const maxY = Math.max(...source.map((point) => point.y));
-  const width = Math.max(1, maxX - minX);
-  const height = Math.max(1, maxY - minY);
-  const center = source.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
-  center.x /= source.length;
-  center.y /= source.length;
-  const upperBand = source.filter((point) => point.y <= minY + height * 0.52);
-  const lowerBand = source.filter((point) => point.y >= maxY - height * 0.52);
-  const upper = upperBand.length > 0 ? upperBand : source;
-  const lower = lowerBand.length > 0 ? lowerBand : source;
-  const topLeft = upper.reduce((best, point) => (point.x < best.x || (point.x === best.x && point.y < best.y) ? point : best));
-  const topRight = upper.reduce((best, point) => (point.x > best.x || (point.x === best.x && point.y < best.y) ? point : best));
-  const bottomRight = lower.reduce((best, point) => (point.x > best.x || (point.x === best.x && point.y > best.y) ? point : best));
-  const gap = clamp(Math.min(width, height) * 0.06, 10, 24);
-  const outward = (point: { x: number; y: number }) => {
-    const dx = point.x - center.x;
-    const dy = point.y - center.y;
-    const length = Math.max(1, Math.hypot(dx, dy));
-    return { x: point.x + (dx / length) * gap, y: point.y + (dy / length) * gap };
+  const center = project(frame.center);
+  const gap = clamp(Math.min(rect.width, rect.height) * 0.018, 12, 24);
+  const makeSlot = (axis: RotationAxis) => {
+    const local = rotationHandleLocalAnchor(axis, frame);
+    const anchor = framePoint(frame, local.x, local.y, local.z);
+    const projected = project(anchor);
+    const dx = projected.x - center.x;
+    const dy = projected.y - center.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    return {
+      x: clamp(projected.x + (dx / distance) * gap, 24, rect.width - 24),
+      y: clamp(projected.y + (dy / distance) * gap, 24, rect.height - 24),
+    };
   };
-  const topLeftSlot = outward(topLeft);
-  const topRightSlot = outward(topRight);
-  const bottomRightSlot = outward(bottomRight);
-  const fallbackTopY = minY - gap;
-  const fallbackBottomY = maxY - gap;
-  const topLeftY = topLeftSlot.y >= 28 ? topLeftSlot.y : fallbackTopY;
-  const topRightY = topRightSlot.y >= 28 ? topRightSlot.y : fallbackTopY;
-  const lowerY = bottomRightSlot.y <= rect.height - 28 ? bottomRightSlot.y : fallbackBottomY;
-  const rightX = bottomRightSlot.x <= rect.width - 28 ? bottomRightSlot.x : minX - gap;
-
-  return {
-    x: { x: topLeftSlot.x, y: topLeftY },
-    z: { x: topRightSlot.x, y: topRightY },
-    y: { x: rightX, y: lowerY },
-  };
+  return { x: makeSlot("x"), z: makeSlot("z"), y: makeSlot("y") };
 }
 
 function projectedWorldYForScreenY(state: ThreeState, shape: WorkplaneShape, targetScreenY: number, startWorldY: number) {
@@ -1223,6 +1174,7 @@ export function WorkplaneViewport({
   const [activeRotationWheel, setActiveRotationWheel] = useState(false);
   const [hoveredRotationWheelAxis, setHoveredRotationWheelAxis] = useState<RotationAxis | null>(null);
   const [activeTransformKind, setActiveTransformKind] = useState<TransformHandleKind | null>(null);
+  const [activeRotationAxis, setActiveRotationAxis] = useState<RotationAxis | null>(null);
   const [rotationWheelAxis, setRotationWheelAxis] = useState<RotationAxis>("y");
   const [pinnedRotationWheelView, setPinnedRotationWheelView] = useState<PinnedRotationWheelView | null>(null);
   const [editingDimension, setEditingDimension] = useState<EditingDimension>(null);
@@ -1696,9 +1648,10 @@ export function WorkplaneViewport({
       x: snapped.x,
       z: snapped.z,
       elevation: snapped.y,
+      rotation: plane.rotation,
       rotationX: plane.rotationX,
       rotationZ: plane.rotationZ,
-      surface: { orientation: plane.orientation, x: snapped.x, y: snapped.y, z: snapped.z },
+      surface: { orientation: plane.orientation, x: snapped.x, y: snapped.y, z: snapped.z, normal: [plane.normal.x, plane.normal.y, plane.normal.z] as [number, number, number] },
     };
   }, [toRawPlanePoint]);
 
@@ -1979,6 +1932,7 @@ export function WorkplaneViewport({
       }
       setActiveRotationWheel(kind === "rotate");
       setActiveTransformKind(kind);
+      setActiveRotationAxis(kind === "rotate" ? rotationAxis : null);
       setSelectionHelpersVisible(state ?? null, kind !== "rotate");
       if (kind === "rotate") {
         setRotationWheelAxis(rotationAxis);
@@ -2209,7 +2163,18 @@ export function WorkplaneViewport({
           patches.forEach(({ id, patch }) => onUpdateShape(id, patch));
           if (state) {
             const readoutPoint = projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state);
-            setRotationReadout({ x: readoutPoint.x + 20, y: readoutPoint.y - 24, text: "Δ selection size", angle: 0 });
+            const patchById = new Map(patches.map(({ id, patch }) => [id, patch]));
+            const previewShapes = shapesRef.current.map((shape) => patchById.has(shape.id) ? { ...shape, ...patchById.get(shape.id) } : shape);
+            const nextFrame = selectionFrameForShapes(previewShapes, transform.ids);
+            const widthDelta = nextFrame ? nextFrame.width - transform.selectionFrame.width : 0;
+            const depthDelta = nextFrame ? nextFrame.depth - transform.selectionFrame.depth : 0;
+            const heightDelta = nextFrame ? nextFrame.height - transform.selectionFrame.height : 0;
+            setRotationReadout({
+              x: readoutPoint.x + 20,
+              y: readoutPoint.y - 24,
+              text: `ΔW ${formatMeasure(widthDelta, workspaceRef.current.accuracy)} · ΔD ${formatMeasure(depthDelta, workspaceRef.current.accuracy)} · ΔH ${formatMeasure(heightDelta, workspaceRef.current.accuracy)}`,
+              angle: 0,
+            });
           }
         }
         return true;
@@ -2238,14 +2203,7 @@ export function WorkplaneViewport({
       const distance = transform.wheelCenter
         ? rotationWheelLocalRadius(transform.wheelCenter, { x: localClientX, y: localClientY })
         : Number.POSITIVE_INFINITY;
-      let delta: number;
-      if (shiftKey) {
-        delta = Math.round(rawDelta / 45) * 45;
-      } else if (transform.wheelCenter && distance <= transform.wheelCenter.radius) {
-        delta = Math.round(rawDelta / 22.5) * 22.5;
-      } else {
-        delta = Math.round(rawDelta);
-      }
+      const delta = rotationSnapDelta(rawDelta, distance, transform.wheelCenter?.radius ?? Number.POSITIVE_INFINITY, shiftKey);
 
       const deltaQuaternion = new THREE.Quaternion().setFromAxisAngle(axisVector, THREE.MathUtils.degToRad(delta));
       const rotationDelta = deltaQuaternion.clone();
@@ -2302,6 +2260,7 @@ export function WorkplaneViewport({
     setActiveRotationWheel(false);
     setHoveredRotationWheelAxis(null);
     setActiveTransformKind(null);
+    setActiveRotationAxis(null);
     setPinnedRotationWheelView(null);
     setRotationReadout(null);
     if (threeRef.current) {
@@ -2466,6 +2425,22 @@ export function WorkplaneViewport({
     return nearestId;
   }, []);
 
+  const pickShapeFace = useCallback((clientX: number, clientY: number) => {
+    const state = threeRef.current;
+    if (!state) return null;
+    const rect = state.renderer.domElement.getBoundingClientRect();
+    state.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    state.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    state.raycaster.setFromCamera(state.pointer, state.camera);
+    const hit = state.raycaster.intersectObjects(state.shapeLayer.children, true).find((entry) => entry.face);
+    if (!hit?.face) return null;
+    let owner: THREE.Object3D | null = hit.object;
+    while (owner && typeof owner.userData.shapeId !== "string") owner = owner.parent;
+    if (!owner) return null;
+    const normal = hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();
+    return { id: owner.userData.shapeId as string, point: hit.point.clone(), normal };
+  }, []);
+
   const pickModifierEdge = useCallback((clientX: number, clientY: number) => {
     const state = threeRef.current;
     if (!state) return null;
@@ -2535,16 +2510,14 @@ export function WorkplaneViewport({
 
       if (workplaneModeRef.current) {
         event.preventDefault();
-        const id = pickShape(event.clientX, event.clientY);
-        if (id) {
-          const frame = selectionFrameForShapes(shapesRef.current, [id]);
-          const top = frame ? selectionWorldYBounds(frame).max : 0;
-          onSetPlacementElevation(snapPositionValue(top, snapStep(snapRef.current), MIN_ELEVATION, MAX_ELEVATION), "shape");
-          onSelectShape(id);
+        const face = pickShapeFace(event.clientX, event.clientY);
+        if (face) {
+          setActiveWorkplane(planeFromFace(face.point, face.normal, `Face on ${shapesRef.current.find((shape) => shape.id === face.id)?.name ?? "shape"}`));
+          onSetPlacementElevation(snapPositionValue(face.point.y, snapStep(snapRef.current), MIN_ELEVATION, MAX_ELEVATION), "shape");
+          onSelectShape(face.id);
         } else {
           onSetPlacementElevation(0, "base");
         }
-        onWorkplaneModeChange(false);
         return;
       }
 
@@ -2590,6 +2563,7 @@ export function WorkplaneViewport({
         }
         setActiveRotationWheel(handle.kind === "rotate");
         setActiveTransformKind(handle.kind);
+        setActiveRotationAxis(handle.kind === "rotate" ? rotationAxis : null);
         setSelectionHelpersVisible(state, handle.kind !== "rotate");
         if (handle.kind === "rotate") {
           setRotationWheelAxis(rotationAxis);
@@ -2756,6 +2730,7 @@ export function WorkplaneViewport({
       onWorkplaneModeChange,
       pickModifierEdge,
       pickShape,
+      pickShapeFace,
       pickTransformHandle,
       resolveRulerCandidate,
       selectRulerCandidate,
@@ -2861,7 +2836,10 @@ export function WorkplaneViewport({
         }
         transformRef.current = null;
         setActiveRotationWheel(false);
+        setHoveredRotationWheelAxis(null);
         setActiveTransformKind(null);
+        setActiveRotationAxis(null);
+        setPinnedRotationWheelView(null);
         setRotationReadout(null);
         if (state) {
           syncCutPreviewOverlays(state, shapesRef.current);
@@ -2994,9 +2972,15 @@ export function WorkplaneViewport({
     state.controls.target.copy(target);
     if (state.camera instanceof THREE.OrthographicCamera) {
       const rect = state.renderer.domElement.getBoundingClientRect();
-      const halfWidth = Math.max(MIN_SHAPE_SIZE, frame.width * 0.64);
-      const halfHeight = Math.max(MIN_SHAPE_SIZE, frame.height * 0.64);
-      const zoom = Math.min(rect.width / (halfWidth * 2), rect.height / (halfHeight * 2));
+      state.camera.updateMatrixWorld();
+      const right = new THREE.Vector3().setFromMatrixColumn(state.camera.matrixWorld, 0).normalize();
+      const up = new THREE.Vector3().setFromMatrixColumn(state.camera.matrixWorld, 1).normalize();
+      const projected = selectionFrameCorners(frame).map((corner) => corner.clone().sub(target));
+      const xValues = projected.map((point) => point.dot(right));
+      const yValues = projected.map((point) => point.dot(up));
+      const spanX = Math.max(MIN_SHAPE_SIZE, Math.max(...xValues) - Math.min(...xValues));
+      const spanY = Math.max(MIN_SHAPE_SIZE, Math.max(...yValues) - Math.min(...yValues));
+      const zoom = orthographicFitZoom(rect, spanX, spanY);
       state.camera.zoom = clamp(zoom, 0.05, 50);
       state.camera.position.copy(target).add(currentDirection.multiplyScalar(Math.max(22, state.camera.position.distanceTo(state.controls.target))));
     } else {
@@ -3095,6 +3079,8 @@ export function WorkplaneViewport({
       onWorkplaneModeChange(false);
       onSelectShape(null);
     } else if (rulerModeRef.current) {
+      rulerModeRef.current = false;
+      setRulerMode(false);
       storeRulerModel({ ...rulerModelRef.current, startPointId: null, hover: null });
     }
   }, [onSelectShape, onWorkplaneModeChange, storeRulerModel]);
@@ -3215,12 +3201,12 @@ export function WorkplaneViewport({
     <main className="workplane-stage">
       <div className="view-cube" aria-label="View orientation cube" onPointerDown={(event) => event.stopPropagation()}>
         <div className="view-cube-inner" ref={viewCubeRef}>
-          <button type="button" className="cube-face cube-top" aria-label="Bottom view" onClick={() => setViewCubeFace("bottom")}>BOTTOM</button>
-          <button type="button" className="cube-face cube-bottom" aria-label="Top view" onClick={() => setViewCubeFace("top")}>TOP</button>
-          <button type="button" className="cube-face cube-front" aria-label="Front view" onClick={() => setViewCubeFace("front")}>FRONT</button>
-          <button type="button" className="cube-face cube-back" aria-label="Back view" onClick={() => setViewCubeFace("back")}>BACK</button>
-          <button type="button" className="cube-face cube-right" aria-label="Right view" onClick={() => setViewCubeFace("right")}>RIGHT</button>
-          <button type="button" className="cube-face cube-left" aria-label="Left view" onClick={() => setViewCubeFace("left")}>LEFT</button>
+          <button type="button" className="cube-face cube-top" aria-label="Bottom view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("bottom"); }} onClick={() => setViewCubeFace("bottom")}>BOTTOM</button>
+          <button type="button" className="cube-face cube-bottom" aria-label="Top view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("top"); }} onClick={() => setViewCubeFace("top")}>TOP</button>
+          <button type="button" className="cube-face cube-front" aria-label="Front view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("front"); }} onClick={() => setViewCubeFace("front")}>FRONT</button>
+          <button type="button" className="cube-face cube-back" aria-label="Back view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("back"); }} onClick={() => setViewCubeFace("back")}>BACK</button>
+          <button type="button" className="cube-face cube-right" aria-label="Right view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("right"); }} onClick={() => setViewCubeFace("right")}>RIGHT</button>
+          <button type="button" className="cube-face cube-left" aria-label="Left view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("left"); }} onClick={() => setViewCubeFace("left")}>LEFT</button>
         </div>
       </div>
 
@@ -3319,6 +3305,7 @@ export function WorkplaneViewport({
               editingRotation={editingRotation}
               rotationReadout={rotationReadout}
               showRotationWheel={activeRotationWheel || hoveredRotationWheelAxis !== null}
+              activeRotationAxis={activeRotationAxis}
               hideSelectionChrome={false}
               hideDimensionMarks={activeTransformKind === "scale" || activeTransformKind === "move"}
               rotationWheelAxis={rotationWheelAxis}
@@ -3599,17 +3586,8 @@ function resetCamera(state: ThreeState) {
 function setCameraToViewFace(state: ThreeState, face: ViewCubeFace) {
   const offset = state.camera.position.clone().sub(state.controls.target);
   const distance = clamp(offset.length(), 22, 4200);
-  const directionByFace: Record<ViewCubeFace, THREE.Vector3> = {
-    top: new THREE.Vector3(0, 1, 0),
-    bottom: new THREE.Vector3(0, -1, 0),
-    front: new THREE.Vector3(0, 0, 1),
-    back: new THREE.Vector3(0, 0, -1),
-    right: new THREE.Vector3(1, 0, 0),
-    left: new THREE.Vector3(-1, 0, 0),
-  };
-  const direction = directionByFace[face].clone().normalize();
-
-  state.camera.up.set(0, 1, 0);
+  const direction = viewFaceDirection(face);
+  state.camera.up.copy(viewFaceUp(face));
   state.camera.position.copy(state.controls.target).add(direction.multiplyScalar(distance));
   state.camera.lookAt(state.controls.target);
   state.camera.updateProjectionMatrix();
@@ -4156,19 +4134,7 @@ function syncTransformOverlay(
       y: ((1 - projected.y) / 2) * rect.height,
     };
   };
-  const projectedFramePoints = projectedCorners.map(({ projected }) => ({
-    x: ((projected.x + 1) / 2) * rect.width,
-    y: ((1 - projected.y) / 2) * rect.height,
-  }));
-  const projectedShapePoints = selectedIds.flatMap((id) => {
-    const shape = shapes.find((entry) => entry.id === id && !entry.hidden);
-    const shapeFrame = shape ? selectionFrameForShapes([shape], [shape.id]) : null;
-    if (!shapeFrame) {
-      return [];
-    }
-    return selectionFrameCorners(shapeFrame).map(project);
-  });
-  const rotationSlots = screenRotationHandleSlots(projectedShapePoints.length > 0 ? projectedShapePoints : projectedFramePoints, rect);
+  const rotationSlots = screenRotationHandleSlots(frame, project, rect);
 
   const worldMinY = Math.min(...corners.map((corner) => corner.y));
   const worldMaxY = Math.max(...corners.map((corner) => corner.y));

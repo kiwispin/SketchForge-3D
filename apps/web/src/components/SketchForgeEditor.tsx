@@ -70,6 +70,7 @@ import { projectExportFileName } from "@/lib/exportNames";
 import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
@@ -5216,6 +5217,7 @@ export function SketchForgeEditor({
   const interactionHistoryStartRef = useRef("");
   const interactionHistoryChangedRef = useRef(false);
   const lastDuplicateOffsetRef = useRef<{ x: number; z: number } | null>(null);
+  const duplicateRepeatPatternRef = useRef<DuplicateRepeatPattern | null>(null);
   const interactionHistoryTimerRef = useRef<number | null>(null);
   const [projectInteractionActive, setProjectInteractionActive] = useState(false);
   const [activeTutorialId, setActiveTutorialId] = useState<string | null>(initialTutorialId);
@@ -6169,7 +6171,7 @@ export function SketchForgeEditor({
   }, []);
 
   const addShape = useCallback(
-    (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number }) => {
+    (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotation?: number; rotationX?: number; rotationZ?: number; surface?: { orientation: "ground" | "top" | "bottom" | "front" | "back" | "right" | "left" | "face"; x: number; y: number; z: number; normal?: [number, number, number] } }) => {
       const automaticPlacement = point
         ? point
         : automaticShapePlacement(asset, shapes, workspaceSettingsRef.current, placementElevation);
@@ -6308,6 +6310,9 @@ export function SketchForgeEditor({
     const workspace = workspaceSettingsRef.current;
     const xLimit = Math.max(0, workspace.width / 2 - 6);
     const zLimit = Math.max(0, workspace.depth / 2 - 6);
+    const repeatPattern = duplicateRepeatMatches(duplicateRepeatPatternRef.current, selectedIds);
+    const sourceShapes = repeatPattern ? duplicateRepeatPatternRef.current?.sourceShapes ?? [] : selectedShapes;
+    const sourceByIndex = new Map(sourceShapes.map((shape, index) => [index, shape]));
     const remembered = lastDuplicateOffsetRef.current;
     const offsetX = remembered && selectedShapes.every((shape) => shape.x + remembered.x >= -xLimit && shape.x + remembered.x <= xLimit)
       ? remembered.x
@@ -6316,14 +6321,18 @@ export function SketchForgeEditor({
       ? remembered.z
       : duplicateAxisOffset(selectedShapes.map((shape) => shape.z), -zLimit, zLimit);
     lastDuplicateOffsetRef.current = { x: offsetX, z: offsetZ };
-    const duplicates = selectedShapes.map((shape) => ({
-      ...shape,
-      id: createLocalId(`${shape.id}-copy`),
-      x: shape.x + offsetX,
-      z: shape.z + offsetZ,
-    }));
+    const duplicates = selectedShapes.map((shape, index) => {
+      const source = sourceByIndex.get(index);
+      const next = repeatPattern && source ? repeatShapeTransform(shape, source) : {
+        ...shape,
+        x: shape.x + offsetX,
+        z: shape.z + offsetZ,
+      };
+      return { ...next, id: createLocalId(`${shape.id}-copy`) };
+    });
+    duplicateRepeatPatternRef.current = { selectedIds: duplicates.map((shape) => shape.id), sourceShapes: selectedShapes.map((shape) => ({ ...shape })) };
     commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Duplicated ${duplicates.length} shape${duplicates.length === 1 ? "" : "s"}`);
-  }, [commitShapes, hasSelection, selectedShapes, shapes]);
+  }, [commitShapes, hasSelection, selectedIds, selectedShapes, shapes]);
 
   const repeatSelected = useCallback(
     (count: number, offsetX: number, offsetY: number, offsetZ: number) => {

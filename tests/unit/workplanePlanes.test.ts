@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { placementPointOnPlane, planeBasisMatrix, planeWorldPoint, workplanePlane } from "@/lib/workplanePlanes";
+import { planeFromFace, placementPointOnPlane, planeBasisMatrix, planeWorldPoint, workplanePlane } from "@/lib/workplanePlanes";
 
 describe("oriented workplanes", () => {
   it("keeps every preset basis right-handed", () => {
@@ -10,6 +10,11 @@ describe("oriented workplanes", () => {
       expect(cross.distanceTo(plane.normal)).toBeLessThan(0.001);
       expect(planeBasisMatrix(plane).determinant()).toBeCloseTo(1, 5);
     });
+  });
+
+  it("labels planes by their actual coordinate axes", () => {
+    expect(workplanePlane("ground").label).toContain("XZ");
+    expect(workplanePlane("front").label).toContain("XY");
   });
 
   it("maps local workplane coordinates onto a vertical face", () => {
@@ -23,5 +28,13 @@ describe("oriented workplanes", () => {
     const bottom = workplanePlane("bottom", new THREE.Vector3(0, 0, 0));
     expect(placementPointOnPlane(right, 3, 5, 4)).toMatchObject({ x: 22, z: -3, elevation: 3, rotationZ: -90 });
     expect(placementPointOnPlane(bottom, 3, 5, 4)).toMatchObject({ x: 3, z: 5, elevation: -4, rotationX: 180 });
+  });
+
+  it("builds a right-handed plane from an arbitrary selected face normal", () => {
+    const plane = planeFromFace(new THREE.Vector3(2, 3, 4), new THREE.Vector3(1, 1, 0));
+    expect(plane.orientation).toBe("face");
+    expect(plane.normal.length()).toBeCloseTo(1);
+    expect(plane.u.clone().cross(plane.v).distanceTo(plane.normal)).toBeLessThan(0.001);
+    expect(planeBasisMatrix(plane).determinant()).toBeCloseTo(1, 5);
   });
 });

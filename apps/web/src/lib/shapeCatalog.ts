@@ -1,13 +1,15 @@
 import { canonicalizeShape, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { createLocalId } from "@/lib/localIds";
+import * as THREE from "three";
 import type { ShapeAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export type ToolbarShapeAsset = ShapeAsset & { menuIcon: string };
 export type SurfacePlacement = {
-  orientation: "ground" | "top" | "bottom" | "front" | "back" | "right" | "left";
+  orientation: "ground" | "top" | "bottom" | "front" | "back" | "right" | "left" | "face";
   x: number;
   y: number;
   z: number;
+  normal?: [number, number, number];
 };
 export type ShapeLibraryCategory = {
   id: "basic" | "connectors" | "architectural" | "printableParts" | "text";
@@ -186,14 +188,21 @@ export function sceneShape(shape: Partial<WorkplaneShape> & Pick<WorkplaneShape,
   });
 }
 
-function applySurfacePlacement(shape: WorkplaneShape, point?: { surface?: SurfacePlacement; rotationX?: number; rotationZ?: number }) {
+function applySurfacePlacement(shape: WorkplaneShape, point?: { surface?: SurfacePlacement; rotation?: number; rotationX?: number; rotationZ?: number }) {
   if (!point?.surface) {
     return shape;
   }
-  const { orientation, x, y, z } = point.surface;
+  const surface = point.surface;
+  const { orientation, x, y, z } = surface;
   const height = shape.height;
-  const next = { ...shape, rotationX: point.rotationX ?? shape.rotationX ?? 0, rotationZ: point.rotationZ ?? shape.rotationZ ?? 0 };
-  if (orientation === "ground" || orientation === "top") {
+  const next = { ...shape, rotation: point.rotation ?? shape.rotation ?? 0, rotationX: point.rotationX ?? shape.rotationX ?? 0, rotationZ: point.rotationZ ?? shape.rotationZ ?? 0 };
+  if (orientation === "face" && surface.normal) {
+    const normal = new THREE.Vector3(...surface.normal).normalize();
+    const center = new THREE.Vector3(x, y, z).addScaledVector(normal, height / 2);
+    next.x = center.x;
+    next.z = center.z;
+    next.elevation = center.y - height / 2;
+  } else if (orientation === "ground" || orientation === "top") {
     next.x = x;
     next.z = z;
     next.elevation = y;
@@ -221,7 +230,7 @@ function applySurfacePlacement(shape: WorkplaneShape, point?: { surface?: Surfac
   return next;
 }
 
-export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotationX?: number; rotationZ?: number; surface?: SurfacePlacement }): WorkplaneShape {
+export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotation?: number; rotationX?: number; rotationZ?: number; surface?: SurfacePlacement }): WorkplaneShape {
   const isConnectorPeg = asset.id === "connector-peg";
   const isConnectorSocket = asset.id === "connector-socket";
   const isNameTag = asset.id === "printable-name-tag";

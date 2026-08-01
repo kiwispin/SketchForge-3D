@@ -2,11 +2,11 @@
 
 **Date:** 2026-08-01
 **Branch:** `codex/tinkercad-rotation-parity`
-**Status:** Implementation complete; release verification in progress
+**Status:** Implementation complete; release gate verification passed locally
 
 ## Approved rotation implementation
 
-The rotation work follows the approved plan exactly:
+The rotation work now follows the approved plan:
 
 1. Remove the generic rotation HUD and reused double-arrow symbol.
 2. Preserve the quaternion, ray-plane, and multi-selection transformation engine.
@@ -24,17 +24,17 @@ The implementation explicitly avoids model-dimension-derived radii, face-centred
 
 ## Follow-on roadmap
 
-- Unified transform feedback: complete.
-- Fit Selection, view reset, view cube parity, and orthographic mode: complete.
+- Unified transform feedback: complete, including numeric multi-selection ΔW/ΔD/ΔH feedback.
+- Fit Selection, view reset, view cube parity, and orthographic mode: complete; top/bottom use non-parallel up vectors and cube faces commit on pointer-down.
 - Snap-aware keyboard movement: complete.
-- Remembered duplicate-and-repeat transformations: complete.
-- Oriented face workplanes: complete.
-- Optional coordinate-origin ruler: complete.
+- Remembered duplicate-and-repeat transformations: complete; movement, lift, rotation, and scale deltas are replayed.
+- Oriented face workplanes: complete; raycast face normals produce a custom plane basis and placement orientation, with corrected XY/XZ labels.
+- Optional coordinate-origin ruler: complete; origin is labelled and measurements report X/Z coordinates and distance.
 
 ## Verification matrix
 
-The release check covers single and rotated boxes, spheres, cylinders, small and large objects, wide text, irregular assemblies, multi-selection, elevated objects, all six cardinal views plus oblique views, continuous orbit, zoom, all three rotation handles, coarse and fine snapping, numeric angles, undo/redo, movement/lift/resize, desktop and narrow viewports, and export compatibility. Pure geometry and transform behavior is covered by unit tests; browser smoke checks cover the controls and placement workflow that unit tests cannot render.
+The release check covers the implementation matrix with pure tests for rotation anchors, axis-plane snapping, fixed wheel radius, projected orthographic fitting, duplicate/repeat transforms, face-plane handedness, and view-cube directions. Browser smoke checks verified the three handles, corrected top view, orthographic Fit Selection, corrected plane labels, arbitrary face workplane selection, origin coordinates/distance, and absence of console warnings/errors. The existing CI and e2e suites also pass.
 
 ## Release gate
 
-The branch is ready to publish after the final `npm run ci`, production static build, clean diff check, and GitHub push. Deployment is intentionally kept as one reviewable commit so the rotation parity and roadmap increments can be rolled back together if a regression is found.
+The branch is ready to publish after the final `npm run ci`, `npm run test:e2e`, production build, and clean diff check. Deployment is intentionally kept as one reviewable commit so the rotation parity and roadmap increments can be rolled back together if a regression is found.

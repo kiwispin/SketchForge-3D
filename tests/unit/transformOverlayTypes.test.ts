@@ -4,8 +4,11 @@ import {
   ROTATION_PROTRACTOR_RADIUS,
   projectedMoveHandle,
   projectedRotationWheel,
+  rotationHandleLocalAnchor,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  rotationSnapDelta,
+  orthographicFitZoom,
   screenRotationWheel,
   separatedLiftHandlePoint,
 } from "@/components/workplane/transformOverlayTypes";
@@ -68,5 +71,21 @@ describe("transform overlay geometry", () => {
     expect(wheel.matrix?.[3]).toBeCloseTo(0.5);
     expect(rotationWheelPoint(wheel, 0)).toEqual({ x: 200, y: 66 });
     expect(rotationWheelLocalRadius(wheel, { x: 200, y: 66 })).toBeCloseTo(ROTATION_PROTRACTOR_RADIUS);
+  });
+
+  it("keeps each rotation axis assigned to a stable frame corner", () => {
+    expect(rotationHandleLocalAnchor("x", { width: 20, height: 40, depth: 60 })).toEqual({ x: -10, y: 20, z: 30 });
+    expect(rotationHandleLocalAnchor("z", { width: 20, height: 40, depth: 60 })).toEqual({ x: 10, y: 20, z: -30 });
+    expect(rotationHandleLocalAnchor("y", { width: 20, height: 40, depth: 60 })).toEqual({ x: 10, y: -20, z: 30 });
+  });
+
+  it("uses coarse inner-zone and fine outer-zone rotation snapping", () => {
+    expect(rotationSnapDelta(17, 80, 168)).toBe(22.5);
+    expect(rotationSnapDelta(17, 190, 168)).toBe(17);
+    expect(rotationSnapDelta(28, 80, 168, true)).toBe(45);
+  });
+
+  it("fits an orthographic view from projected selection spans", () => {
+    expect(orthographicFitZoom({ width: 1000, height: 800 }, 200, 100, 1.25)).toBe(4);
   });
 });

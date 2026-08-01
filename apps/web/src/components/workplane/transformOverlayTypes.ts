@@ -23,6 +23,12 @@ export type RotationHandleView = {
   editY: number;
 };
 
+export type RotationAnchorFrame = {
+  width: number;
+  height: number;
+  depth: number;
+};
+
 export type PinnedRotationWheelView = {
   axis: RotationAxis;
   wheel: RotationWheelView;
@@ -92,6 +98,7 @@ export type TransformOverlayProps = {
   editingRotation: EditingRotation;
   rotationReadout: RotationReadout;
   showRotationWheel: boolean;
+  activeRotationAxis: RotationAxis | null;
   hideSelectionChrome: boolean;
   hideDimensionMarks: boolean;
   rotationWheelAxis: RotationAxis;
@@ -134,6 +141,24 @@ export const MOVE_HANDLE_SCREEN_OFFSET = 36;
 export const ROTATION_PROTRACTOR_RADIUS = 168;
 
 /**
+ * Stable, semantic anchors for the three Tinkercad-style rotation handles.
+ * The signs describe a corner of the projected selection frame rather than
+ * a screen-space extremum, so an orbit cannot silently swap axis identities.
+ */
+export function rotationHandleLocalAnchor(axis: RotationAxis, frame: RotationAnchorFrame) {
+  const signs = axis === "x"
+    ? { x: -1, y: 1, z: 1 }
+    : axis === "z"
+      ? { x: 1, y: 1, z: -1 }
+      : { x: 1, y: -1, z: 1 };
+  return {
+    x: signs.x * frame.width / 2,
+    y: signs.y * frame.height / 2,
+    z: signs.z * frame.depth / 2,
+  };
+}
+
+/**
  * The fallback wheel is a fixed screen-space guide centred on the actual
  * selection pivot. Axis-specific wheels use projectedRotationWheel below so
  * the guide can show the selected world plane without inheriting the model's
@@ -146,6 +171,13 @@ export function screenRotationWheel(center: { x: number; y: number }, viewport: 
     y: center.y,
     radius: Math.min(ROTATION_PROTRACTOR_RADIUS, maximumRadius),
   };
+}
+
+export function orthographicFitZoom(viewport: { width: number; height: number }, spanX: number, spanY: number, padding = 1.28) {
+  return Math.min(
+    viewport.width / Math.max(0.0001, spanX * padding),
+    viewport.height / Math.max(0.0001, spanY * padding),
+  );
 }
 
 export function projectedRotationWheel(
@@ -213,6 +245,16 @@ export function rotationWheelLocalRadius(wheel: RotationWheelView, point: { x: n
   const localX = (deltaX * matrix[3] - deltaY * matrix[2]) / determinant;
   const localY = (matrix[0] * deltaY - matrix[1] * deltaX) / determinant;
   return Math.hypot(localX, localY);
+}
+
+export function rotationSnapDelta(rawDegrees: number, radialDistance: number, wheelRadius: number, shiftKey = false) {
+  if (shiftKey) {
+    return Math.round(rawDegrees / 45) * 45;
+  }
+  if (Number.isFinite(wheelRadius) && radialDistance <= wheelRadius) {
+    return Math.round(rawDegrees / 22.5) * 22.5;
+  }
+  return Math.round(rawDegrees);
 }
 
 export function projectedMoveHandle(

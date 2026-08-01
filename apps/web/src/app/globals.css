@@ -3631,6 +3631,11 @@ button {
   color: #e45135;
 }
 
+.rotate-handle.active {
+  color: #e45135;
+  cursor: grabbing;
+}
+
 .rotate-handle:hover,
 .rotate-handle:focus-visible {
   color: #e45135;
