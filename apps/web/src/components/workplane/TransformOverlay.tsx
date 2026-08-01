@@ -1,18 +1,10 @@
-import { useState, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 import * as THREE from "three";
 import {
   measureKeyForHandle,
-  type GizmoAxis,
   type TransformOverlayProps,
   type TransformOverlayState,
 } from "@/components/workplane/transformOverlayTypes";
-
-function gizmoAxisForHandle(handle: TransformOverlayState["handles"][number]): GizmoAxis | null {
-  if (handle.kind === "lift") return "y";
-  if (handle.key === "move-x") return "x";
-  if (handle.key === "move-z") return "z";
-  return null;
-}
 
 export {
   getElevationMeasureKey,
@@ -23,7 +15,6 @@ export {
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
-  type GizmoAxis,
   type PinnedRotationWheelView,
   type RotationAxis,
   type RotationPlaneView,
@@ -59,7 +50,6 @@ export function TransformOverlay({
   onCommitRotationEdit,
   onCancelRotationEdit,
 }: TransformOverlayProps) {
-  const [hoveredGizmoAxis, setHoveredGizmoAxis] = useState<GizmoAxis | null>(null);
   const marks = measureKey ? (box.dimensions[measureKey] ?? []) : [];
   const visibleMarks = (hideDimensionMarks ? [] : marks).filter((mark) => mark.key !== editingDimension?.key);
   const handleMeasureKey = (handle: TransformOverlayState["handles"][number]) => measureKeyForHandle(handle.kind, handle.key, box);
@@ -140,18 +130,6 @@ export function TransformOverlay({
             <line className="dimension-line" x1={mark.x1} y1={mark.y1} x2={mark.x2} y2={mark.y2} />
           </g>
         ))}
-        {(box.axisShafts ?? []).map((shaft) => (
-          <g key={`gizmo-shaft-${shaft.axis}`}>
-            <line className="gizmo-shaft-casing" x1={shaft.x1} y1={shaft.y1} x2={shaft.x2} y2={shaft.y2} />
-            <line
-              className={`gizmo-shaft gizmo-axis-${shaft.axis} ${hoveredGizmoAxis === shaft.axis ? "hovered" : ""}`}
-              x1={shaft.x1}
-              y1={shaft.y1}
-              x2={shaft.x2}
-              y2={shaft.y2}
-            />
-          </g>
-        ))}
       </svg>
       {visibleMarks.map((mark) => (
         <button
@@ -205,55 +183,39 @@ export function TransformOverlay({
           <span>&deg;</span>
         </label>
       ) : null}
-      {box.handles.map((handle) => {
-        const gizmoAxis = gizmoAxisForHandle(handle);
-        return (
-          <button
-            key={handle.key}
-            className={`transform-handle ${handle.className} ${gizmoAxis && hoveredGizmoAxis === gizmoAxis ? "gizmo-hovered" : ""}`}
-            style={{
-              "--overlay-x": `${handle.x}px`,
-              "--overlay-y": `${handle.y}px`,
-              "--move-handle-angle": `${handle.angle ?? 0}deg`,
-            } as CSSProperties}
-            title={handle.title}
-            onPointerEnter={() => {
-              setHoveredGizmoAxis(gizmoAxis);
-              onHoverMeasure(handle.kind === "lift" ? null : handleMeasureKey(handle));
-            }}
-            onPointerLeave={() => {
-              setHoveredGizmoAxis(null);
-              onHoverMeasure(null);
-            }}
-            onPointerDown={(event) => {
-              setHoveredGizmoAxis(gizmoAxis);
-              onPinMeasure(handleMeasureKey(handle));
-              onBeginTransform(handle.kind, handle.key, event);
-            }}
-            onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
-            onPointerUp={(event) => {
-              setHoveredGizmoAxis(null);
-              onFinishTransform(event);
-            }}
-            onPointerCancel={(event) => {
-              setHoveredGizmoAxis(null);
-              onFinishTransform(event);
-            }}
-            onClick={(event) => {
-              if (handle.kind === "lift") {
-                event.stopPropagation();
-                onBeginLiftEdit(handle.key, handle.x + 42, handle.y - 32);
-              }
-            }}
-          >
-            {handle.kind === "move" || handle.kind === "lift" ? (
-              <svg className="gizmo-cone" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M4 5.5 21 12 4 18.5 Z" />
-              </svg>
-            ) : null}
-          </button>
-        );
-      })}
+      {box.handles.map((handle) => (
+        <button
+          key={handle.key}
+          className={`transform-handle ${handle.className}`}
+          style={{
+            "--overlay-x": `${handle.x}px`,
+            "--overlay-y": `${handle.y}px`,
+            "--move-handle-angle": `${handle.angle ?? 0}deg`,
+          } as CSSProperties}
+          title={handle.title}
+          onPointerEnter={() => onHoverMeasure(handle.kind === "lift" ? null : handleMeasureKey(handle))}
+          onPointerLeave={() => onHoverMeasure(null)}
+          onPointerDown={(event) => {
+            onPinMeasure(handleMeasureKey(handle));
+            onBeginTransform(handle.kind, handle.key, event);
+          }}
+          onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
+          onPointerUp={onFinishTransform}
+          onPointerCancel={onFinishTransform}
+          onClick={(event) => {
+            if (handle.kind === "lift") {
+              event.stopPropagation();
+              onBeginLiftEdit(handle.key, handle.x + 42, handle.y - 32);
+            }
+          }}
+        >
+          {handle.kind === "move" ? (
+            <svg viewBox="0 0 36 18" aria-hidden="true" focusable="false">
+              <path d="M5 9h26M25 3l6 6-6 6M11 3 5 9l6 6" />
+            </svg>
+          ) : null}
+        </button>
+      ))}
       <svg className="rotation-handle-layer" viewBox={`0 0 ${box.width} ${box.height}`} preserveAspectRatio="none">
         {box.rotateHandles.map((handle) => {
           const path = rotationPath(handle.arc.points);

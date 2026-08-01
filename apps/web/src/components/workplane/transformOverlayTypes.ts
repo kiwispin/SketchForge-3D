@@ -59,14 +59,11 @@ export type DimensionMark = {
   labelY: number;
 };
 
-export type GizmoAxis = "x" | "y" | "z";
-
 export type TransformOverlayState = {
   id: string;
   width: number;
   height: number;
   guides: Array<{ x1: number; y1: number; x2: number; y2: number }>;
-  axisShafts: Array<{ axis: GizmoAxis; x1: number; y1: number; x2: number; y2: number }>;
   handles: Array<{ key: string; className: string; kind: TransformHandleKind; x: number; y: number; title: string; angle?: number }>;
   rotateHandles: RotationHandleView[];
   dimensions: Record<string, DimensionMark[]>;
