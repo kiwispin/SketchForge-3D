@@ -27,6 +27,9 @@ export type RotationHandleView = {
   key: string;
   axis: RotationAxis;
   className: string;
+  x: number;
+  y: number;
+  angle: number;
   arc: RotationArcView;
   editX: number;
   editY: number;

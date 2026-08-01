@@ -205,6 +205,7 @@ type ThreeState = {
   wasCameraMoving: boolean;
   lastOverlaySync: number;
   lastViewCubeSync: number;
+  rotationHandleSelectionKey: string | null;
   rotationHandleSides: RotationHandleSides | null;
   disposeInteractionListeners: () => void;
   resize: () => void;
@@ -894,64 +895,33 @@ function signedAngleAroundAxis(start: THREE.Vector3, current: THREE.Vector3, axi
   return Math.atan2(axis.clone().normalize().dot(a.clone().cross(b)), clamp(a.dot(b), -1, 1));
 }
 
-const ROTATION_HANDLE_SIDE_HYSTERESIS = 0.22;
-const ROTATION_HANDLE_DOMINANCE_HYSTERESIS = 0.18;
-
-function signedRotationSide(value: number, previous: RotationHandleSide | undefined, positiveSide: RotationHandleSide, negativeSide: RotationHandleSide) {
-  if (previous === positiveSide && value > -ROTATION_HANDLE_SIDE_HYSTERESIS) {
-    return previous;
-  }
-  if (previous === negativeSide && value < ROTATION_HANDLE_SIDE_HYSTERESIS) {
-    return previous;
-  }
-  return value >= 0 ? positiveSide : negativeSide;
+function rotationHandlePointVisible(point: { x: number; y: number }, rect: DOMRect, margin = 28) {
+  return point.x >= margin && point.x <= rect.width - margin && point.y >= margin && point.y <= rect.height - margin;
 }
 
-function rotationSideScore(side: RotationHandleSide, viewX: number, viewZ: number) {
-  if (side === "right") {
-    return viewX;
-  }
-  if (side === "left") {
-    return -viewX;
-  }
-  if (side === "near") {
-    return viewZ;
-  }
-  return -viewZ;
-}
-
-function dominantRotationSide(viewX: number, viewZ: number, previous: RotationHandleSide | undefined) {
-  const sides: RotationHandleSide[] = ["near", "right", "far", "left"];
-  const best = sides.reduce(
-    (current, side) => {
-      const score = rotationSideScore(side, viewX, viewZ);
-      return score > current.score ? { side, score } : current;
-    },
-    { side: "near" as RotationHandleSide, score: Number.NEGATIVE_INFINITY },
-  );
-
-  if (previous && rotationSideScore(previous, viewX, viewZ) >= best.score - ROTATION_HANDLE_DOMINANCE_HYSTERESIS) {
-    return previous;
-  }
-  return best.side;
-}
-
-function rotationHandleSidesForCamera(state: ThreeState, center: THREE.Vector3) {
-  const view = state.camera.position.clone().sub(center);
-  view.y = 0;
-  const length = view.length();
-  if (length < 0.0001) {
-    return state.rotationHandleSides ?? { x: "right", y: "near", z: "near" };
+function rotationHandleSidesForSelection(
+  state: ThreeState,
+  selectionKey: string,
+  rect: DOMRect,
+  candidates: Record<RotationAxis, Record<RotationHandleSide, { x: number; y: number }>>,
+) {
+  if (state.rotationHandleSelectionKey !== selectionKey) {
+    state.rotationHandleSelectionKey = selectionKey;
+    state.rotationHandleSides = null;
   }
 
-  const viewX = view.x / length;
-  const viewZ = view.z / length;
-  const previous = state.rotationHandleSides ?? undefined;
-  const next: RotationHandleSides = {
-    x: signedRotationSide(viewX, previous?.x, "right", "left"),
-    y: dominantRotationSide(viewX, viewZ, previous?.y),
-    z: signedRotationSide(viewZ, previous?.z, "near", "far"),
-  };
+  const current: RotationHandleSides = state.rotationHandleSides ?? { x: "right", y: "near", z: "near" };
+  const opposite: Record<RotationHandleSide, RotationHandleSide> = { near: "far", far: "near", right: "left", left: "right" };
+  const next = { ...current };
+  (Object.keys(next) as RotationAxis[]).forEach((axis) => {
+    const currentPoint = candidates[axis][current[axis]];
+    const oppositeSide = opposite[current[axis]];
+    // Keep each handle anchored while orbiting. Flip only when it would leave
+    // the canvas, matching Tinkercad's off-screen handle behavior.
+    if (!rotationHandlePointVisible(currentPoint, rect) && rotationHandlePointVisible(candidates[axis][oppositeSide], rect)) {
+      next[axis] = oppositeSide;
+    }
+  });
   state.rotationHandleSides = next;
   return next;
 }
@@ -3214,6 +3184,7 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
     wasCameraMoving: false,
     lastOverlaySync: 0,
     lastViewCubeSync: 0,
+    rotationHandleSelectionKey: null,
     rotationHandleSides: null,
     disposeInteractionListeners: () => {},
     resize,
@@ -3766,6 +3737,8 @@ function syncTransformOverlay(
   keepVisibleDuringInteraction = false,
 ) {
   if (selectedIds.length < 1) {
+    state.rotationHandleSelectionKey = null;
+    state.rotationHandleSides = null;
     if (overlayRef.current) {
       overlayRef.current = null;
       setOverlay(null);
@@ -3948,7 +3921,6 @@ function syncTransformOverlay(
       y: point.y + (dy / length) * distance,
     };
   };
-  const rotationSides = rotationHandleSidesForCamera(state, worldCenter);
   const sidePoint = (side: RotationHandleSide, y: number) => {
     if (side === "right") {
       return new THREE.Vector3(worldMaxX, y, worldCenterZ);
@@ -3961,6 +3933,27 @@ function syncTransformOverlay(
     }
     return new THREE.Vector3(worldCenterX, y, worldMinZ);
   };
+  const rotationSideCandidates: Record<RotationAxis, Record<RotationHandleSide, { x: number; y: number }>> = {
+    x: {
+      right: project(sidePoint("right", worldMaxY)),
+      left: project(sidePoint("left", worldMaxY)),
+      near: project(sidePoint("near", worldMaxY)),
+      far: project(sidePoint("far", worldMaxY)),
+    },
+    z: {
+      right: project(sidePoint("right", worldMaxY)),
+      left: project(sidePoint("left", worldMaxY)),
+      near: project(sidePoint("near", worldMaxY)),
+      far: project(sidePoint("far", worldMaxY)),
+    },
+    y: {
+      right: project(sidePoint("right", worldMinY)),
+      left: project(sidePoint("left", worldMinY)),
+      near: project(sidePoint("near", worldMinY)),
+      far: project(sidePoint("far", worldMinY)),
+    },
+  };
+  const rotationSides = rotationHandleSidesForSelection(state, frame.ids.join("|"), rect, rotationSideCandidates);
   const rotateLeft = screenOffsetFromCenter(project(sidePoint(rotationSides.x, worldMaxY)), 38);
   const rotateRight = screenOffsetFromCenter(project(sidePoint(rotationSides.z, worldMaxY)), 40);
   const rotateBottom = screenOffsetFromCenter(project(sidePoint(rotationSides.y, worldMinY)), 50);
@@ -4006,6 +3999,10 @@ function syncTransformOverlay(
     y: makePlaneView(yFaceCenter, xFootAxis, zFootAxis),
     z: makePlaneView(zFaceCenter, xFootAxis, yFootAxis),
   };
+  const rotationIconAngle = (plane: RotationPlaneView) => {
+    const length = Math.hypot(plane.a, plane.b);
+    return length > 0.001 ? (Math.atan2(plane.b, plane.a) * 180) / Math.PI : 0;
+  };
 
   const next = {
     id: frame.ids.join("|"),
@@ -4034,6 +4031,9 @@ function syncTransformOverlay(
         key: "rotate-x",
         axis: "x" as const,
         className: "axis-x",
+        x: rotateLeft.x,
+        y: rotateLeft.y,
+        angle: rotationIconAngle(rotationPlanes.x),
         arc: projectedRotationArc(rotationPlanes.x, rotateLeft),
         editX: rotateLeft.x + 34,
         editY: rotateLeft.y - 28,
@@ -4042,6 +4042,9 @@ function syncTransformOverlay(
         key: "rotate-z",
         axis: "z" as const,
         className: "axis-z",
+        x: rotateRight.x,
+        y: rotateRight.y,
+        angle: rotationIconAngle(rotationPlanes.z),
         arc: projectedRotationArc(rotationPlanes.z, rotateRight),
         editX: rotateRight.x + 34,
         editY: rotateRight.y - 28,
@@ -4050,6 +4053,9 @@ function syncTransformOverlay(
         key: "rotate-y",
         axis: "y" as const,
         className: "axis-y",
+        x: rotateBottom.x,
+        y: rotateBottom.y,
+        angle: rotationIconAngle(rotationPlanes.y),
         arc: projectedRotationArc(rotationPlanes.y, rotateBottom),
         editX: rotateBottom.x + 34,
         editY: rotateBottom.y - 28,

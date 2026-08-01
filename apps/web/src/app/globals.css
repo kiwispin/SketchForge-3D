@@ -3186,7 +3186,7 @@ button {
 .transform-overlay.hide-selection-chrome .transform-guides,
 .transform-overlay.hide-selection-chrome .dimension-label,
 .transform-overlay.hide-selection-chrome .transform-handle,
-.transform-overlay.hide-selection-chrome .rotation-handle-layer {
+.transform-overlay.hide-selection-chrome .rotate-handle {
   opacity: 0;
 }
 
@@ -3512,53 +3512,59 @@ button {
   cursor: grabbing;
 }
 
-.rotation-handle-layer {
+.rotate-handle {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
   z-index: 3;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.rotation-arc-handle {
-  color: #3f4b54;
-  opacity: 0.68;
-}
-
-.rotation-arc-hit {
-  fill: none;
-  stroke: transparent;
-  stroke-width: 18px;
-  vector-effect: non-scaling-stroke;
-  pointer-events: stroke;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  color: rgba(47, 61, 70, 0.68);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   cursor: grab;
+  pointer-events: auto;
+  transform: translate3d(var(--overlay-x, 0), var(--overlay-y, 0), 0) translate(-50%, -50%) rotate(var(--rotate-handle-angle, 0deg));
+  will-change: transform;
 }
 
-.rotation-arc-hit:active {
+.rotate-handle:active {
   cursor: grabbing;
 }
 
-.rotation-arc-line {
+.rotate-handle:hover,
+.rotate-handle:focus-visible {
+  color: #1f2d35;
+  outline: none;
+}
+
+.rotate-handle-icon,
+.rotate-handle-icon svg {
+  display: block;
+  width: 30px;
+  height: 30px;
+}
+
+.rotate-handle-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.96)) drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.96));
+}
+
+.rotate-arc {
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.8px;
+  stroke-width: 3.2;
   stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
-  pointer-events: none;
-  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.9));
 }
 
-.rotation-arc-arrow {
+.rotate-arrow {
   fill: currentColor;
-  stroke: none;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-  pointer-events: none;
-}
-
-.rotation-arc-handle:hover {
-  color: #0079b0;
-  opacity: 1;
 }
 
 .rotation-edit {
