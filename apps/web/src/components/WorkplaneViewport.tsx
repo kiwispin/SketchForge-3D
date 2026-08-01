@@ -25,14 +25,13 @@ import {
   getElevationMeasureKey,
   measureKeyForHandle,
   projectedMoveHandle,
-  projectedRotationArc,
+  screenRotationWheel,
   separatedLiftHandlePoint,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
   type PinnedRotationWheelView,
   type RotationAxis,
-  type RotationPlaneView,
   type RotationReadout,
   type RotationWheelView,
   type TransformHandleKind,
@@ -205,8 +204,6 @@ type ThreeState = {
   wasCameraMoving: boolean;
   lastOverlaySync: number;
   lastViewCubeSync: number;
-  rotationHandleSelectionKey: string | null;
-  rotationHandleSides: RotationHandleSides | null;
   disposeInteractionListeners: () => void;
   resize: () => void;
 };
@@ -296,8 +293,6 @@ function RulerGlyph() {
   );
 }
 
-type RotationHandleSide = "near" | "right" | "far" | "left";
-type RotationHandleSides = Record<RotationAxis, RotationHandleSide>;
 type ShapeUpdatePatch = Partial<WorkplaneShape> & { bakeTransform?: boolean };
 type ResizeSigns = { x: number; z: number };
 type ResizeAnchorMemory = {
@@ -893,37 +888,6 @@ function signedAngleAroundAxis(start: THREE.Vector3, current: THREE.Vector3, axi
   const a = start.clone().normalize();
   const b = current.clone().normalize();
   return Math.atan2(axis.clone().normalize().dot(a.clone().cross(b)), clamp(a.dot(b), -1, 1));
-}
-
-function rotationHandlePointVisible(point: { x: number; y: number }, rect: DOMRect, margin = 28) {
-  return point.x >= margin && point.x <= rect.width - margin && point.y >= margin && point.y <= rect.height - margin;
-}
-
-function rotationHandleSidesForSelection(
-  state: ThreeState,
-  selectionKey: string,
-  rect: DOMRect,
-  candidates: Record<RotationAxis, Record<RotationHandleSide, { x: number; y: number }>>,
-) {
-  if (state.rotationHandleSelectionKey !== selectionKey) {
-    state.rotationHandleSelectionKey = selectionKey;
-    state.rotationHandleSides = null;
-  }
-
-  const current: RotationHandleSides = state.rotationHandleSides ?? { x: "right", y: "right", z: "near" };
-  const opposite: Record<RotationHandleSide, RotationHandleSide> = { near: "far", far: "near", right: "left", left: "right" };
-  const next = { ...current };
-  (Object.keys(next) as RotationAxis[]).forEach((axis) => {
-    const currentPoint = candidates[axis][current[axis]];
-    const oppositeSide = opposite[current[axis]];
-    // Keep each handle anchored while orbiting. Flip only when it would leave
-    // the canvas, matching Tinkercad's off-screen handle behavior.
-    if (!rotationHandlePointVisible(currentPoint, rect) && rotationHandlePointVisible(candidates[axis][oppositeSide], rect)) {
-      next[axis] = oppositeSide;
-    }
-  });
-  state.rotationHandleSides = next;
-  return next;
 }
 
 type ScreenRotationHandleSlots = {
@@ -1924,7 +1888,6 @@ export function WorkplaneViewport({
       const startWorldY = yStart + liftOffset;
       const overlay = transformOverlayRef.current;
       const wheel = kind === "rotate" ? (overlay?.rotationWheels[rotationAxis] ?? overlay?.rotationWheel ?? undefined) : undefined;
-      const rotationPlane = kind === "rotate" ? overlay?.rotationPlanes[rotationAxis] : undefined;
       const rotationPlaneCenterData = kind === "rotate" ? overlay?.rotationPlaneCenters[rotationAxis] : undefined;
       const rotationPlaneCenter = rotationPlaneCenterData
         ? new THREE.Vector3(rotationPlaneCenterData.x, rotationPlaneCenterData.y, rotationPlaneCenterData.z)
@@ -1968,7 +1931,7 @@ export function WorkplaneViewport({
       setSelectionHelpersVisible(state ?? null, kind !== "rotate");
       if (kind === "rotate") {
         setRotationWheelAxis(rotationAxis);
-        setPinnedRotationWheelView(wheel && rotationPlane ? { axis: rotationAxis, wheel: { ...wheel }, plane: { ...rotationPlane } } : null);
+        setPinnedRotationWheelView(wheel ? { axis: rotationAxis, wheel: { ...wheel } } : null);
       } else {
         setPinnedRotationWheelView(null);
       }
@@ -2017,8 +1980,8 @@ export function WorkplaneViewport({
       if (kind === "rotate" && state) {
         const renderRect = state.renderer.domElement.getBoundingClientRect();
         setRotationReadout({
-          x: event.clientX - renderRect.left + 18,
-          y: event.clientY - renderRect.top - 18,
+          x: wheel?.x ?? event.clientX - renderRect.left + 18,
+          y: wheel ? wheel.y - wheel.radius - 24 : event.clientY - renderRect.top - 18,
           text: `${Math.round(rotationValueForAxis(shape, rotationAxis))}°`,
           angle: 0,
         });
@@ -2193,7 +2156,7 @@ export function WorkplaneViewport({
       if (state) {
         setRotationReadout({
           x: transform.wheelCenter ? transform.wheelCenter.x : localClientX + 18,
-          y: transform.wheelCenter ? transform.wheelCenter.y - 92 : localClientY - 18,
+          y: transform.wheelCenter ? transform.wheelCenter.y - transform.wheelCenter.radius - 24 : localClientY - 18,
           text: `${Number(delta.toFixed(1))}°`,
           angle: delta,
         });
@@ -2338,7 +2301,8 @@ export function WorkplaneViewport({
     const shape = selectedIdsRef.current.length === 1 ? shapesRef.current.find((entry) => entry.id === selectedIdsRef.current[0]) : null;
     const currentValue = shape ? rotationValueForAxis(shape, axis) : 0;
     setPinnedMeasureKey(handleKey);
-    setActiveRotationWheel(true);
+    setActiveRotationWheel(false);
+    setPinnedRotationWheelView(null);
     setRotationWheelAxis(axis);
     setRotationReadout(null);
     setEditingRotation({
@@ -2505,7 +2469,6 @@ export function WorkplaneViewport({
         const scaleSigns = handle.kind === "scale" ? resizeSignsForHandle(resizeHandleKey) : undefined;
         const scaleAnchorPoint = handle.kind === "scale" && scaleSigns ? resizeAnchorPointForFrame(frame, scaleSigns) : undefined;
         const wheel = handle.kind === "rotate" ? (overlay?.rotationWheels[rotationAxis] ?? overlay?.rotationWheel ?? undefined) : undefined;
-        const rotationPlane = handle.kind === "rotate" ? overlay?.rotationPlanes[rotationAxis] : undefined;
         const rotationPlaneCenterData = handle.kind === "rotate" ? overlay?.rotationPlaneCenters[rotationAxis] : undefined;
         const rotationPlaneCenter = rotationPlaneCenterData
           ? new THREE.Vector3(rotationPlaneCenterData.x, rotationPlaneCenterData.y, rotationPlaneCenterData.z)
@@ -2530,7 +2493,7 @@ export function WorkplaneViewport({
         setSelectionHelpersVisible(state, handle.kind !== "rotate");
         if (handle.kind === "rotate") {
           setRotationWheelAxis(rotationAxis);
-          setPinnedRotationWheelView(wheel && rotationPlane ? { axis: rotationAxis, wheel: { ...wheel }, plane: { ...rotationPlane } } : null);
+          setPinnedRotationWheelView(wheel ? { axis: rotationAxis, wheel: { ...wheel } } : null);
         } else {
           setPinnedRotationWheelView(null);
         }
@@ -2575,8 +2538,8 @@ export function WorkplaneViewport({
         };
         if (handle.kind === "rotate") {
           setRotationReadout({
-            x: event.clientX - rect.left + 18,
-            y: event.clientY - rect.top - 18,
+            x: wheel?.x ?? event.clientX - rect.left + 18,
+            y: wheel ? wheel.y - wheel.radius - 24 : event.clientY - rect.top - 18,
             text: `${Math.round(rotationValueForAxis(shape, rotationAxis))}°`,
             angle: 0,
           });
@@ -3264,8 +3227,6 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
     wasCameraMoving: false,
     lastOverlaySync: 0,
     lastViewCubeSync: 0,
-    rotationHandleSelectionKey: null,
-    rotationHandleSides: null,
     disposeInteractionListeners: () => {},
     resize,
   };
@@ -3817,8 +3778,6 @@ function syncTransformOverlay(
   keepVisibleDuringInteraction = false,
 ) {
   if (selectedIds.length < 1) {
-    state.rotationHandleSelectionKey = null;
-    state.rotationHandleSides = null;
     if (overlayRef.current) {
       overlayRef.current = null;
       setOverlay(null);
@@ -4005,83 +3964,20 @@ function syncTransformOverlay(
     [heightHandleKey]: [makeDimensionMark("height", heightHandleKey, "height", heightLabel, bottomCenterWorld, topCenterWorld, rightOut, project)],
     [liftHandleKey]: [makeDimensionMark("elevation", liftHandleKey, "elevation", liftLabel, workplaneAnchor, verticalBase, rightOut, project)],
   };
-  const sidePoint = (side: RotationHandleSide, y: number) => {
-    if (side === "right") {
-      return new THREE.Vector3(worldMaxX, y, worldCenterZ);
-    }
-    if (side === "left") {
-      return new THREE.Vector3(worldMinX, y, worldCenterZ);
-    }
-    if (side === "near") {
-      return new THREE.Vector3(worldCenterX, y, worldMaxZ);
-    }
-    return new THREE.Vector3(worldCenterX, y, worldMinZ);
-  };
-  const rotationSideCandidates: Record<RotationAxis, Record<RotationHandleSide, { x: number; y: number }>> = {
-    x: {
-      right: project(sidePoint("right", worldMaxY)),
-      left: project(sidePoint("left", worldMaxY)),
-      near: project(sidePoint("near", worldMaxY)),
-      far: project(sidePoint("far", worldMaxY)),
-    },
-    z: {
-      right: project(sidePoint("right", worldMaxY)),
-      left: project(sidePoint("left", worldMaxY)),
-      near: project(sidePoint("near", worldMaxY)),
-      far: project(sidePoint("far", worldMaxY)),
-    },
-    y: {
-      right: project(sidePoint("right", worldMinY)),
-      left: project(sidePoint("left", worldMinY)),
-      near: project(sidePoint("near", worldMinY)),
-      far: project(sidePoint("far", worldMinY)),
-    },
-  };
-  const rotationSides = rotationHandleSidesForSelection(state, frame.ids.join("|"), rect, rotationSideCandidates);
   const rotateLeft = rotationSlots.x;
   const rotateRight = rotationSlots.z;
   const rotateBottom = rotationSlots.y;
-  const xFaceCenter = sidePoint(rotationSides.x, worldCenterY);
-  const zFaceCenter = sidePoint(rotationSides.z, worldCenterY);
-  const yFaceCenter = verticalBase;
-  const planeRadius = 154;
-  const planeWorldStep = Math.max(12, Math.max(frame.width, frame.depth, frame.height) * 0.78);
-  const makePlaneView = (centerWorld: THREE.Vector3, uAxis: THREE.Vector3, vAxis: THREE.Vector3): RotationPlaneView => {
-    const screenCenter = project(centerWorld);
-    const u = project(centerWorld.clone().add(uAxis.clone().multiplyScalar(planeWorldStep)));
-    const v = project(centerWorld.clone().add(vAxis.clone().multiplyScalar(planeWorldStep)));
-    const du = { x: u.x - screenCenter.x, y: u.y - screenCenter.y };
-    const dv = { x: v.x - screenCenter.x, y: v.y - screenCenter.y };
-    const longest = Math.max(12, Math.hypot(du.x, du.y), Math.hypot(dv.x, dv.y));
-    const scale = planeRadius / longest / 100;
-    return {
-      x: screenCenter.x,
-      y: screenCenter.y,
-      a: du.x * scale,
-      b: du.y * scale,
-      c: dv.x * scale,
-      d: dv.y * scale,
-    };
-  };
-  const makeWheel = (centerWorld: THREE.Vector3) => {
-    const screenCenter = project(centerWorld);
-    return { x: screenCenter.x, y: screenCenter.y, radius: planeRadius };
-  };
+  const compactRotationWheel = screenRotationWheel(centerPoint, rect);
   const makeWorldPoint = (point: THREE.Vector3) => ({ x: point.x, y: point.y, z: point.z });
   const rotationWheels: Record<RotationAxis, { x: number; y: number; radius: number }> = {
-    x: makeWheel(xFaceCenter),
-    y: makeWheel(yFaceCenter),
-    z: makeWheel(zFaceCenter),
+    x: { ...compactRotationWheel },
+    y: { ...compactRotationWheel },
+    z: { ...compactRotationWheel },
   };
   const rotationPlaneCenters: Record<RotationAxis, { x: number; y: number; z: number }> = {
-    x: makeWorldPoint(xFaceCenter),
-    y: makeWorldPoint(yFaceCenter),
-    z: makeWorldPoint(zFaceCenter),
-  };
-  const rotationPlanes: Record<RotationAxis, RotationPlaneView> = {
-    x: makePlaneView(xFaceCenter, zFootAxis, yFootAxis),
-    y: makePlaneView(yFaceCenter, xFootAxis, zFootAxis),
-    z: makePlaneView(zFaceCenter, xFootAxis, yFootAxis),
+    x: makeWorldPoint(frame.center),
+    y: makeWorldPoint(frame.center),
+    z: makeWorldPoint(frame.center),
   };
   // These are screen-space controls, not 3D geometry. Keep the glyphs upright
   // while the camera orbits; only the selected object's screen frame moves.
@@ -4117,7 +4013,6 @@ function syncTransformOverlay(
         x: rotateLeft.x,
         y: rotateLeft.y,
         angle: rotationIconAngle(),
-        arc: projectedRotationArc(rotationPlanes.x, rotateLeft),
         editX: rotateLeft.x + 34,
         editY: rotateLeft.y - 28,
       },
@@ -4128,7 +4023,6 @@ function syncTransformOverlay(
         x: rotateRight.x,
         y: rotateRight.y,
         angle: rotationIconAngle(),
-        arc: projectedRotationArc(rotationPlanes.z, rotateRight),
         editX: rotateRight.x + 34,
         editY: rotateRight.y - 28,
       },
@@ -4139,7 +4033,6 @@ function syncTransformOverlay(
         x: rotateBottom.x,
         y: rotateBottom.y,
         angle: rotationIconAngle(),
-        arc: projectedRotationArc(rotationPlanes.y, rotateBottom),
         editX: rotateBottom.x + 34,
         editY: rotateBottom.y - 28,
       },
@@ -4148,7 +4041,6 @@ function syncTransformOverlay(
     rotationWheel: rotationWheels.y,
     rotationWheels,
     rotationPlaneCenters,
-    rotationPlanes,
   };
 
   updateTransformOverlayIfChanged(overlayRef, setOverlay, next);
