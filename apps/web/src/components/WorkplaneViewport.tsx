@@ -910,7 +910,7 @@ function rotationHandleSidesForSelection(
     state.rotationHandleSides = null;
   }
 
-  const current: RotationHandleSides = state.rotationHandleSides ?? { x: "right", y: "near", z: "near" };
+  const current: RotationHandleSides = state.rotationHandleSides ?? { x: "right", y: "right", z: "near" };
   const opposite: Record<RotationHandleSide, RotationHandleSide> = { near: "far", far: "near", right: "left", left: "right" };
   const next = { ...current };
   (Object.keys(next) as RotationAxis[]).forEach((axis) => {
@@ -924,6 +924,38 @@ function rotationHandleSidesForSelection(
   });
   state.rotationHandleSides = next;
   return next;
+}
+
+type ScreenRotationHandleSlots = {
+  x: { x: number; y: number };
+  z: { x: number; y: number };
+  y: { x: number; y: number };
+};
+
+function screenRotationHandleSlots(
+  points: Array<{ x: number; y: number }>,
+  rect: DOMRect,
+): ScreenRotationHandleSlots {
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  const topInset = Math.max(14, Math.min(68, width * 0.24));
+  const verticalGap = clamp(height * 0.05, 10, 24);
+  const horizontalGap = clamp(width * 0.03, 8, 16);
+  const topY = minY - verticalGap;
+  const bottomY = maxY - verticalGap;
+  const upperY = topY >= 28 ? topY : maxY + verticalGap;
+  const lowerY = bottomY <= rect.height - 28 ? bottomY : minY - verticalGap;
+  const rightX = maxX + horizontalGap <= rect.width - 28 ? maxX + horizontalGap : minX - horizontalGap;
+
+  return {
+    x: { x: minX + topInset, y: upperY },
+    z: { x: maxX - topInset, y: upperY },
+    y: { x: rightX, y: lowerY },
+  };
 }
 
 function projectedWorldYForScreenY(state: ThreeState, shape: WorkplaneShape, targetScreenY: number, startWorldY: number) {
@@ -3794,6 +3826,11 @@ function syncTransformOverlay(
       y: ((1 - projected.y) / 2) * rect.height,
     };
   };
+  const projectedSelectionPoints = projectedCorners.map(({ projected }) => ({
+    x: ((projected.x + 1) / 2) * rect.width,
+    y: ((1 - projected.y) / 2) * rect.height,
+  }));
+  const rotationSlots = screenRotationHandleSlots(projectedSelectionPoints, rect);
 
   const worldMinY = Math.min(...corners.map((corner) => corner.y));
   const worldMaxY = Math.max(...corners.map((corner) => corner.y));
@@ -3912,15 +3949,6 @@ function syncTransformOverlay(
     [heightHandleKey]: [makeDimensionMark("height", heightHandleKey, "height", heightLabel, bottomCenterWorld, topCenterWorld, rightOut, project)],
     [liftHandleKey]: [makeDimensionMark("elevation", liftHandleKey, "elevation", liftLabel, workplaneAnchor, verticalBase, rightOut, project)],
   };
-  const screenOffsetFromCenter = (point: { x: number; y: number }, distance: number) => {
-    const dx = point.x - centerPoint.x;
-    const dy = point.y - centerPoint.y;
-    const length = Math.max(1, Math.hypot(dx, dy));
-    return {
-      x: point.x + (dx / length) * distance,
-      y: point.y + (dy / length) * distance,
-    };
-  };
   const sidePoint = (side: RotationHandleSide, y: number) => {
     if (side === "right") {
       return new THREE.Vector3(worldMaxX, y, worldCenterZ);
@@ -3954,9 +3982,9 @@ function syncTransformOverlay(
     },
   };
   const rotationSides = rotationHandleSidesForSelection(state, frame.ids.join("|"), rect, rotationSideCandidates);
-  const rotateLeft = screenOffsetFromCenter(project(sidePoint(rotationSides.x, worldMaxY)), 38);
-  const rotateRight = screenOffsetFromCenter(project(sidePoint(rotationSides.z, worldMaxY)), 40);
-  const rotateBottom = screenOffsetFromCenter(project(sidePoint(rotationSides.y, worldMinY)), 50);
+  const rotateLeft = rotationSlots.x;
+  const rotateRight = rotationSlots.z;
+  const rotateBottom = rotationSlots.y;
   const xFaceCenter = sidePoint(rotationSides.x, worldCenterY);
   const zFaceCenter = sidePoint(rotationSides.z, worldCenterY);
   const yFaceCenter = verticalBase;
@@ -3999,10 +4027,9 @@ function syncTransformOverlay(
     y: makePlaneView(yFaceCenter, xFootAxis, zFootAxis),
     z: makePlaneView(zFaceCenter, xFootAxis, yFootAxis),
   };
-  const rotationIconAngle = (plane: RotationPlaneView) => {
-    const length = Math.hypot(plane.a, plane.b);
-    return length > 0.001 ? (Math.atan2(plane.b, plane.a) * 180) / Math.PI : 0;
-  };
+  // These are screen-space controls, not 3D geometry. Keep the glyphs upright
+  // while the camera orbits; only the selected object's screen frame moves.
+  const rotationIconAngle = () => 0;
 
   const next = {
     id: frame.ids.join("|"),
@@ -4033,7 +4060,7 @@ function syncTransformOverlay(
         className: "axis-x",
         x: rotateLeft.x,
         y: rotateLeft.y,
-        angle: rotationIconAngle(rotationPlanes.x),
+        angle: rotationIconAngle(),
         arc: projectedRotationArc(rotationPlanes.x, rotateLeft),
         editX: rotateLeft.x + 34,
         editY: rotateLeft.y - 28,
@@ -4044,7 +4071,7 @@ function syncTransformOverlay(
         className: "axis-z",
         x: rotateRight.x,
         y: rotateRight.y,
-        angle: rotationIconAngle(rotationPlanes.z),
+        angle: rotationIconAngle(),
         arc: projectedRotationArc(rotationPlanes.z, rotateRight),
         editX: rotateRight.x + 34,
         editY: rotateRight.y - 28,
@@ -4055,7 +4082,7 @@ function syncTransformOverlay(
         className: "axis-y",
         x: rotateBottom.x,
         y: rotateBottom.y,
-        angle: rotationIconAngle(rotationPlanes.y),
+        angle: rotationIconAngle(),
         arc: projectedRotationArc(rotationPlanes.y, rotateBottom),
         editX: rotateBottom.x + 34,
         editY: rotateBottom.y - 28,
