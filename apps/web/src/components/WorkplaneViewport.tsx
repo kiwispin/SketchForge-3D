@@ -3443,8 +3443,11 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
   };
   controls.minDistance = 18;
   controls.maxDistance = 4200;
-  controls.minPolarAngle = 0.06;
-  controls.maxPolarAngle = Math.PI - 0.06;
+  // Top/bottom views use non-parallel camera-up vectors (see viewFaceUp), so
+  // the camera may reach the exact poles without a gimbal flip. Keep the full
+  // polar range so every view-cube face commits exactly on first click.
+  controls.minPolarAngle = 0;
+  controls.maxPolarAngle = Math.PI;
   controls.target.copy(CAMERA_TARGET);
 
   const ambient = new THREE.HemisphereLight("#ffffff", "#d6edf5", 2.1);
