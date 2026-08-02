@@ -28,7 +28,6 @@ import {
   getElevationMeasureKey,
   measureKeyForHandle,
   projectedMoveHandle,
-  rotationHandleLocalAnchor,
   orthographicFitZoom,
   rotationWheelLocalRadius,
   rotationWheelPoint,
@@ -36,6 +35,7 @@ import {
   separatedLiftHandlePoint,
   signedAngleAroundAxis,
   unwrapRadians,
+  worldPlaneHandleAnchor,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
@@ -896,16 +896,31 @@ type ScreenRotationHandleSlots = {
   y: { x: number; y: number };
 };
 
+function rotationHandleWorldAnchors(
+  frame: SelectionFrame,
+  cameraPosition: THREE.Vector3,
+  previous: Record<RotationAxis, WorldVec3 | null>,
+): Record<RotationAxis, WorldVec3> {
+  const corners = selectionFrameCorners(frame).map(vector3ToWorldVec3);
+  const center = vector3ToWorldVec3(frame.center);
+  const camera = vector3ToWorldVec3(cameraPosition);
+  return {
+    x: worldPlaneHandleAnchor("x", corners, center, camera, previous.x),
+    z: worldPlaneHandleAnchor("z", corners, center, camera, previous.z),
+    y: worldPlaneHandleAnchor("y", corners, center, camera, previous.y),
+  };
+}
+
 function screenRotationHandleSlots(
   frame: SelectionFrame,
+  worldAnchors: Record<RotationAxis, WorldVec3>,
   project: (point: THREE.Vector3) => { x: number; y: number },
   rect: DOMRect,
 ): ScreenRotationHandleSlots {
   const center = project(frame.center);
   const gap = clamp(Math.min(rect.width, rect.height) * 0.018, 12, 24);
   const makeSlot = (axis: RotationAxis) => {
-    const local = rotationHandleLocalAnchor(axis, frame);
-    const anchor = framePoint(frame, local.x, local.y, local.z);
+    const anchor = new THREE.Vector3(worldAnchors[axis].x, worldAnchors[axis].y, worldAnchors[axis].z);
     const projected = project(anchor);
     const dx = projected.x - center.x;
     const dy = projected.y - center.y;
@@ -4141,7 +4156,13 @@ function syncTransformOverlay(
       y: ((1 - projected.y) / 2) * rect.height,
     };
   };
-  const rotationSlots = screenRotationHandleSlots(frame, project, rect);
+  const previousRotationAnchors: Record<RotationAxis, WorldVec3 | null> = {
+    x: overlayRef.current?.rotationPlanes?.x?.handleWorldAnchor ?? null,
+    z: overlayRef.current?.rotationPlanes?.z?.handleWorldAnchor ?? null,
+    y: overlayRef.current?.rotationPlanes?.y?.handleWorldAnchor ?? null,
+  };
+  const rotationAnchorWorld = rotationHandleWorldAnchors(frame, state.camera.position, previousRotationAnchors);
+  const rotationSlots = screenRotationHandleSlots(frame, rotationAnchorWorld, project, rect);
 
   const worldMinY = Math.min(...corners.map((corner) => corner.y));
   const worldMaxY = Math.max(...corners.map((corner) => corner.y));
@@ -4265,9 +4286,9 @@ function syncTransformOverlay(
   const makeWorldPoint = (point: THREE.Vector3) => ({ x: point.x, y: point.y, z: point.z });
   const projectWorldPoint = (point: WorldVec3) => project(new THREE.Vector3(point.x, point.y, point.z));
   const rotationPlanes: Record<RotationAxis, RotationPlaneDescriptor> = {
-    x: buildRotationPlaneDescriptor("x", makeWorldPoint(frame.center), projectWorldPoint, rotateLeft, rect),
-    y: buildRotationPlaneDescriptor("y", makeWorldPoint(frame.center), projectWorldPoint, rotateBottom, rect),
-    z: buildRotationPlaneDescriptor("z", makeWorldPoint(frame.center), projectWorldPoint, rotateRight, rect),
+    x: buildRotationPlaneDescriptor("x", makeWorldPoint(frame.center), projectWorldPoint, rotateLeft, rotationAnchorWorld.x, rect),
+    y: buildRotationPlaneDescriptor("y", makeWorldPoint(frame.center), projectWorldPoint, rotateBottom, rotationAnchorWorld.y, rect),
+    z: buildRotationPlaneDescriptor("z", makeWorldPoint(frame.center), projectWorldPoint, rotateRight, rotationAnchorWorld.z, rect),
   };
   const rotationWheels: Record<RotationAxis, RotationWheelView> = {
     x: rotationPlanes.x.wheel,

@@ -6,11 +6,11 @@ import {
   buildRotationPlaneDescriptor,
   projectedMoveHandle,
   projectedRotationWheel,
-  rotationHandleLocalAnchor,
   rotationWheelLocalRadius,
   rotationWheelPoint,
   rotationSnapDelta,
   signedAngleAroundAxis,
+  worldPlaneHandleAnchor,
   orthographicFitZoom,
   screenRotationWheel,
   separatedLiftHandlePoint,
@@ -78,10 +78,53 @@ describe("transform overlay geometry", () => {
     expect(rotationWheelLocalRadius(wheel, { x: 200, y: 66 })).toBeCloseTo(ROTATION_PROTRACTOR_RADIUS);
   });
 
-  it("keeps each rotation axis assigned to a stable frame corner", () => {
-    expect(rotationHandleLocalAnchor("x", { width: 20, height: 40, depth: 60 })).toEqual({ x: -10, y: 20, z: 30 });
-    expect(rotationHandleLocalAnchor("z", { width: 20, height: 40, depth: 60 })).toEqual({ x: 10, y: 20, z: -30 });
-    expect(rotationHandleLocalAnchor("y", { width: 20, height: 40, depth: 60 })).toEqual({ x: 10, y: -20, z: 30 });
+  it("anchors each rotation handle on its own world-plane face, not frame corners", () => {
+    const corners: WorldVec3[] = [];
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          corners.push({ x: sx * 10, y: sy * 10, z: sz * 10 });
+        }
+      }
+    }
+    const center = { x: 0, y: 0, z: 0 };
+    const camera = { x: 50, y: 40, z: 30 };
+    // Each handle anchors a distinct face centre: +X, +Y, +Z.
+    expect(worldPlaneHandleAnchor("x", corners, center, camera, null)).toEqual({ x: 10, y: 0, z: 0 });
+    expect(worldPlaneHandleAnchor("y", corners, center, camera, null)).toEqual({ x: 0, y: 10, z: 0 });
+    expect(worldPlaneHandleAnchor("z", corners, center, camera, null)).toEqual({ x: 0, y: 0, z: 10 });
+  });
+
+  it("keeps the previous face while the camera has not clearly crossed (hysteresis)", () => {
+    const corners: WorldVec3[] = [];
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          corners.push({ x: sx * 10, y: sy * 10, z: sz * 10 });
+        }
+      }
+    }
+    const center = { x: 0, y: 0, z: 0 };
+    // Camera moved slightly toward -X but is still within 35% of the half
+    // extent, so the +X face anchor is retained instead of swapping to -X.
+    const camera = { x: -2, y: 40, z: 30 };
+    const previous = { x: 10, y: 0, z: 0 };
+    expect(worldPlaneHandleAnchor("x", corners, center, camera, previous)).toEqual(previous);
+  });
+
+  it("switches the face once the camera clearly crosses the pivot plane", () => {
+    const corners: WorldVec3[] = [];
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          corners.push({ x: sx * 10, y: sy * 10, z: sz * 10 });
+        }
+      }
+    }
+    const center = { x: 0, y: 0, z: 0 };
+    const camera = { x: -50, y: 40, z: 30 };
+    const previous = { x: 10, y: 0, z: 0 };
+    expect(worldPlaneHandleAnchor("x", corners, center, camera, previous)).toEqual({ x: -10, y: 0, z: 0 });
   });
 
   it("uses coarse inner-zone and fine outer-zone rotation snapping", () => {
@@ -111,9 +154,10 @@ describe("shared rotation-plane descriptor (Stage 1)", () => {
       x: point.x * 1.5 - point.z * 0.4 + 600,
       y: point.y * 1.0 + point.z * 0.3 + 400,
     });
-    const descriptor = buildRotationPlaneDescriptor("y", pivot, project, { x: 700, y: 300 }, viewport);
+    const descriptor = buildRotationPlaneDescriptor("y", pivot, project, { x: 700, y: 300 }, { x: 5, y: 6, z: 7 }, viewport);
     expect(descriptor.axisVector).toEqual({ x: 0, y: 1, z: 0 });
     expect(descriptor.screenCenter).toEqual(project(pivot));
+    expect(descriptor.handleWorldAnchor).toEqual({ x: 5, y: 6, z: 7 });
     // screenU is the projected +X axis, screenV the projected +Z axis.
     expect(descriptor.screenU.x).toBeCloseTo(project({ x: pivot.x + 1, y: pivot.y, z: pivot.z }).x - project(pivot).x, 5);
     expect(descriptor.screenV.y).toBeCloseTo(project({ x: pivot.x, y: pivot.y, z: pivot.z + 1 }).y - project(pivot).y, 5);

@@ -31,6 +31,8 @@ export type RotationPlaneDescriptor = {
   screenU: ScreenVec2;
   /** Screen-space projection of planeV relative to screenCenter. */
   screenV: ScreenVec2;
+  /** World-space point the handle anchors to (an extreme frame corner). */
+  handleWorldAnchor: WorldVec3;
   /** Screen position of the handle button. */
   handleAnchor: ScreenVec2;
   /** The protractor view (fixed screen radius, affine plane projection). */
@@ -56,6 +58,7 @@ export function buildRotationPlaneDescriptor(
   pivot: WorldVec3,
   project: (point: WorldVec3) => ScreenVec2,
   handleAnchor: ScreenVec2,
+  handleWorldAnchor: WorldVec3,
   viewport: { width: number; height: number },
 ): RotationPlaneDescriptor {
   const plane = WORLD_ROTATION_PLANES[axis];
@@ -72,6 +75,7 @@ export function buildRotationPlaneDescriptor(
     screenCenter,
     screenU,
     screenV,
+    handleWorldAnchor: { ...handleWorldAnchor },
     handleAnchor,
     wheel,
   };
@@ -142,12 +146,6 @@ export type RotationHandleView = {
   angle: number;
   editX: number;
   editY: number;
-};
-
-export type RotationAnchorFrame = {
-  width: number;
-  height: number;
-  depth: number;
 };
 
 export type PinnedRotationWheelView = {
@@ -262,22 +260,44 @@ export const MIN_LIFT_HANDLE_SCREEN_GAP = 32;
 export const MOVE_HANDLE_SCREEN_OFFSET = 36;
 export const ROTATION_PROTRACTOR_RADIUS = 168;
 
+function worldVec3Axis(value: WorldVec3, axis: RotationAxis) {
+  return axis === "x" ? value.x : axis === "y" ? value.y : value.z;
+}
+
 /**
- * Stable, semantic anchors for the three Tinkercad-style rotation handles.
- * The signs describe a corner of the projected selection frame rather than
- * a screen-space extremum, so an orbit cannot silently swap axis identities.
+ * Semantic anchor for one rotation handle, assigned by world-plane identity:
+ * the X handle anchors the centre of the frame face whose normal is world X
+ * (toward the camera), Y the +Y face centre, Z the +Z face centre. This keeps
+ * the three handles on distinct frame faces and cannot reorient with a
+ * pre-rotated object.
+ *
+ * `previous` provides hysteresis on the camera-facing side: the chosen face
+ * only flips when the camera has clearly crossed the pivot plane, so handles
+ * do not swap during small camera movements or orbit jitter.
  */
-export function rotationHandleLocalAnchor(axis: RotationAxis, frame: RotationAnchorFrame) {
-  const signs = axis === "x"
-    ? { x: -1, y: 1, z: 1 }
-    : axis === "z"
-      ? { x: 1, y: 1, z: -1 }
-      : { x: 1, y: -1, z: 1 };
-  return {
-    x: signs.x * frame.width / 2,
-    y: signs.y * frame.height / 2,
-    z: signs.z * frame.depth / 2,
-  };
+export function worldPlaneHandleAnchor(
+  axis: RotationAxis,
+  corners: WorldVec3[],
+  center: WorldVec3,
+  cameraPosition: WorldVec3,
+  previous: WorldVec3 | null,
+): WorldVec3 {
+  const worldMin = axis === "x" ? Math.min(...corners.map((c) => c.x)) : axis === "y" ? Math.min(...corners.map((c) => c.y)) : Math.min(...corners.map((c) => c.z));
+  const worldMax = axis === "x" ? Math.max(...corners.map((c) => c.x)) : axis === "y" ? Math.max(...corners.map((c) => c.y)) : Math.max(...corners.map((c) => c.z));
+  const extent = Math.max(1e-6, worldMax - worldMin);
+  const cameraOffset = worldVec3Axis(cameraPosition, axis) - worldVec3Axis(center, axis);
+  const candidateSide = cameraOffset >= 0 ? 1 : -1;
+  let side = candidateSide;
+  if (previous) {
+    const previousSide = worldVec3Axis(previous, axis) >= worldVec3Axis(center, axis) ? 1 : -1;
+    if (previousSide !== candidateSide && Math.abs(cameraOffset) < extent * 0.35) {
+      side = previousSide;
+    }
+  }
+  const coordinate = side > 0 ? worldMax : worldMin;
+  if (axis === "x") return { x: coordinate, y: center.y, z: center.z };
+  if (axis === "y") return { x: center.x, y: coordinate, z: center.z };
+  return { x: center.x, y: center.y, z: coordinate };
 }
 
 /**
