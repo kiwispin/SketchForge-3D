@@ -37,4 +37,21 @@ describe("oriented workplanes", () => {
     expect(plane.u.clone().cross(plane.v).distanceTo(plane.normal)).toBeLessThan(0.001);
     expect(planeBasisMatrix(plane).determinant()).toBeCloseTo(1, 5);
   });
+
+  it("places a shape flush on a rotated box face along the face normal", () => {
+    // A box rotated 30° about Y has its top-face world normal still (0,1,0),
+    // but a side face points along the rotated X axis.
+    const yaw = THREE.MathUtils.degToRad(30);
+    const sideNormal = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw)).normalize();
+    const facePoint = new THREE.Vector3(4, 10, 6);
+    const plane = planeFromFace(facePoint, sideNormal);
+    expect(plane.normal.distanceTo(sideNormal)).toBeLessThan(0.001);
+
+    // Placing an 8-high shape flush means its base sits on the face plane, so
+    // the shape centre is facePoint + normal * (height / 2).
+    const height = 8;
+    const placement = placementPointOnPlane(plane, 0, 0, height);
+    const centre = new THREE.Vector3(placement.x, placement.elevation + height / 2, placement.z);
+    expect(centre.distanceTo(facePoint.clone().addScaledVector(sideNormal, height / 2))).toBeLessThan(0.001);
+  });
 });
