@@ -6281,7 +6281,7 @@ export function SketchForgeEditor({
         return;
       }
 
-      const { changed, next } = applyPatch(shapes);
+      const { changed, next } = applyPatch(shapesRef.current);
       if (changed) {
         commitShapes(next, selectedIds);
       }
