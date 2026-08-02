@@ -3245,6 +3245,19 @@ button {
   transform: translate(-50%, -50%);
 }
 
+.origin-ruler-readout {
+  font-weight: 700;
+  color: #0c4a6e;
+  border-color: rgba(0, 143, 190, 0.55);
+}
+
+.ruler-overlay .ruler-point.origin-marker {
+  pointer-events: none;
+  cursor: default;
+  fill: #00a7d8;
+  stroke: #ffffff;
+}
+
 .transform-overlay {
   position: absolute;
   inset: 0;

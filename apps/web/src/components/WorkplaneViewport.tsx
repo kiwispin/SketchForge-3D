@@ -642,6 +642,7 @@ function RulerOverlay({
   overlay,
   startPointId,
   active,
+  originPointId,
   onPointPointerDown,
   onPointPointerMove,
   onPointPointerUp,
@@ -650,6 +651,7 @@ function RulerOverlay({
   overlay: RulerOverlayState;
   startPointId: string | null;
   active: boolean;
+  originPointId: string | null;
   onPointPointerDown: (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => void;
   onPointPointerMove: (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => void;
   onPointPointerUp: (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => void;
@@ -671,19 +673,22 @@ function RulerOverlay({
             />
           </g>
         ))}
-        {overlay.points.map((point) => (
-          <circle
-            key={point.id}
-            className={`ruler-point ${point.id === startPointId ? "pending" : ""}`}
-            cx={point.screenX}
-            cy={point.screenY}
-            r="5"
-            onPointerDown={(event) => onPointPointerDown(event, point.id)}
-            onPointerMove={(event) => onPointPointerMove(event, point.id)}
-            onPointerUp={(event) => onPointPointerUp(event, point.id)}
-            onPointerCancel={(event) => onPointPointerUp(event, point.id)}
-          />
-        ))}
+        {overlay.points.map((point) => {
+          const isOriginMarker = point.id === originPointId;
+          return (
+            <circle
+              key={point.id}
+              className={`ruler-point ${isOriginMarker ? "origin-marker" : ""} ${point.id === startPointId ? "pending" : ""}`}
+              cx={point.screenX}
+              cy={point.screenY}
+              r="5"
+              onPointerDown={isOriginMarker ? undefined : (event) => onPointPointerDown(event, point.id)}
+              onPointerMove={isOriginMarker ? undefined : (event) => onPointPointerMove(event, point.id)}
+              onPointerUp={isOriginMarker ? undefined : (event) => onPointPointerUp(event, point.id)}
+              onPointerCancel={isOriginMarker ? undefined : (event) => onPointPointerUp(event, point.id)}
+            />
+          );
+        })}
         {active && overlay.hover ? <circle className="ruler-hover-point" cx={overlay.hover.screenX} cy={overlay.hover.screenY} r="5" /> : null}
       </svg>
       {overlay.segments.map((segment) => (
@@ -1189,6 +1194,7 @@ export function WorkplaneViewport({
   const [editingRotation, setEditingRotation] = useState<EditingRotation>(null);
   const [rulerMode, setRulerMode] = useState(false);
   const [originRulerMode, setOriginRulerMode] = useState(false);
+  const [originRulerReadout, setOriginRulerReadout] = useState<{ x: number; y: number; text: string } | null>(null);
   const [rulerModel, setRulerModel] = useState<RulerModel>({ points: [], segments: [], startPointId: null, hover: null });
   const [rulerOverlay, setRulerOverlay] = useState<RulerOverlayState | null>(null);
   const [activeWorkplane, setActiveWorkplane] = useState<WorkplanePlane>(() => workplanePlane("ground"));
@@ -1214,6 +1220,8 @@ export function WorkplaneViewport({
   const mirrorOverlayRef = useRef<MirrorOverlayState | null>(null);
   const rulerModeRef = useRef(false);
   const originRulerModeRef = useRef(false);
+  const originRulerPointIdRef = useRef<string | null>(null);
+  const originRulerReadoutRef = useRef<{ x: number; y: number; text: string } | null>(null);
   const activeWorkplaneRef = useRef(activeWorkplane);
   const rulerModelRef = useRef(rulerModel);
   const rulerOverlayRef = useRef<RulerOverlayState | null>(null);
@@ -1447,6 +1455,50 @@ export function WorkplaneViewport({
       threeRef.current.needsRender = true;
     }
   }, [rulerModel]);
+
+  useEffect(() => {
+    if (!originRulerModeRef.current) {
+      if (originRulerReadoutRef.current) {
+        originRulerReadoutRef.current = null;
+        setOriginRulerReadout(null);
+      }
+      return;
+    }
+    const state = threeRef.current;
+    if (!state || selectedIdsRef.current.length === 0) {
+      if (originRulerReadoutRef.current) {
+        originRulerReadoutRef.current = null;
+        setOriginRulerReadout(null);
+      }
+      return;
+    }
+    const frame = selectionFrameForShapes(shapesRef.current, selectedIdsRef.current);
+    if (!frame) {
+      if (originRulerReadoutRef.current) {
+        originRulerReadoutRef.current = null;
+        setOriginRulerReadout(null);
+      }
+      return;
+    }
+    const originPoint = rulerModelRef.current.points.find((point) => point.id === originRulerPointIdRef.current);
+    const originX = originPoint?.x ?? 0;
+    const originZ = originPoint?.z ?? 0;
+    const bounds = selectionWorldYBounds(frame);
+    const x = frame.center.x - originX;
+    const z = frame.center.z - originZ;
+    const elevation = bounds.min - 0;
+    const screen = projectToScreen(frame.center.clone().add(new THREE.Vector3(0, bounds.height / 2 + 14, 0)), state);
+    const next = {
+      x: screen.x,
+      y: screen.y,
+      text: `X ${formatMeasure(x, workspaceRef.current.accuracy)} · Z ${formatMeasure(z, workspaceRef.current.accuracy)} · Y ${formatMeasure(elevation, workspaceRef.current.accuracy)}`,
+    };
+    const previous = originRulerReadoutRef.current;
+    if (!previous || previous.text !== next.text || Math.abs(previous.x - next.x) > 0.2 || Math.abs(previous.y - next.y) > 0.2) {
+      originRulerReadoutRef.current = next;
+      setOriginRulerReadout(next);
+    }
+  }, [originRulerMode, rulerModel, selectedIds, shapes]);
 
   useEffect(() => {
     placementElevationRef.current = placementElevation;
@@ -2525,6 +2577,12 @@ export function WorkplaneViewport({
         return;
       }
 
+      if (originRulerModeRef.current) {
+        // Origin ruler mode is a passive coordinate readout: it never places
+        // measurement points and must not block ordinary selection. Fall
+        // through so clicking a shape selects it and shows live coordinates.
+      }
+
       if (workplaneModeRef.current) {
         event.preventDefault();
         const face = pickShapeFace(event.clientX, event.clientY);
@@ -3075,7 +3133,8 @@ export function WorkplaneViewport({
     setRulerMode(next);
     const current = rulerModelRef.current;
     if (next && originRulerModeRef.current) {
-      const origin = current.points.find((point) => Math.abs(point.x) < 0.0001 && Math.abs(point.z) < 0.0001) ?? { id: `ruler-origin-${++rulerIdRef.current}`, x: 0, z: 0 };
+      const originId = originRulerPointIdRef.current;
+      const origin = current.points.find((point) => point.id === originId) ?? { id: `ruler-origin-${++rulerIdRef.current}`, x: 0, z: 0 };
       const points = current.points.some((point) => point.id === origin.id) ? current.points : [...current.points, origin];
       storeRulerModel({ ...current, points, startPointId: origin.id, hover: null });
     } else {
@@ -3083,9 +3142,8 @@ export function WorkplaneViewport({
     }
     if (next) {
       onWorkplaneModeChange(false);
-      onSelectShape(null);
     }
-  }, [onSelectShape, onWorkplaneModeChange, storeRulerModel]);
+  }, [onWorkplaneModeChange, storeRulerModel]);
 
   const toggleOriginRulerMode = useCallback(() => {
     const next = !originRulerModeRef.current;
@@ -3094,18 +3152,23 @@ export function WorkplaneViewport({
     if (next) {
       const current = rulerModelRef.current;
       const origin = current.points.find((point) => Math.abs(point.x) < 0.0001 && Math.abs(point.z) < 0.0001) ?? { id: `ruler-origin-${++rulerIdRef.current}`, x: 0, z: 0 };
+      originRulerPointIdRef.current = origin.id;
       const points = current.points.some((point) => point.id === origin.id) ? current.points : [...current.points, origin];
-      storeRulerModel({ ...current, points, startPointId: origin.id, hover: null });
-      rulerModeRef.current = true;
-      setRulerMode(true);
+      storeRulerModel({ ...current, points, startPointId: null, hover: null });
       onWorkplaneModeChange(false);
-      onSelectShape(null);
-    } else if (rulerModeRef.current) {
-      rulerModeRef.current = false;
-      setRulerMode(false);
-      storeRulerModel({ ...rulerModelRef.current, startPointId: null, hover: null });
+    } else {
+      const originId = originRulerPointIdRef.current;
+      originRulerPointIdRef.current = null;
+      storeRulerModel({
+        ...rulerModelRef.current,
+        points: originId ? rulerModelRef.current.points.filter((point) => point.id !== originId) : rulerModelRef.current.points,
+        startPointId: null,
+        hover: null,
+      });
+      originRulerReadoutRef.current = null;
+      setOriginRulerReadout(null);
     }
-  }, [onSelectShape, onWorkplaneModeChange, storeRulerModel]);
+  }, [onWorkplaneModeChange, storeRulerModel]);
 
   const handleRulerPointPointerDown = useCallback(
     (event: ReactPointerEvent<SVGCircleElement>, pointId: string) => {
@@ -3370,11 +3433,17 @@ export function WorkplaneViewport({
               overlay={rulerOverlay}
               startPointId={rulerModel.startPointId}
               active={rulerMode}
+              originPointId={originRulerMode ? originRulerPointIdRef.current : null}
               onPointPointerDown={handleRulerPointPointerDown}
               onPointPointerMove={handleRulerPointPointerMove}
               onPointPointerUp={handleRulerPointPointerUp}
               onSegmentPointerDown={handleRulerSegmentPointerDown}
             />
+          ) : null}
+          {originRulerReadout ? (
+            <span className="ruler-label origin-ruler-readout" style={{ left: originRulerReadout.x, top: originRulerReadout.y }}>
+              {originRulerReadout.text}
+            </span>
           ) : null}
         </div>
       </section>
