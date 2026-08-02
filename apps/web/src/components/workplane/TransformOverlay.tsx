@@ -15,12 +15,15 @@ export {
   orthographicFitZoom,
   projectedMoveHandle,
   projectedRotationWheel,
+  buildRotationPlaneDescriptor,
   rotationHandleLocalAnchor,
   rotationWheelLocalRadius,
   rotationWheelPoint,
   rotationSnapDelta,
   screenRotationWheel,
   separatedLiftHandlePoint,
+  signedAngleAroundAxis,
+  unwrapRadians,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
@@ -28,9 +31,12 @@ export {
   type RotationAxis,
   type RotationAnchorFrame,
   type RotationReadout,
+  type RotationPlaneDescriptor,
   type RotationWheelView,
+  type ScreenVec2,
   type TransformHandleKind,
   type TransformOverlayState,
+  type WorldVec3,
 } from "@/components/workplane/transformOverlayTypes";
 
 function annularSectorPath(startRadians: number, endRadians: number, innerRadius: number, outerRadius: number) {

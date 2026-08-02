@@ -24,25 +24,29 @@ import { viewFaceDirection, viewFaceUp, type ViewCubeFace } from "@/lib/viewCube
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
+  buildRotationPlaneDescriptor,
   getElevationMeasureKey,
   measureKeyForHandle,
   projectedMoveHandle,
-  projectedRotationWheel,
   rotationHandleLocalAnchor,
   orthographicFitZoom,
   rotationWheelLocalRadius,
   rotationWheelPoint,
   rotationSnapDelta,
   separatedLiftHandlePoint,
+  signedAngleAroundAxis,
+  unwrapRadians,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
   type PinnedRotationWheelView,
   type RotationAxis,
+  type RotationPlaneDescriptor,
   type RotationReadout,
   type RotationWheelView,
   type TransformHandleKind,
   type TransformOverlayState,
+  type WorldVec3,
 } from "@/components/workplane/TransformOverlay";
 import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, MeasurementAccuracy, ShapeAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 import type { CadModifierEdge } from "@/lib/cadModifierTypes";
@@ -336,6 +340,7 @@ type TransformDragState = {
   rotationAxisVector?: THREE.Vector3;
   rotationPivot?: THREE.Vector3;
   rotationPlaneCenter?: THREE.Vector3;
+  rotationPlane?: RotationPlaneDescriptor;
   rotationStartVector?: THREE.Vector3;
   rotationScreenCenter?: { x: number; y: number };
   rotationScreenSign?: number;
@@ -448,14 +453,8 @@ function screenAngle(clientX: number, clientY: number, center: { x: number; y: n
   return Math.atan2(clientY - center.y, clientX - center.x);
 }
 
-function unwrapRadians(value: number) {
-  if (value > Math.PI) {
-    return value - Math.PI * 2;
-  }
-  if (value < -Math.PI) {
-    return value + Math.PI * 2;
-  }
-  return value;
+function vector3ToWorldVec3(value: THREE.Vector3): WorldVec3 {
+  return { x: value.x, y: value.y, z: value.z };
 }
 
 function rotationAxisForHandle(handleKey: string): RotationAxis {
@@ -889,12 +888,6 @@ function rayPointOnRotationPlane(state: ThreeState, clientX: number, clientY: nu
   state.raycaster.setFromCamera(state.pointer, state.camera);
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axis.clone().normalize(), pivot);
   return state.raycaster.ray.intersectPlane(plane, new THREE.Vector3());
-}
-
-function signedAngleAroundAxis(start: THREE.Vector3, current: THREE.Vector3, axis: THREE.Vector3) {
-  const a = start.clone().normalize();
-  const b = current.clone().normalize();
-  return Math.atan2(axis.clone().normalize().dot(a.clone().cross(b)), clamp(a.dot(b), -1, 1));
 }
 
 type ScreenRotationHandleSlots = {
@@ -1891,17 +1884,21 @@ export function WorkplaneViewport({
       const liftOffset = kind === "lift" ? Math.max(2, yBounds.height * 0.08) * (handlesLowerSide ? -1 : 1) : 0;
       const startWorldY = yStart + liftOffset;
       const overlay = transformOverlayRef.current;
-      const wheel = kind === "rotate" ? (overlay?.rotationWheels[rotationAxis] ?? overlay?.rotationWheel ?? undefined) : undefined;
-      const rotationPlaneCenterData = kind === "rotate" ? overlay?.rotationPlaneCenters[rotationAxis] : undefined;
-      const rotationPlaneCenter = rotationPlaneCenterData
-        ? new THREE.Vector3(rotationPlaneCenterData.x, rotationPlaneCenterData.y, rotationPlaneCenterData.z)
+      const rotationPlane = kind === "rotate" ? overlay?.rotationPlanes?.[rotationAxis] : undefined;
+      const wheel = rotationPlane?.wheel ?? (kind === "rotate" ? (overlay?.rotationWheels[rotationAxis] ?? overlay?.rotationWheel ?? undefined) : undefined);
+      const rotationPlaneCenter = rotationPlane
+        ? new THREE.Vector3(rotationPlane.pivot.x, rotationPlane.pivot.y, rotationPlane.pivot.z)
         : frame.center.clone();
       const rect = state?.renderer.domElement.getBoundingClientRect();
       const localClientX = rect ? event.clientX - rect.left : event.clientX;
       const localClientY = rect ? event.clientY - rect.top : event.clientY;
-      const axisVector = rotationAxisVectorForFrame(handleKey, frame);
+      const axisVector = rotationPlane
+        ? new THREE.Vector3(rotationPlane.axisVector.x, rotationPlane.axisVector.y, rotationPlane.axisVector.z)
+        : rotationAxisVectorForFrame(handleKey, frame);
       const pivot = frame.center.clone();
-      const rotationCenter = kind === "rotate" ? wheel ?? (state ? projectToScreen(pivot, state) : { x: localClientX, y: localClientY }) : undefined;
+      const rotationCenter = rotationPlane
+        ? { x: rotationPlane.screenCenter.x, y: rotationPlane.screenCenter.y }
+        : kind === "rotate" ? wheel ?? (state ? projectToScreen(pivot, state) : { x: localClientX, y: localClientY }) : undefined;
       const rotationStartPoint = kind === "rotate" && state ? rayPointOnRotationPlane(state, event.clientX, event.clientY, rotationPlaneCenter, axisVector) : null;
       const rotationStartVector = rotationStartPoint ? rotationStartPoint.sub(rotationPlaneCenter) : undefined;
       const scalePlane = kind === "scale" ? localResizePlaneForFrame(frame) : undefined;
@@ -1976,6 +1973,7 @@ export function WorkplaneViewport({
         rotationAxisVector: kind === "rotate" ? axisVector : undefined,
         rotationPivot: kind === "rotate" ? pivot : undefined,
         rotationPlaneCenter: kind === "rotate" ? rotationPlaneCenter : undefined,
+        rotationPlane: kind === "rotate" ? rotationPlane : undefined,
         rotationStartVector: kind === "rotate" ? rotationStartVector : undefined,
         rotationScreenCenter: rotationCenter,
         rotationScreenSign: kind === "rotate" && state ? rotationScreenSign(axisVector, state.camera) : 1,
@@ -2198,7 +2196,11 @@ export function WorkplaneViewport({
       const currentPoint = rayPointOnRotationPlane(state, clientX, clientY, planeCenter, axisVector);
       const rawDelta =
         currentPoint && transform.rotationStartVector && transform.rotationStartVector.lengthSq() > 0.000001
-          ? THREE.MathUtils.radToDeg(signedAngleAroundAxis(transform.rotationStartVector, currentPoint.sub(planeCenter), axisVector))
+          ? THREE.MathUtils.radToDeg(signedAngleAroundAxis(
+              vector3ToWorldVec3(transform.rotationStartVector),
+              vector3ToWorldVec3(currentPoint.clone().sub(planeCenter)),
+              vector3ToWorldVec3(axisVector),
+            ))
           : THREE.MathUtils.radToDeg(unwrapRadians(screenAngle(localClientX, localClientY, rotationCenter) - transform.startScreenAngle)) * (transform.rotationScreenSign ?? 1);
       const distance = transform.wheelCenter
         ? rotationWheelLocalRadius(transform.wheelCenter, { x: localClientX, y: localClientY })
@@ -2541,16 +2543,20 @@ export function WorkplaneViewport({
         const resizeHandleKey = handle.handleKey;
         const scaleSigns = handle.kind === "scale" ? resizeSignsForHandle(resizeHandleKey) : undefined;
         const scaleAnchorPoint = handle.kind === "scale" && scaleSigns ? resizeAnchorPointForFrame(frame, scaleSigns) : undefined;
-        const wheel = handle.kind === "rotate" ? (overlay?.rotationWheels[rotationAxis] ?? overlay?.rotationWheel ?? undefined) : undefined;
-        const rotationPlaneCenterData = handle.kind === "rotate" ? overlay?.rotationPlaneCenters[rotationAxis] : undefined;
-        const rotationPlaneCenter = rotationPlaneCenterData
-          ? new THREE.Vector3(rotationPlaneCenterData.x, rotationPlaneCenterData.y, rotationPlaneCenterData.z)
+        const rotationPlane = handle.kind === "rotate" ? overlay?.rotationPlanes?.[rotationAxis] : undefined;
+        const wheel = rotationPlane?.wheel ?? (handle.kind === "rotate" ? (overlay?.rotationWheels[rotationAxis] ?? overlay?.rotationWheel ?? undefined) : undefined);
+        const rotationPlaneCenter = rotationPlane
+          ? new THREE.Vector3(rotationPlane.pivot.x, rotationPlane.pivot.y, rotationPlane.pivot.z)
           : frame.center.clone();
         const localClientX = event.clientX - rect.left;
         const localClientY = event.clientY - rect.top;
-        const axisVector = rotationAxisVectorForFrame(handle.handleKey, frame);
+        const axisVector = rotationPlane
+          ? new THREE.Vector3(rotationPlane.axisVector.x, rotationPlane.axisVector.y, rotationPlane.axisVector.z)
+          : rotationAxisVectorForFrame(handle.handleKey, frame);
         const pivot = frame.center.clone();
-        const rotationCenter = handle.kind === "rotate" ? wheel ?? projectToScreen(pivot, state) : undefined;
+        const rotationCenter = handle.kind === "rotate"
+          ? rotationPlane ? { x: rotationPlane.screenCenter.x, y: rotationPlane.screenCenter.y } : wheel ?? projectToScreen(pivot, state)
+          : undefined;
         const rotationStartPoint = handle.kind === "rotate" ? rayPointOnRotationPlane(state, event.clientX, event.clientY, rotationPlaneCenter, axisVector) : null;
         const rotationStartVector = rotationStartPoint ? rotationStartPoint.sub(rotationPlaneCenter) : undefined;
         rememberResizeAnchor(handle.id, handle.kind, resizeHandleKey);
@@ -2604,6 +2610,7 @@ export function WorkplaneViewport({
           rotationAxisVector: handle.kind === "rotate" ? axisVector : undefined,
           rotationPivot: handle.kind === "rotate" ? pivot : undefined,
           rotationPlaneCenter: handle.kind === "rotate" ? rotationPlaneCenter : undefined,
+          rotationPlane: handle.kind === "rotate" ? rotationPlane : undefined,
           rotationStartVector: handle.kind === "rotate" ? rotationStartVector : undefined,
           rotationScreenCenter: rotationCenter,
           rotationScreenSign: handle.kind === "rotate" ? rotationScreenSign(axisVector, state.camera) : 1,
@@ -4153,7 +4160,6 @@ function syncTransformOverlay(
   const showLowerHandles = state.camera.position.y < frame.center.y;
   const liftHandle = new THREE.Vector3(worldCenterX, showLowerHandles ? worldMinY - liftOffset : worldMaxY + liftOffset, worldCenterZ);
   const xFootAxis = frame.xAxis.clone().normalize();
-  const yFootAxis = frame.yAxis.clone().normalize();
   const zFootAxis = frame.zAxis.clone().normalize();
   const localBottomY = frame.min.y;
   const localTopY = frame.max.y;
@@ -4256,19 +4262,17 @@ function syncTransformOverlay(
   const rotateLeft = rotationSlots.x;
   const rotateRight = rotationSlots.z;
   const rotateBottom = rotationSlots.y;
-  const projectedAxis = (axis: THREE.Vector3) => {
-    const point = project(frame.center.clone().add(axis.clone().normalize()));
-    return { x: point.x - centerPoint.x, y: point.y - centerPoint.y };
-  };
-  const rotationZeroVector = (slot: { x: number; y: number }) => ({
-    x: slot.x - centerPoint.x,
-    y: slot.y - centerPoint.y,
-  });
   const makeWorldPoint = (point: THREE.Vector3) => ({ x: point.x, y: point.y, z: point.z });
-  const rotationWheels: Record<RotationAxis, { x: number; y: number; radius: number }> = {
-    x: projectedRotationWheel(centerPoint, projectedAxis(yFootAxis), projectedAxis(zFootAxis), rotationZeroVector(rotateLeft), rect),
-    y: projectedRotationWheel(centerPoint, projectedAxis(xFootAxis), projectedAxis(zFootAxis), rotationZeroVector(rotateBottom), rect),
-    z: projectedRotationWheel(centerPoint, projectedAxis(xFootAxis), projectedAxis(yFootAxis), rotationZeroVector(rotateRight), rect),
+  const projectWorldPoint = (point: WorldVec3) => project(new THREE.Vector3(point.x, point.y, point.z));
+  const rotationPlanes: Record<RotationAxis, RotationPlaneDescriptor> = {
+    x: buildRotationPlaneDescriptor("x", makeWorldPoint(frame.center), projectWorldPoint, rotateLeft, rect),
+    y: buildRotationPlaneDescriptor("y", makeWorldPoint(frame.center), projectWorldPoint, rotateBottom, rect),
+    z: buildRotationPlaneDescriptor("z", makeWorldPoint(frame.center), projectWorldPoint, rotateRight, rect),
+  };
+  const rotationWheels: Record<RotationAxis, RotationWheelView> = {
+    x: rotationPlanes.x.wheel,
+    y: rotationPlanes.y.wheel,
+    z: rotationPlanes.z.wheel,
   };
   const rotationPlaneCenters: Record<RotationAxis, { x: number; y: number; z: number }> = {
     x: makeWorldPoint(frame.center),
@@ -4336,6 +4340,7 @@ function syncTransformOverlay(
     rotationWheel: rotationWheels.y,
     rotationWheels,
     rotationPlaneCenters,
+    rotationPlanes,
   };
 
   updateTransformOverlayIfChanged(overlayRef, setOverlay, next);

@@ -2,15 +2,20 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_LIFT_HANDLE_SCREEN_GAP,
   ROTATION_PROTRACTOR_RADIUS,
+  WORLD_ROTATION_PLANES,
+  buildRotationPlaneDescriptor,
   projectedMoveHandle,
   projectedRotationWheel,
   rotationHandleLocalAnchor,
   rotationWheelLocalRadius,
   rotationWheelPoint,
   rotationSnapDelta,
+  signedAngleAroundAxis,
   orthographicFitZoom,
   screenRotationWheel,
   separatedLiftHandlePoint,
+  unwrapRadians,
+  type WorldVec3,
 } from "@/components/workplane/transformOverlayTypes";
 
 describe("transform overlay geometry", () => {
@@ -87,5 +92,46 @@ describe("transform overlay geometry", () => {
 
   it("fits an orthographic view from projected selection spans", () => {
     expect(orthographicFitZoom({ width: 1000, height: 800 }, 200, 100, 1.25)).toBe(4);
+  });
+});
+
+describe("shared rotation-plane descriptor (Stage 1)", () => {
+  const viewport = { width: 1200, height: 800 };
+
+  it("assigns X/Y/Z by world-plane identity, not frame-local corners", () => {
+    // A pre-rotated rectangular box (30° about Y) must NOT reorient the handles.
+    expect(WORLD_ROTATION_PLANES.x.axisVector).toEqual({ x: 1, y: 0, z: 0 });
+    expect(WORLD_ROTATION_PLANES.y.axisVector).toEqual({ x: 0, y: 1, z: 0 });
+    expect(WORLD_ROTATION_PLANES.z.axisVector).toEqual({ x: 0, y: 0, z: 1 });
+  });
+
+  it("projects the world rotation plane into the wheel matrix", () => {
+    const pivot = { x: 4, y: 6, z: -3 };
+    const project = (point: WorldVec3) => ({
+      x: point.x * 1.5 - point.z * 0.4 + 600,
+      y: point.y * 1.0 + point.z * 0.3 + 400,
+    });
+    const descriptor = buildRotationPlaneDescriptor("y", pivot, project, { x: 700, y: 300 }, viewport);
+    expect(descriptor.axisVector).toEqual({ x: 0, y: 1, z: 0 });
+    expect(descriptor.screenCenter).toEqual(project(pivot));
+    // screenU is the projected +X axis, screenV the projected +Z axis.
+    expect(descriptor.screenU.x).toBeCloseTo(project({ x: pivot.x + 1, y: pivot.y, z: pivot.z }).x - project(pivot).x, 5);
+    expect(descriptor.screenV.y).toBeCloseTo(project({ x: pivot.x, y: pivot.y, z: pivot.z + 1 }).y - project(pivot).y, 5);
+    expect(descriptor.wheel.radius).toBe(ROTATION_PROTRACTOR_RADIUS);
+    const length = Math.hypot(descriptor.screenU.x, descriptor.screenU.y);
+    expect(descriptor.wheel.matrix?.[0]).toBeCloseTo(descriptor.screenU.x / Math.max(length, 0.0001), 5);
+  });
+
+  it("measures a signed angle around the shared world axis", () => {
+    // Rotating +X by 90° about world Y should give +90°.
+    expect(signedAngleAroundAxis({ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: -1 }, { x: 0, y: 1, z: 0 })).toBeCloseTo(Math.PI / 2, 5);
+    // Opposite direction is -90°.
+    expect(signedAngleAroundAxis({ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 })).toBeCloseTo(-Math.PI / 2, 5);
+  });
+
+  it("unwrapRadians keeps angles within one turn", () => {
+    expect(unwrapRadians(Math.PI + 0.5)).toBeCloseTo(-Math.PI + 0.5, 5);
+    expect(unwrapRadians(-Math.PI - 0.5)).toBeCloseTo(Math.PI - 0.5, 5);
+    expect(unwrapRadians(0.3)).toBeCloseTo(0.3, 5);
   });
 });

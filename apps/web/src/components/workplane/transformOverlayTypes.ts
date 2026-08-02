@@ -2,6 +2,127 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 
 export type TransformHandleKind = "scale" | "height" | "lift" | "move" | "rotate";
 export type RotationAxis = "x" | "y" | "z";
+export type WorldVec3 = { x: number; y: number; z: number };
+export type ScreenVec2 = { x: number; y: number };
+
+/**
+ * One shared source of truth for a rotation control. Rendering (the projected
+ * protractor) and dragging (the ray-plane angle) both consume this descriptor,
+ * so the displayed plane, the drag direction and the resulting quaternion can
+ * never disagree — even for an already-rotated object.
+ *
+ * Axes use world-plane identity: "x" means rotation around the world X axis,
+ * in the plane spanned by world Y and world Z. This is what Tinkercad-style
+ * handles should mean regardless of the object's own orientation.
+ */
+export type RotationPlaneDescriptor = {
+  axis: RotationAxis;
+  /** World-space unit rotation axis (e.g. (1,0,0) for the X handle). */
+  axisVector: WorldVec3;
+  /** World-space unit basis spanning the rotation plane (in-plane). */
+  planeU: WorldVec3;
+  /** World-space unit basis spanning the rotation plane (in-plane). */
+  planeV: WorldVec3;
+  /** World-space pivot the selection rotates around. */
+  pivot: WorldVec3;
+  /** Projected pivot on screen. */
+  screenCenter: ScreenVec2;
+  /** Screen-space projection of planeU relative to screenCenter. */
+  screenU: ScreenVec2;
+  /** Screen-space projection of planeV relative to screenCenter. */
+  screenV: ScreenVec2;
+  /** Screen position of the handle button. */
+  handleAnchor: ScreenVec2;
+  /** The protractor view (fixed screen radius, affine plane projection). */
+  wheel: RotationWheelView;
+};
+
+export const WORLD_ROTATION_PLANES: Record<RotationAxis, { axisVector: WorldVec3; planeU: WorldVec3; planeV: WorldVec3 }> = {
+  x: { axisVector: { x: 1, y: 0, z: 0 }, planeU: { x: 0, y: 1, z: 0 }, planeV: { x: 0, y: 0, z: 1 } },
+  y: { axisVector: { x: 0, y: 1, z: 0 }, planeU: { x: 1, y: 0, z: 0 }, planeV: { x: 0, y: 0, z: 1 } },
+  z: { axisVector: { x: 0, y: 0, z: 1 }, planeU: { x: 1, y: 0, z: 0 }, planeV: { x: 0, y: 1, z: 0 } },
+};
+
+function addWorldVec3(a: WorldVec3, b: WorldVec3): WorldVec3 {
+  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+function subtractScreenVec2(a: ScreenVec2, b: ScreenVec2): ScreenVec2 {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+
+export function buildRotationPlaneDescriptor(
+  axis: RotationAxis,
+  pivot: WorldVec3,
+  project: (point: WorldVec3) => ScreenVec2,
+  handleAnchor: ScreenVec2,
+  viewport: { width: number; height: number },
+): RotationPlaneDescriptor {
+  const plane = WORLD_ROTATION_PLANES[axis];
+  const screenCenter = project(pivot);
+  const screenU = subtractScreenVec2(project(addWorldVec3(pivot, plane.planeU)), screenCenter);
+  const screenV = subtractScreenVec2(project(addWorldVec3(pivot, plane.planeV)), screenCenter);
+  const wheel = projectedRotationWheel(screenCenter, screenU, screenV, subtractScreenVec2(handleAnchor, screenCenter), viewport);
+  return {
+    axis,
+    axisVector: { ...plane.axisVector },
+    planeU: { ...plane.planeU },
+    planeV: { ...plane.planeV },
+    pivot: { ...pivot },
+    screenCenter,
+    screenU,
+    screenV,
+    handleAnchor,
+    wheel,
+  };
+}
+
+export function unwrapRadians(value: number) {
+  if (value > Math.PI) {
+    return value - Math.PI * 2;
+  }
+  if (value < -Math.PI) {
+    return value + Math.PI * 2;
+  }
+  return value;
+}
+
+function dotWorldVec3(a: WorldVec3, b: WorldVec3) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function crossWorldVec3(a: WorldVec3, b: WorldVec3): WorldVec3 {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+function normalizeWorldVec3(value: WorldVec3): WorldVec3 {
+  const length = Math.hypot(value.x, value.y, value.z);
+  if (length < 0.0000001) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  return { x: value.x / length, y: value.y / length, z: value.z / length };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Signed angle (radians) from `start` to `current` measured around `axis` in
+ * the shared world rotation plane. Consumed by the drag path so the resulting
+ * quaternion matches the plane the protractor renders.
+ */
+export function signedAngleAroundAxis(start: WorldVec3, current: WorldVec3, axis: WorldVec3) {
+  const a = normalizeWorldVec3(start);
+  const b = normalizeWorldVec3(current);
+  const ax = normalizeWorldVec3(axis);
+  const cross = crossWorldVec3(a, b);
+  return Math.atan2(dotWorldVec3(ax, cross), clamp(dotWorldVec3(a, b), -1, 1));
+}
 export type RotationWheelView = {
   x: number;
   y: number;
@@ -66,6 +187,7 @@ export type TransformOverlayState = {
   rotationWheel: RotationWheelView | null;
   rotationWheels: Record<RotationAxis, RotationWheelView>;
   rotationPlaneCenters: Record<RotationAxis, { x: number; y: number; z: number }>;
+  rotationPlanes: Record<RotationAxis, RotationPlaneDescriptor>;
 };
 
 export type RotationReadout = {
