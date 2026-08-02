@@ -97,6 +97,42 @@ each stage is one reviewable commit.
 - `npm run build`: production build succeeds.
 - Browser matrix: full screenshot set captured with zero console errors.
 
+## Current state (2026-08-02)
+
+- **Branch pushed:** `codex/tinkercad-rotation-parity` is on `origin`
+  (`426ebf7..8e04eb9`, 10 commits, one per stage).
+- **PR open (draft):** https://github.com/kiwispin/SketchForge-3D/pull/1 — kept in
+  draft until the visual Tinkercad review passes. Title/body updated to reflect
+  the actual scope and the open visual decision.
+- **All 10 stages implemented** with acceptance evidence (unit tests, browser
+  probes, screenshots) recorded in the stage log above.
+
+## What still needs to be done
+
+### 1. Visual parity review against Tinkercad (blocking)
+The one thing that has not happened is a side-by-side visual comparison against
+Tinkercad. This needs a human (or vision-capable model) because the current
+model cannot view images.
+
+- **Setup:** a persistent Edge profile for a Tinkercad login exists as a
+  working pattern (`playwright-core` + `launchPersistentContext`, headful) — a
+  login window was opened once and closed without completing the review.
+- **Proposed flow:** log into Tinkercad in the persistent profile, then drive
+  both apps through identical interactions (add box → select → hover/drag
+  handles, incl. a pre-rotated object) and compare behavior side-by-side.
+- **Decisions to make:**
+  1. Keep the three X/Y/Z handles, or collapse to Tinkercad's single top handle?
+  2. Protractor dial style: flat workplane dial vs. the current projected ellipse?
+  3. Handle glyphs / idle-state look-and-feel?
+
+### 2. Action items after the review
+- If changes are needed: implement them on the branch, push (PR auto-updates),
+  re-run `npm run ci` / `test:e2e` / `build`, and refresh screenshots.
+- When satisfied: `gh pr ready 1` (or GitHub → Ready for review) to take the PR
+  out of draft.
+- Update this status doc after each acceptance check with evidence (per the
+  plan's honest-release rule: docs only after evidence).
+
 ## Honest status
 
 - The rotation handles now share one mathematical source of truth and use
@@ -108,3 +144,6 @@ each stage is one reviewable commit.
   visual parity decision is still open.
 - PR is intentionally kept in draft until that visual approval and the
   screenshots are reviewed.
+- The screenshot matrix (`.tools/verify-shots/r1*.png`) is the evidence pack for
+  that review; it can be regenerated with
+  `node <temp>/sf-verify/probe-screenshots.js` against a running dev server.
