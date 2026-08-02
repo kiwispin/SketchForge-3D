@@ -4,6 +4,9 @@ import {
   ROTATION_PROTRACTOR_RADIUS,
   WORLD_ROTATION_PLANES,
   buildRotationPlaneDescriptor,
+  feedbackScreenPoint,
+  formatAngleText,
+  formatDeltaText,
   projectedMoveHandle,
   projectedRotationWheel,
   rotationWheelLocalRadius,
@@ -177,5 +180,36 @@ describe("shared rotation-plane descriptor (Stage 1)", () => {
     expect(unwrapRadians(Math.PI + 0.5)).toBeCloseTo(-Math.PI + 0.5, 5);
     expect(unwrapRadians(-Math.PI - 0.5)).toBeCloseTo(Math.PI - 0.5, 5);
     expect(unwrapRadians(0.3)).toBeCloseTo(0.3, 5);
+  });
+});
+
+describe("unified transform feedback (Stage 8)", () => {
+  it("formats move/height/lift deltas with a consistent Δ prefix", () => {
+    expect(formatDeltaText(12.3456, "X", 2)).toBe("ΔX 12.35");
+    expect(formatDeltaText(0, "Y", 2)).toBe("ΔY 0.00");
+    expect(formatDeltaText(-3.5, "H", 2)).toBe("ΔH -3.50");
+    expect(formatDeltaText(12.3456, "W", 2)).toBe("ΔW 12.35");
+    expect(formatDeltaText(12.3456, "D", 2)).toBe("ΔD 12.35");
+  });
+
+  it("formats rotation as a degree readout", () => {
+    expect(formatAngleText(45)).toBe("45°");
+    expect(formatAngleText(-22.5)).toBe("-22.5°");
+    expect(formatAngleText(0)).toBe("0°");
+  });
+
+  it("offsets feedback labels away from the dragged handle", () => {
+    const point = feedbackScreenPoint({ x: 500, y: 400 }, { width: 1200, height: 800 });
+    expect(point.x).toBe(522);
+    expect(point.y).toBe(370);
+  });
+
+  it("clamps feedback labels inside the viewport", () => {
+    const topLeft = feedbackScreenPoint({ x: 0, y: 0 }, { width: 1200, height: 800 });
+    expect(topLeft.x).toBeGreaterThanOrEqual(72);
+    expect(topLeft.y).toBeGreaterThanOrEqual(19);
+    const bottomRight = feedbackScreenPoint({ x: 1200, y: 800 }, { width: 1200, height: 800 });
+    expect(bottomRight.x).toBeLessThanOrEqual(1200 - 72);
+    expect(bottomRight.y).toBeLessThanOrEqual(800 - 19);
   });
 });

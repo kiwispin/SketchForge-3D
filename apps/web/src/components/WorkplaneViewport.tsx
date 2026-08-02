@@ -25,6 +25,9 @@ import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
   buildRotationPlaneDescriptor,
+  feedbackScreenPoint,
+  formatAngleText,
+  formatDeltaText,
   getElevationMeasureKey,
   measureKeyForHandle,
   projectedMoveHandle,
@@ -2060,10 +2063,11 @@ export function WorkplaneViewport({
         });
       } else if (kind === "lift" && state) {
         const renderRect = state.renderer.domElement.getBoundingClientRect();
+        const readoutPoint = feedbackScreenPoint({ x: event.clientX - renderRect.left, y: event.clientY - renderRect.top }, { width: renderRect.width, height: renderRect.height });
         setRotationReadout({
-          x: event.clientX - renderRect.left + 22,
-          y: event.clientY - renderRect.top - 34,
-          text: formatMeasure(yBounds.min, workspaceRef.current.accuracy),
+          x: readoutPoint.x,
+          y: readoutPoint.y,
+          text: formatDeltaText(0, "Y", workspaceRef.current.accuracy),
         });
       } else {
         setRotationReadout(null);
@@ -2118,11 +2122,11 @@ export function WorkplaneViewport({
           const readoutWorldPoint = transform.selectionFrame.center
             .clone()
             .add(transform.moveAxis.clone().multiplyScalar(Math.max(transform.selectionFrame.width, transform.selectionFrame.depth, 8) * 0.22));
-          const readoutPoint = projectToScreen(readoutWorldPoint, state);
+          const readoutPoint = feedbackScreenPoint(projectToScreen(readoutWorldPoint, state), { width: transformOverlayRef.current?.width ?? 1200, height: transformOverlayRef.current?.height ?? 800 });
           setRotationReadout({
-            x: readoutPoint.x + 18,
-            y: readoutPoint.y - 24,
-            text: `Δ${axisLabel} ${formatMeasure(delta, workspaceRef.current.accuracy)}`,
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(delta, axisLabel, workspaceRef.current.accuracy),
             angle: 0,
           });
         }
@@ -2160,11 +2164,14 @@ export function WorkplaneViewport({
           });
         });
         if (state) {
-          const readoutPoint = projectToScreen(new THREE.Vector3(transform.selectionFrame.center.x, draggedWorldY, transform.selectionFrame.center.z), state);
+          const readoutPoint = feedbackScreenPoint(
+            projectToScreen(new THREE.Vector3(transform.selectionFrame.center.x, draggedWorldY, transform.selectionFrame.center.z), state),
+            { width: transformOverlayRef.current?.width ?? 1200, height: transformOverlayRef.current?.height ?? 800 },
+          );
           setRotationReadout({
-            x: readoutPoint.x + 22,
-            y: readoutPoint.y - 26,
-            text: `ΔH ${formatMeasure(nextWorldHeight - yBounds.height, workspaceRef.current.accuracy)}`,
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(nextWorldHeight - yBounds.height, "H", workspaceRef.current.accuracy),
             angle: 0,
           });
         }
@@ -2193,11 +2200,14 @@ export function WorkplaneViewport({
           }),
         );
         if (state) {
-          const readoutPoint = projectToScreen(new THREE.Vector3(transform.selectionFrame.center.x, handleWorldY, transform.selectionFrame.center.z), state);
+          const readoutPoint = feedbackScreenPoint(
+            projectToScreen(new THREE.Vector3(transform.selectionFrame.center.x, handleWorldY, transform.selectionFrame.center.z), state),
+            { width: transformOverlayRef.current?.width ?? 1200, height: transformOverlayRef.current?.height ?? 800 },
+          );
           setRotationReadout({
-            x: readoutPoint.x + 28,
-            y: readoutPoint.y - 30,
-            text: formatMeasure(nextBottom, workspaceRef.current.accuracy),
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(delta, "Y", workspaceRef.current.accuracy),
           });
         }
         return true;
@@ -2212,14 +2222,17 @@ export function WorkplaneViewport({
           const next = resizeShapeFromFrameHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step);
           onUpdateShape(transform.id, next);
           if (state) {
-            const readoutPoint = projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state);
+            const readoutPoint = feedbackScreenPoint(
+              projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state),
+              { width: transformOverlayRef.current?.width ?? 1200, height: transformOverlayRef.current?.height ?? 800 },
+            );
             const startWidth = shapeWidth(transform.items[0].startShape);
             const startDepth = shapeDepth(transform.items[0].startShape);
             const startHeight = transform.items[0].startShape.height;
             setRotationReadout({
-              x: readoutPoint.x + 20,
-              y: readoutPoint.y - 24,
-              text: `ΔW ${formatMeasure((next.width ?? startWidth) - startWidth, workspaceRef.current.accuracy)} · ΔD ${formatMeasure((next.depth ?? startDepth) - startDepth, workspaceRef.current.accuracy)} · ΔH ${formatMeasure((next.height ?? startHeight) - startHeight, workspaceRef.current.accuracy)}`,
+              x: readoutPoint.x,
+              y: readoutPoint.y,
+              text: `${formatDeltaText((next.width ?? startWidth) - startWidth, "W", workspaceRef.current.accuracy)} · ${formatDeltaText((next.depth ?? startDepth) - startDepth, "D", workspaceRef.current.accuracy)} · ${formatDeltaText((next.height ?? startHeight) - startHeight, "H", workspaceRef.current.accuracy)}`,
               angle: 0,
             });
           }
@@ -2227,7 +2240,10 @@ export function WorkplaneViewport({
           const patches = resizeSelectionFromHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step);
           patches.forEach(({ id, patch }) => onUpdateShape(id, patch));
           if (state) {
-            const readoutPoint = projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state);
+            const readoutPoint = feedbackScreenPoint(
+              projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state),
+              { width: transformOverlayRef.current?.width ?? 1200, height: transformOverlayRef.current?.height ?? 800 },
+            );
             const patchById = new Map(patches.map(({ id, patch }) => [id, patch]));
             const previewShapes = shapesRef.current.map((shape) => patchById.has(shape.id) ? { ...shape, ...patchById.get(shape.id) } : shape);
             const nextFrame = selectionFrameForShapes(previewShapes, transform.ids);
@@ -2235,9 +2251,9 @@ export function WorkplaneViewport({
             const depthDelta = nextFrame ? nextFrame.depth - transform.selectionFrame.depth : 0;
             const heightDelta = nextFrame ? nextFrame.height - transform.selectionFrame.height : 0;
             setRotationReadout({
-              x: readoutPoint.x + 20,
-              y: readoutPoint.y - 24,
-              text: `ΔW ${formatMeasure(widthDelta, workspaceRef.current.accuracy)} · ΔD ${formatMeasure(depthDelta, workspaceRef.current.accuracy)} · ΔH ${formatMeasure(heightDelta, workspaceRef.current.accuracy)}`,
+              x: readoutPoint.x,
+              y: readoutPoint.y,
+              text: `${formatDeltaText(widthDelta, "W", workspaceRef.current.accuracy)} · ${formatDeltaText(depthDelta, "D", workspaceRef.current.accuracy)} · ${formatDeltaText(heightDelta, "H", workspaceRef.current.accuracy)}`,
               angle: 0,
             });
           }
@@ -2279,11 +2295,11 @@ export function WorkplaneViewport({
       if (state) {
         const readoutPoint = transform.wheelCenter
           ? rotationWheelPoint(transform.wheelCenter, delta, transform.wheelCenter.radius + 24)
-          : { x: localClientX + 18, y: localClientY - 18 };
+          : feedbackScreenPoint({ x: localClientX, y: localClientY }, { width: transformOverlayRef.current?.width ?? 1200, height: transformOverlayRef.current?.height ?? 800 });
         setRotationReadout({
           x: readoutPoint.x,
           y: readoutPoint.y,
-          text: `${Number(delta.toFixed(1))}°`,
+          text: formatAngleText(delta),
           angle: delta,
         });
       }
@@ -2698,10 +2714,11 @@ export function WorkplaneViewport({
             angle: 0,
           });
         } else if (handle.kind === "lift") {
+          const readoutPoint = feedbackScreenPoint({ x: event.clientX - rect.left, y: event.clientY - rect.top }, { width: rect.width, height: rect.height });
           setRotationReadout({
-            x: event.clientX - rect.left + 22,
-            y: event.clientY - rect.top - 34,
-            text: formatMeasure(yBounds.min, workspaceRef.current.accuracy),
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(0, "Y", workspaceRef.current.accuracy),
           });
         } else {
           setRotationReadout(null);

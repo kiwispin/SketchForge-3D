@@ -436,3 +436,44 @@ export function separatedLiftHandlePoint(
     y: heightPoint.y + direction.y * minimumGap,
   };
 }
+
+export type TransformFeedbackKind = "move" | "resize" | "height" | "lift" | "rotate";
+
+/**
+ * One structured feedback model for every transform gesture. Every kind uses
+ * the same label vocabulary and unit formatting, so move/resize/height/lift
+ * report deltas consistently and rotation reports degrees.
+ */
+export type TransformFeedback = {
+  kind: TransformFeedbackKind;
+  /** "ΔW · ΔD · ΔH", "ΔX", "45°", etc. */
+  text: string;
+};
+
+export function formatDeltaText(value: number, label: string, digits = 2) {
+  const magnitude = Math.abs(value) < 0.0000001 ? 0 : value;
+  return `Δ${label} ${magnitude.toFixed(digits)}`;
+}
+
+export function formatAngleText(degrees: number) {
+  const value = Math.abs(degrees) < 0.0000001 ? 0 : Number(degrees.toFixed(1));
+  return `${value}°`;
+}
+
+/**
+ * Places a transform feedback label a fixed screen offset from an anchor so it
+ * never sits on top of the handle being dragged and stays within the viewport.
+ */
+export function feedbackScreenPoint(
+  anchor: { x: number; y: number },
+  viewport: { width: number; height: number },
+  offsetX = 22,
+  offsetY = -30,
+) {
+  const labelWidth = 132;
+  const labelHeight = 26;
+  return {
+    x: clamp(anchor.x + offsetX, labelWidth / 2 + 6, viewport.width - labelWidth / 2 - 6),
+    y: clamp(anchor.y + offsetY, labelHeight / 2 + 6, viewport.height - labelHeight / 2 - 6),
+  };
+}
