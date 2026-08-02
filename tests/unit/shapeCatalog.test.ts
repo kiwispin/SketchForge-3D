@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShapeAsset, WorkplaneShape } from "@/types/sketchforge";
-import { automaticShapePlacement, connectorShapeAssets, makeShapeFromAsset, printablePartShapeAssets, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
+import { architecturalShapeAssets, automaticShapePlacement, connectorShapeAssets, makeShapeFromAsset, printablePartShapeAssets, sceneShape, shapeLibraryCategories, toolbarShapeAssets } from "@/lib/shapeCatalog";
 
 const workspace = { width: 200, depth: 200 };
 
@@ -118,6 +118,49 @@ describe("shape catalog", () => {
     expect(makeShapeFromAsset(byId("printable-spacer"))).toMatchObject({ kind: "tube", width: 12, depth: 12, height: 10, bevel: 3 });
   });
 
+  it("offers editable architectural starters with stable assemblies", () => {
+    const architectural = shapeLibraryCategories.find((category) => category.id === "architectural");
+    expect(architectural?.shapes.map((asset) => asset.id)).toEqual([
+      "architectural-wall",
+      "architectural-window",
+      "architectural-door",
+      "architectural-roof",
+    ]);
+    expect(architectural?.shapes.map((asset) => asset.menuIcon)).toEqual([
+      "assets/sketchforge/architectural-wall.svg",
+      "assets/sketchforge/architectural-window.svg",
+      "assets/sketchforge/architectural-door.svg",
+      "assets/sketchforge/architectural-roof.svg",
+    ]);
+    expect(makeShapeFromAsset(architecturalShapeAssets[0])).toMatchObject({ kind: "box", width: 80, depth: 8, height: 40 });
+    const window = makeShapeFromAsset(architecturalShapeAssets[1]);
+    const door = makeShapeFromAsset(architecturalShapeAssets[2]);
+    expect(window).toMatchObject({ kind: "box", width: 50, depth: 6, height: 44, groupedBaseWidth: 50, groupedBaseDepth: 6, groupedBaseHeight: 44 });
+    expect(window.groupedShapes?.map((shape) => shape.name)).toEqual([
+      "Window glass",
+      "Window left frame",
+      "Window right frame",
+      "Window sill",
+      "Window header",
+    ]);
+    expect(door).toMatchObject({ kind: "box", width: 50, depth: 8, height: 64, groupedBaseWidth: 50, groupedBaseDepth: 8, groupedBaseHeight: 64 });
+    expect(door.groupedShapes?.map((shape) => shape.name)).toEqual([
+      "Door leaf",
+      "Door left frame",
+      "Door right frame",
+      "Door header",
+      "Door handle",
+    ]);
+    expect(makeShapeFromAsset(architecturalShapeAssets[3])).toMatchObject({ kind: "roundRoof", width: 80, depth: 60, height: 20 });
+    [window, door].forEach((assembly) => {
+      const baseHeight = assembly.groupedBaseHeight!;
+      assembly.groupedShapes!.forEach((part) => {
+        expect(part.elevation ?? 0).toBeGreaterThanOrEqual(0);
+        expect((part.elevation ?? 0) + part.height).toBeLessThanOrEqual(baseHeight);
+      });
+    });
+  });
+
   it("creates placed shapes from toolbar assets", () => {
     const asset: ShapeAsset = { id: "box", name: "Box", src: "box.png", kind: "box", color: "#d41721" };
     const placed = makeShapeFromAsset(asset, { x: 12, z: -8, elevation: 4 });
@@ -139,6 +182,17 @@ describe("shape catalog", () => {
       locked: false,
       hidden: false,
     });
+  });
+
+  it("places a new solid on an oriented face with the correct local rotation", () => {
+    const asset = toolbarShapeAssets.find((shape) => shape.id === "box")!;
+    expect(makeShapeFromAsset(asset, {
+      x: 0,
+      z: 20,
+      elevation: 10,
+      rotationX: 90,
+      surface: { orientation: "front", x: 0, y: 10, z: 20 },
+    })).toMatchObject({ x: 0, z: 30, elevation: 0, rotationX: 90, rotationZ: 0 });
   });
 
   it("uses shape-specific defaults for text and round profiles", () => {

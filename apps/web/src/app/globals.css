@@ -1934,6 +1934,82 @@ button {
   white-space: nowrap;
 }
 
+.workplane-picker {
+  position: absolute;
+  top: 132px;
+  left: 16px;
+  z-index: 100;
+  pointer-events: auto;
+  width: 220px;
+  padding: 10px;
+  color: #294760;
+  background: rgba(250, 252, 253, 0.96);
+  border: 1px solid #cfdce5;
+  border-radius: 6px;
+  box-shadow: 0 10px 24px rgba(26, 47, 66, 0.16);
+}
+
+.workplane-picker strong,
+.workplane-picker small {
+  display: block;
+}
+
+.workplane-picker strong {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.workplane-picker small {
+  margin-top: 8px;
+  color: #5b7184;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.workplane-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.workplane-picker-grid button {
+  min-height: 28px;
+  padding: 4px 6px;
+  color: #34536b;
+  background: #fff;
+  border: 1px solid #cfdce5;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.workplane-picker-grid button:hover,
+.workplane-picker-grid button.active {
+  color: #0e6682;
+  background: #e4f8fd;
+  border-color: #55bfd8;
+}
+
+.origin-ruler-glyph {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  color: currentColor;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+/* Keep the workplane chooser above the WebGL canvas in every stacking context. */
+.workplane-stage > .workplane-picker {
+  position: absolute;
+  z-index: 1000;
+  pointer-events: auto;
+}
+
 .action-buttons button {
   box-sizing: border-box;
   display: inline-flex;
@@ -3169,6 +3245,19 @@ button {
   transform: translate(-50%, -50%);
 }
 
+.origin-ruler-readout {
+  font-weight: 700;
+  color: #0c4a6e;
+  border-color: rgba(0, 143, 190, 0.55);
+}
+
+.ruler-overlay .ruler-point.origin-marker {
+  pointer-events: none;
+  cursor: default;
+  fill: #00a7d8;
+  stroke: #ffffff;
+}
+
 .transform-overlay {
   position: absolute;
   inset: 0;
@@ -3375,9 +3464,27 @@ button {
 }
 
 .rotation-protractor-outer {
-  fill: rgba(255, 255, 255, 0.16);
-  stroke: rgba(53, 71, 83, 0.72);
-  stroke-width: 1.3;
+  fill: rgba(76, 171, 218, 0.08);
+  stroke: rgba(76, 171, 218, 0.86);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.rotation-protractor-segment {
+  fill: rgba(76, 171, 218, 0.2);
+  stroke: rgba(76, 171, 218, 0.42);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.rotation-protractor-segment.major {
+  fill: rgba(76, 171, 218, 0.28);
+}
+
+.rotation-active-sector {
+  fill: rgba(241, 106, 48, 0.42);
+  stroke: rgba(241, 106, 48, 0.78);
+  stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
@@ -3534,11 +3641,17 @@ button {
 
 .rotate-handle:active {
   cursor: grabbing;
+  color: #e45135;
+}
+
+.rotate-handle.active {
+  color: #e45135;
+  cursor: grabbing;
 }
 
 .rotate-handle:hover,
 .rotate-handle:focus-visible {
-  color: #1f2d35;
+  color: #e45135;
   outline: none;
 }
 

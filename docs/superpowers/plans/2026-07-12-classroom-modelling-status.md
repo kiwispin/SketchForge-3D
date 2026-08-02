@@ -15,6 +15,33 @@
 
 ## Guardrails
 
+## 2026-08-01 rotation and interaction parity completion
+
+The previously approved rotation-parity plan and its follow-on roadmap are now implemented on the working branch. The implementation keeps the existing quaternion, ray-plane, and multi-selection transform engine, while replacing the confusing floating rotation treatment with a Tinkercad-inspired selection-frame workflow.
+
+### Rotation parity delivered
+
+- Three plane-specific idle rotation handles are assigned to the projected selection frame and remain screen-sized rather than scaling with model dimensions.
+- Hover/click/drag reveals a single protractor centred on the true selection pivot. Its radius is fixed in screen space (approximately 170 px, clamped for narrow viewports), projected into the selected world rotation plane, and does not detach or jump during camera orbit or zoom.
+- The protractor has a 16-segment inner zone at 22.5 degrees per segment, a fine outer zone for per-degree movement, an active red handle, orange swept sector, and local degree readout.
+- Multi-selection rotation uses the shared pivot and preserves each member's relative transform. Existing move, lift, resize, undo, redo, numeric angle, and keyboard paths remain in the same transform engine.
+
+### Follow-on roadmap delivered
+
+- Unified movement, resize, height, and lift delta feedback.
+- Fit Selection, Home/reset view, and perspective/orthographic camera mode.
+- Snap-aware keyboard movement with grid-dependent coarse and fine steps.
+- Remembered duplicate-and-repeat offsets.
+- Fully oriented Ground/Top/Bottom/Front/Back/Left/Right workplanes and face-aware drag/drop placement.
+- Optional coordinate-origin ruler overlay.
+
+### Verification matrix
+
+- Unit coverage now includes workplane basis/orientation mapping, placement points, keyboard movement steps, shape catalog wrapping, and transform-overlay angle/segment calculations.
+- `npm run ci` passes with 14 test files and 114 tests, including TypeScript type checking.
+- Browser smoke coverage exercised the live preview's workplane picker (including Front face), orthographic toggle, origin ruler toggle, shape catalog expansion, and Box creation. The rendered UI exposes Fit Selection, camera controls, oriented workplane buttons, and the transform tool without server errors.
+- The final production build and deployment smoke test are the release gate; no code is pushed until those checks pass on this branch.
+
 - Each item is implemented, tested, and recorded here before work begins on the next item.
 - All core student work remains local/offline-capable; no student account is required.
 - Existing `.sketchforge`, STL, OBJ, and STEP workflows must remain compatible.
@@ -59,7 +86,7 @@
 - ✅ Fixed a Name Tag separation regression: its keyring-hole child previously extended below the assembly's declared 5 mm base, which made it jump upward when separated. The child now fits within the assembly bounds, and unit coverage enforces that every multi-part starter remains vertically inside its declared group. Manual browser verification compared grouped and separated Name Tag and Phone Stand renders, then exercised Undo and Redo for both; all positions remained stable. `npm run ci` (11 files / 68 tests) and `npm run pages:build` passed.
 - ✅ Repaired the broken **Socket** thumbnail and upgraded the picker’s visual language: Basic Shapes now use distinct coloured icons and matching colour accents, making silhouettes easier to scan. Browser audit confirmed every image in Basic Shapes (10), Connectors (2), Printable Parts (4), and Text (1) loaded successfully. Every one of those 17 shapes was also added, fully undone, and fully redone in the running app. Catalog coverage prevents a missing Socket path or duplicate Basic Shape colours; `npm run ci` (11 files / 69 tests) and `npm run pages:build` passed.
 - ✅ Replaced the Printable Parts’ generic primitive thumbnails with dedicated, recognisable SVG previews: a named keyring tag, assembled phone stand, cable-guide ring, and spacer ring. Browser-tested all four image paths, creation, complete undo/redo, and separate/undo/redo for both editable assemblies (Name Tag and Phone Stand). `npm run ci` (11 files / 69 tests) and `npm run pages:build` passed.
-- ⬜ Architectural shapes remain deliberately out of scope until the next approved increment.
+- ✅ Added an **Architectural** tab with four editable classroom starters: **Wall** (80 × 8 × 40 mm), **Window** (a grouped frame, glass, sill, and header), **Door** (a grouped leaf, frame, header, and handle), and **Roof** (an 80 × 60 × 20 mm rounded roof). Window and Door remain separate child parts when ungrouped, so students can edit the components and reuse them in house/building models. Dedicated SVG previews make the silhouettes clear in the picker. Browser-tested all four additions, editable dimensions, and complete Undo/Redo; focused catalog tests and `npm run ci` (13 files / 109 tests) pass. Static export remains a separate stop-the-dev-server verification step.
 
 ### ✅ 5. Guided activities — DELIVERED AS GUIDED TUTORIALS (Tinkercad-style)
 

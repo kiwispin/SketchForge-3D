@@ -61,6 +61,7 @@ import {
   serializeShapesForSync,
   shapeDepth,
   shapeWidth,
+  keyboardMoveStep,
   workplaneShapesEqual,
 } from "@/lib/workplaneShapes";
 import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
@@ -69,6 +70,7 @@ import { projectExportFileName } from "@/lib/exportNames";
 import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
 import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
@@ -178,6 +180,7 @@ declare global {
 const CUTTER_PADDING = 0.05;
 const POINT_TOLERANCE = 0.0001;
 const CUTTER_RESIDUAL_INSET = CUTTER_PADDING * 0.4;
+
 const MIN_SHAPE_DIMENSION = 0.01;
 const MODEL_DIMENSION_PRECISION = 3;
 const IMPORTED_EXACT_BOOLEAN_TRIANGLE_LIMIT = 150000;
@@ -5179,6 +5182,7 @@ export function SketchForgeEditor({
   const [placementElevation, setPlacementElevation] = useState(0);
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkplaneWorkspaceSettings>(() => normalizeWorkspaceSettings(initialWorkspace));
   const [workplaneMode, setWorkplaneMode] = useState(false);
+  const [repeatDefaults, setRepeatDefaults] = useState({ count: 3, offsetX: 20, offsetY: 0, offsetZ: 0 });
   const [menuOpen, setMenuOpen] = useState(false);
   const [topPanel, setTopPanel] = useState<TopPanel>(null);
   const [stepExporting, setStepExporting] = useState(false);
@@ -5212,6 +5216,8 @@ export function SketchForgeEditor({
   const historyIndexRef = useRef(historyIndex);
   const interactionHistoryStartRef = useRef("");
   const interactionHistoryChangedRef = useRef(false);
+  const lastDuplicateOffsetRef = useRef<{ x: number; z: number } | null>(null);
+  const duplicateRepeatPatternRef = useRef<DuplicateRepeatPattern | null>(null);
   const interactionHistoryTimerRef = useRef<number | null>(null);
   const [projectInteractionActive, setProjectInteractionActive] = useState(false);
   const [activeTutorialId, setActiveTutorialId] = useState<string | null>(initialTutorialId);
@@ -6165,7 +6171,7 @@ export function SketchForgeEditor({
   }, []);
 
   const addShape = useCallback(
-    (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number }) => {
+    (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotation?: number; rotationX?: number; rotationZ?: number; surface?: { orientation: "ground" | "top" | "bottom" | "front" | "back" | "right" | "left" | "face"; x: number; y: number; z: number; normal?: [number, number, number] } }) => {
       const automaticPlacement = point
         ? point
         : automaticShapePlacement(asset, shapes, workspaceSettingsRef.current, placementElevation);
@@ -6275,7 +6281,7 @@ export function SketchForgeEditor({
         return;
       }
 
-      const { changed, next } = applyPatch(shapes);
+      const { changed, next } = applyPatch(shapesRef.current);
       if (changed) {
         commitShapes(next, selectedIds);
       }
@@ -6304,16 +6310,29 @@ export function SketchForgeEditor({
     const workspace = workspaceSettingsRef.current;
     const xLimit = Math.max(0, workspace.width / 2 - 6);
     const zLimit = Math.max(0, workspace.depth / 2 - 6);
-    const offsetX = duplicateAxisOffset(selectedShapes.map((shape) => shape.x), -xLimit, xLimit);
-    const offsetZ = duplicateAxisOffset(selectedShapes.map((shape) => shape.z), -zLimit, zLimit);
-    const duplicates = selectedShapes.map((shape) => ({
-      ...shape,
-      id: createLocalId(`${shape.id}-copy`),
-      x: shape.x + offsetX,
-      z: shape.z + offsetZ,
-    }));
+    const repeatPattern = duplicateRepeatMatches(duplicateRepeatPatternRef.current, selectedIds);
+    const sourceShapes = repeatPattern ? duplicateRepeatPatternRef.current?.sourceShapes ?? [] : selectedShapes;
+    const sourceByIndex = new Map(sourceShapes.map((shape, index) => [index, shape]));
+    const remembered = lastDuplicateOffsetRef.current;
+    const offsetX = remembered && selectedShapes.every((shape) => shape.x + remembered.x >= -xLimit && shape.x + remembered.x <= xLimit)
+      ? remembered.x
+      : duplicateAxisOffset(selectedShapes.map((shape) => shape.x), -xLimit, xLimit);
+    const offsetZ = remembered && selectedShapes.every((shape) => shape.z + remembered.z >= -zLimit && shape.z + remembered.z <= zLimit)
+      ? remembered.z
+      : duplicateAxisOffset(selectedShapes.map((shape) => shape.z), -zLimit, zLimit);
+    lastDuplicateOffsetRef.current = { x: offsetX, z: offsetZ };
+    const duplicates = selectedShapes.map((shape, index) => {
+      const source = sourceByIndex.get(index);
+      const next = repeatPattern && source ? repeatShapeTransform(shape, source) : {
+        ...shape,
+        x: shape.x + offsetX,
+        z: shape.z + offsetZ,
+      };
+      return { ...next, id: createLocalId(`${shape.id}-copy`) };
+    });
+    duplicateRepeatPatternRef.current = { selectedIds: duplicates.map((shape) => shape.id), sourceShapes: selectedShapes.map((shape) => ({ ...shape })) };
     commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Duplicated ${duplicates.length} shape${duplicates.length === 1 ? "" : "s"}`);
-  }, [commitShapes, hasSelection, selectedShapes, shapes]);
+  }, [commitShapes, hasSelection, selectedIds, selectedShapes, shapes]);
 
   const repeatSelected = useCallback(
     (count: number, offsetX: number, offsetY: number, offsetZ: number) => {
@@ -6332,6 +6351,7 @@ export function SketchForgeEditor({
         })),
       ).flat();
       commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Repeated ${selectedShapes.length} shape${selectedShapes.length === 1 ? "" : "s"}, ${copies} time${copies === 1 ? "" : "s"}`);
+      setRepeatDefaults({ count: copies, offsetX, offsetY, offsetZ });
       setTopPanel(null);
     },
     [commitShapes, hasSelection, selectedShapes, shapes],
@@ -8031,7 +8051,7 @@ export function SketchForgeEditor({
         return;
       }
 
-      const step = event.shiftKey ? 5 : 1;
+      const step = keyboardMoveStep(currentSnapRef.current, event.shiftKey);
       if (shortcut && event.key === "ArrowUp") {
         event.preventDefault();
         raiseSelected(step);
@@ -8344,6 +8364,7 @@ export function SketchForgeEditor({
           driveSaving={driveSaving}
           driveFile={driveFileLink}
           onRepeat={repeatSelected}
+          repeatDefaults={repeatDefaults}
           stepExporting={stepExporting}
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
@@ -8528,7 +8549,7 @@ function SecondaryToolbar({
   onRenameProject?: (name: string) => void;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
-  const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "printableParts" | "text">("basic");
+  const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "architectural" | "printableParts" | "text">("basic");
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const suppressNextShapeClickRef = useRef(false);
   const selectToolbarMode = (mode: "geometry" | "sketch") => {
@@ -9048,6 +9069,7 @@ function TopActionPanel({
   driveSaving,
   driveFile,
   onRepeat,
+  repeatDefaults,
   stepExporting,
   onImportFiles,
   onPickFile,
@@ -9067,6 +9089,7 @@ function TopActionPanel({
   driveSaving: boolean;
   driveFile: ProjectDriveFile | null;
   onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void;
+  repeatDefaults: { count: number; offsetX: number; offsetY: number; offsetZ: number };
   stepExporting: boolean;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
@@ -9202,7 +9225,7 @@ function TopActionPanel({
           </section>
         </div>
       ) : null}
-      {panel === "repeat" ? <RepeatPanel onRepeat={onRepeat} /> : null}
+      {panel === "repeat" ? <RepeatPanel onRepeat={onRepeat} defaults={repeatDefaults} /> : null}
       {panel === "tips" ? (
         <div className="top-action-body">
           <p>Click a shape to select it. Use the inspector for dimensions, rotation, solid/hole, color, duplicate, and delete.</p>
@@ -9245,11 +9268,11 @@ function PrintabilityPreflight({ report }: { report: PrintabilityReport }) {
   );
 }
 
-function RepeatPanel({ onRepeat }: { onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void }) {
-  const [count, setCount] = useState(3);
-  const [offsetX, setOffsetX] = useState(20);
-  const [offsetY, setOffsetY] = useState(0);
-  const [offsetZ, setOffsetZ] = useState(0);
+function RepeatPanel({ onRepeat, defaults }: { onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void; defaults: { count: number; offsetX: number; offsetY: number; offsetZ: number } }) {
+  const [count, setCount] = useState(defaults.count);
+  const [offsetX, setOffsetX] = useState(defaults.offsetX);
+  const [offsetY, setOffsetY] = useState(defaults.offsetY);
+  const [offsetZ, setOffsetZ] = useState(defaults.offsetZ);
   return (
     <div className="top-action-body repeat-panel">
       <p>Create evenly offset copies of the selected shape or group.</p>
