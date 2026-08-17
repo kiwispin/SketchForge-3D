@@ -14,7 +14,7 @@ import droidSerifBoldFontJson from "three/examples/fonts/droid/droid_serif_bold.
 import gentilisBoldFontJson from "three/examples/fonts/gentilis_bold.typeface.json";
 import helvetikerBoldFontJson from "three/examples/fonts/helvetiker_bold.typeface.json";
 import optimerBoldFontJson from "three/examples/fonts/optimer_bold.typeface.json";
-import { AlignOverlay, MirrorOverlay, type AlignOverlayState, type MirrorOverlayState } from "@/components/workplane/ActionOverlays";
+import { AlignOverlay, MirrorOverlay, SmartGuideOverlay, type AlignOverlayState, type MirrorOverlayState, type SmartGuideOverlayState } from "@/components/workplane/ActionOverlays";
 import { ShapeInspector, SnapGridControl, type ShapeInspectorUpdateOptions } from "@/components/workplane/ShapeInspector";
 import { WorkspaceSettingsModal } from "@/components/workplane/WorkspaceSettingsModal";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
@@ -53,6 +53,7 @@ import {
 } from "@/components/workplane/TransformOverlay";
 import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, MeasurementAccuracy, ShapeAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 import type { CadModifierEdge } from "@/lib/cadModifierTypes";
+import { dominantSmartGuideDirection, findDirectionalEdgeDistances, findNearestCenterAlignments, type SmartGuideAxis, type SmartGuideBounds, type SmartGuideDirection } from "@/lib/smartGuides";
 
 const WORKPLANE_WIDTH = 200;
 const WORKPLANE_DEPTH = 140;
@@ -66,6 +67,8 @@ const MIN_SHAPE_SIZE = 0.01;
 const CUT_PREVIEW_PADDING = 0.01;
 const MIN_ELEVATION = -180;
 const MAX_ELEVATION = 220;
+const SMART_GUIDE_TOLERANCE = 1.25;
+const SMART_GUIDE_MAX_DISTANCE = 60;
 const CAMERA_MIN_TARGET_Y = -70;
 const CAMERA_MAX_TARGET_Y = 120;
 const SHAPE_KINDS = new Set<ShapeAsset["kind"]>([
@@ -251,6 +254,7 @@ type DragState = {
   pointerId: number;
   primaryStartX: number;
   primaryStartZ: number;
+  hasMoved: boolean;
   items: DragItem[];
 };
 
@@ -1181,6 +1185,8 @@ export function WorkplaneViewport({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceSettings>(() => normalizeWorkspaceSettings(initialWorkspace));
   const [transformOverlay, setTransformOverlay] = useState<TransformOverlayState | null>(null);
+  const [smartGuideOverlay, setSmartGuideOverlay] = useState<SmartGuideOverlayState | null>(null);
+  const [directDragActive, setDirectDragActive] = useState(false);
   const [alignOverlay, setAlignOverlay] = useState<AlignOverlayState | null>(null);
   const [mirrorOverlay, setMirrorOverlay] = useState<MirrorOverlayState | null>(null);
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -1219,6 +1225,7 @@ export function WorkplaneViewport({
   const lastWorkspaceSettingsSyncRef = useRef("");
   const viewCubeRef = useRef<HTMLDivElement | null>(null);
   const transformOverlayRef = useRef<TransformOverlayState | null>(null);
+  const smartGuideOverlayRef = useRef<SmartGuideOverlayState | null>(null);
   const alignOverlayRef = useRef<AlignOverlayState | null>(null);
   const mirrorOverlayRef = useRef<MirrorOverlayState | null>(null);
   const rulerModeRef = useRef(false);
@@ -1340,6 +1347,16 @@ export function WorkplaneViewport({
         workspaceRef.current.accuracy,
         Boolean(transformRef.current || dragRef.current),
       );
+      syncSmartGuideOverlay(
+        threeRef.current,
+        previewShapesForDrag(shapes, dragRef.current),
+        dragRef.current,
+        workspaceRef.current,
+        workspaceRef.current.accuracy,
+        SMART_GUIDE_TOLERANCE,
+        smartGuideOverlayRef,
+        setSmartGuideOverlay,
+      );
       syncAlignOverlay(threeRef.current, alignReferenceShapesRef.current, selectedIdsRef.current, alignModeRef.current, alignAnchorIdRef.current, alignHandlesRef.current, alignOverlayRef, setAlignOverlay);
       syncMirrorOverlay(threeRef.current, mirrorReferenceShapesRef.current, selectedIdsRef.current, mirrorModeRef.current, mirrorOverlayRef, setMirrorOverlay);
       threeRef.current.needsRender = true;
@@ -1374,6 +1391,7 @@ export function WorkplaneViewport({
       setRotationReadout(null);
       setActiveRotationWheel(false);
       setActiveTransformKind(null);
+      setDirectDragActive(Boolean(dragRef.current));
     }
     selectedIdsRef.current = selectedIds;
     rebuildShapes(threeRef.current, shapesRef.current, renderSelectionIds(selectedIds), !transformRef.current && !dragRef.current);
@@ -1387,6 +1405,16 @@ export function WorkplaneViewport({
         setTransformOverlay,
         workspaceRef.current.accuracy,
         Boolean(transformRef.current || dragRef.current),
+      );
+      syncSmartGuideOverlay(
+        threeRef.current,
+        previewShapesForDrag(shapesRef.current, dragRef.current),
+        dragRef.current,
+        workspaceRef.current,
+        workspaceRef.current.accuracy,
+        SMART_GUIDE_TOLERANCE,
+        smartGuideOverlayRef,
+        setSmartGuideOverlay,
       );
       syncAlignOverlay(threeRef.current, alignReferenceShapesRef.current, selectedIds, alignModeRef.current, alignAnchorIdRef.current, alignHandlesRef.current, alignOverlayRef, setAlignOverlay);
       syncMirrorOverlay(threeRef.current, mirrorReferenceShapesRef.current, selectedIds, mirrorModeRef.current, mirrorOverlayRef, setMirrorOverlay);
@@ -1524,6 +1552,16 @@ export function WorkplaneViewport({
         workspace.accuracy,
         Boolean(transformRef.current || dragRef.current),
       );
+      syncSmartGuideOverlay(
+        threeRef.current,
+        previewShapesForDrag(shapesRef.current, dragRef.current),
+        dragRef.current,
+        workspace,
+        workspace.accuracy,
+        SMART_GUIDE_TOLERANCE,
+        smartGuideOverlayRef,
+        setSmartGuideOverlay,
+      );
       syncRulerOverlay(threeRef.current, rulerModelRef.current, rulerOverlayRef, setRulerOverlay, workspace.accuracy);
       threeRef.current.needsRender = true;
     }
@@ -1589,6 +1627,16 @@ export function WorkplaneViewport({
           setTransformOverlay,
           workspaceRef.current.accuracy,
           Boolean(transformRef.current || dragRef.current),
+        );
+        syncSmartGuideOverlay(
+          state,
+          previewShapes,
+          dragRef.current,
+          workspaceRef.current,
+          workspaceRef.current.accuracy,
+          SMART_GUIDE_TOLERANCE,
+          smartGuideOverlayRef,
+          setSmartGuideOverlay,
         );
         syncAlignOverlay(state, alignReferenceShapesRef.current, selectedIdsRef.current, alignModeRef.current, alignAnchorIdRef.current, alignHandlesRef.current, alignOverlayRef, setAlignOverlay);
         syncMirrorOverlay(state, mirrorReferenceShapesRef.current, selectedIdsRef.current, mirrorModeRef.current, mirrorOverlayRef, setMirrorOverlay);
@@ -1999,6 +2047,7 @@ export function WorkplaneViewport({
       }
       setActiveRotationWheel(kind === "rotate");
       setActiveTransformKind(kind);
+      setDirectDragActive(false);
       setActiveRotationAxis(kind === "rotate" ? rotationAxis : null);
       setSelectionHelpersVisible(state ?? null, kind !== "rotate");
       if (kind === "rotate") {
@@ -2345,6 +2394,7 @@ export function WorkplaneViewport({
     setActiveRotationWheel(false);
     setHoveredRotationWheelAxis(null);
     setActiveTransformKind(null);
+    setDirectDragActive(false);
     setActiveRotationAxis(null);
     setPinnedRotationWheelView(null);
     setRotationReadout(null);
@@ -2658,6 +2708,7 @@ export function WorkplaneViewport({
         }
         setActiveRotationWheel(handle.kind === "rotate");
         setActiveTransformKind(handle.kind);
+        setDirectDragActive(false);
         setActiveRotationAxis(handle.kind === "rotate" ? rotationAxis : null);
         setSelectionHelpersVisible(state, handle.kind !== "rotate");
         if (handle.kind === "rotate") {
@@ -2810,8 +2861,10 @@ export function WorkplaneViewport({
         pointerId: event.pointerId,
         primaryStartX: shape.x,
         primaryStartZ: shape.z,
+        hasMoved: false,
         items,
       };
+      setDirectDragActive(true);
       clearCutPreviewOverlays(state);
       state.needsRender = true;
       state.controls.enabled = false;
@@ -2885,6 +2938,7 @@ export function WorkplaneViewport({
       const primaryNextZ = clamp(point.z + drag.offsetZ, -workspaceRef.current.depth / 2 + 6, workspaceRef.current.depth / 2 - 6);
       const deltaX = primaryNextX - drag.primaryStartX;
       const deltaZ = primaryNextZ - drag.primaryStartZ;
+      drag.hasMoved = drag.hasMoved || Math.hypot(deltaX, deltaZ) > 0.25;
 
       drag.items.forEach((item) => {
         item.nextX = clamp(item.startX + deltaX, -workspaceRef.current.width / 2 + 6, workspaceRef.current.width / 2 - 6);
@@ -2902,6 +2956,16 @@ export function WorkplaneViewport({
           setTransformOverlay,
           workspaceRef.current.accuracy,
           true,
+        );
+        syncSmartGuideOverlay(
+          threeRef.current,
+          previewShapesForDrag(shapesRef.current, drag),
+          drag,
+          workspaceRef.current,
+          workspaceRef.current.accuracy,
+          SMART_GUIDE_TOLERANCE,
+          smartGuideOverlayRef,
+          setSmartGuideOverlay,
         );
         threeRef.current.lastOverlaySync = performance.now();
         threeRef.current.needsRender = true;
@@ -2932,9 +2996,22 @@ export function WorkplaneViewport({
           suppressLiftEditAfterDrag();
         }
         transformRef.current = null;
+        if (state) {
+          syncSmartGuideOverlay(
+            state,
+            shapesRef.current,
+            null,
+            workspaceRef.current,
+            workspaceRef.current.accuracy,
+            SMART_GUIDE_TOLERANCE,
+            smartGuideOverlayRef,
+            setSmartGuideOverlay,
+          );
+        }
         setActiveRotationWheel(false);
         setHoveredRotationWheelAxis(null);
         setActiveTransformKind(null);
+        setDirectDragActive(false);
         setActiveRotationAxis(null);
         setPinnedRotationWheelView(null);
         setRotationReadout(null);
@@ -3006,7 +3083,18 @@ export function WorkplaneViewport({
       });
 
       dragRef.current = null;
+      setDirectDragActive(false);
       if (state) {
+        syncSmartGuideOverlay(
+          state,
+          shapesRef.current,
+          null,
+          workspaceRef.current,
+          workspaceRef.current.accuracy,
+          SMART_GUIDE_TOLERANCE,
+          smartGuideOverlayRef,
+          setSmartGuideOverlay,
+        );
         // A moved shape triggers the shapes effect, which rebuilds this preview.
         // Running it here as well makes cylinder/hole CSG execute twice on release.
         if (!movedShape) {
@@ -3409,7 +3497,7 @@ export function WorkplaneViewport({
               showRotationWheel={activeRotationWheel || hoveredRotationWheelAxis !== null}
               activeRotationAxis={activeRotationAxis}
               hideSelectionChrome={false}
-              hideDimensionMarks={activeTransformKind === "scale" || activeTransformKind === "move"}
+              hideDimensionMarks={activeTransformKind === "scale" || activeTransformKind === "move" || directDragActive}
               rotationWheelAxis={rotationWheelAxis}
               pinnedRotationWheelView={pinnedRotationWheelView}
               onBeginTransform={beginTransform}
@@ -3443,6 +3531,7 @@ export function WorkplaneViewport({
               onCancelRotationEdit={cancelRotationEdit}
             />
           ) : null}
+          {smartGuideOverlay && directDragActive && dragRef.current?.hasMoved && !alignMode && !mirrorMode && !rulerMode && !modifierActive ? <SmartGuideOverlay overlay={smartGuideOverlay} /> : null}
           {alignOverlay ? <AlignOverlay overlay={alignOverlay} onAlign={onAlignSelection} onPreview={onAlignPreview} onPreviewClear={onAlignPreviewClear} /> : null}
           {mirrorOverlay ? <MirrorOverlay overlay={mirrorOverlay} onMirror={onMirrorSelection} onPreview={onMirrorPreview} onPreviewClear={onMirrorPreviewClear} /> : null}
           {rulerOverlay && (rulerOverlay.points.length > 0 || rulerOverlay.hover) ? (
@@ -4178,6 +4267,192 @@ function updateTransformOverlayIfChanged(
   }
   overlayRef.current = next;
   setOverlay(next);
+}
+
+function updateSmartGuideOverlayIfChanged(
+  overlayRef: MutableRefObject<SmartGuideOverlayState | null>,
+  setOverlay: Dispatch<SetStateAction<SmartGuideOverlayState | null>>,
+  next: SmartGuideOverlayState | null,
+) {
+  if (overlayRef.current && next && JSON.stringify(overlayRef.current) === JSON.stringify(next)) {
+    return;
+  }
+  if (!overlayRef.current && !next) {
+    return;
+  }
+  overlayRef.current = next;
+  setOverlay(next);
+}
+
+function horizontalBoundsForFrame(frame: SelectionFrame, id: string): SmartGuideBounds {
+  const corners = selectionFrameCorners(frame);
+  return {
+    id,
+    x: frame.center.x,
+    z: frame.center.z,
+    minX: Math.min(...corners.map((corner) => corner.x)),
+    maxX: Math.max(...corners.map((corner) => corner.x)),
+    minZ: Math.min(...corners.map((corner) => corner.z)),
+    maxZ: Math.max(...corners.map((corner) => corner.z)),
+  };
+}
+
+function directionsForDrag(drag: DragState): Partial<Record<SmartGuideAxis, SmartGuideDirection>> {
+  const primary = drag.items.find((item) => item.id === drag.primaryId) ?? drag.items[0];
+  if (!primary) {
+    return {};
+  }
+  const deltaX = primary.nextX - primary.startX;
+  const deltaZ = primary.nextZ - primary.startZ;
+  return dominantSmartGuideDirection(deltaX, deltaZ);
+}
+
+function smartGuideDirectionLabel(axis: SmartGuideAxis, direction: SmartGuideDirection) {
+  if (axis === "x") {
+    return direction === "negative" ? "Left edge" : "Right edge";
+  }
+  return direction === "negative" ? "Back edge" : "Front edge";
+}
+
+function syncSmartGuideOverlay(
+  state: ThreeState,
+  shapes: WorkplaneShape[],
+  drag: DragState | null,
+  workspace: WorkspaceSettings,
+  accuracy: MeasurementAccuracy,
+  tolerance: number,
+  overlayRef: MutableRefObject<SmartGuideOverlayState | null>,
+  setOverlay: Dispatch<SetStateAction<SmartGuideOverlayState | null>>,
+) {
+  if (!drag?.hasMoved || drag.items.length === 0) {
+    updateSmartGuideOverlayIfChanged(overlayRef, setOverlay, null);
+    return;
+  }
+
+  const movingIds = drag.items.map((item) => item.id);
+  const selectedFrame = selectionFrameForShapes(shapes, movingIds);
+  if (!selectedFrame) {
+    updateSmartGuideOverlayIfChanged(overlayRef, setOverlay, null);
+    return;
+  }
+
+  const referenceEntries = shapes
+    .filter((shape) => !movingIds.includes(shape.id) && !shape.hidden)
+    .map((shape) => {
+      const frame = selectionFrameForShapes([shape], [shape.id]);
+      if (!frame) {
+        return null;
+      }
+      const center = shapeCenter(shape);
+      return {
+        shape,
+        frame,
+        center: { id: shape.id, x: center.x, z: center.z },
+        bounds: horizontalBoundsForFrame(frame, shape.id),
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  const moving = { id: "selection", x: selectedFrame.center.x, z: selectedFrame.center.z };
+  const movingBounds = horizontalBoundsForFrame(selectedFrame, "selection");
+  const directions = directionsForDrag(drag);
+  const distanceMatches = findDirectionalEdgeDistances(
+    movingBounds,
+    referenceEntries.map((entry) => entry.bounds),
+    directions,
+    SMART_GUIDE_MAX_DISTANCE,
+  );
+  const activeAxis = Object.keys(directions)[0] as SmartGuideAxis | undefined;
+  const centerMatches = distanceMatches.length > 0
+    ? []
+    : findNearestCenterAlignments(moving, referenceEntries.map((entry) => entry.center), tolerance)
+      .filter((match) => !activeAxis || match.axis === activeAxis);
+  if (centerMatches.length === 0 && distanceMatches.length === 0) {
+    updateSmartGuideOverlayIfChanged(overlayRef, setOverlay, null);
+    return;
+  }
+
+  const rect = state.renderer.domElement.getBoundingClientRect();
+  state.camera.updateMatrixWorld();
+  const project = (point: THREE.Vector3) => {
+    const projected = point.clone().project(state.camera);
+    return {
+      x: ((projected.x + 1) / 2) * rect.width,
+      y: ((1 - projected.y) / 2) * rect.height,
+    };
+  };
+  const movingCenter = selectedFrame.center;
+  const guides: SmartGuideOverlayState["guides"] = [];
+  centerMatches.forEach((match, index) => {
+    const reference = referenceEntries.find((entry) => entry.shape.id === match.referenceId);
+    if (!reference) {
+      return;
+    }
+    const referenceCenter = shapeCenter(reference.shape);
+    const lineStart = match.axis === "x"
+      ? new THREE.Vector3(match.movingValue, movingCenter.y, -workspace.depth / 2)
+      : new THREE.Vector3(-workspace.width / 2, movingCenter.y, match.movingValue);
+    const lineEnd = match.axis === "x"
+      ? new THREE.Vector3(match.movingValue, movingCenter.y, workspace.depth / 2)
+      : new THREE.Vector3(workspace.width / 2, movingCenter.y, match.movingValue);
+    const start = project(lineStart);
+    const end = project(lineEnd);
+    const movingScreen = project(movingCenter);
+    const referenceScreen = project(referenceCenter);
+    if (![start, end, movingScreen, referenceScreen].every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))) {
+      return;
+    }
+    const labelOffset = -18 - index * 24;
+    const axisLabel = match.axis.toUpperCase();
+    guides.push({
+      key: `center-${match.axis}-${match.referenceId}`,
+      axis: match.axis as SmartGuideAxis,
+      kind: "center",
+      x1: start.x,
+      y1: start.y,
+      x2: end.x,
+      y2: end.y,
+      labelX: (movingScreen.x + referenceScreen.x) / 2,
+      labelY: (movingScreen.y + referenceScreen.y) / 2 + labelOffset,
+      label: `Center ${axisLabel} · Δ${axisLabel} ${formatMeasure(match.delta, accuracy)}`,
+    });
+  });
+  distanceMatches.forEach((match, index) => {
+    const reference = referenceEntries.find((entry) => entry.shape.id === match.referenceId);
+    if (!reference) {
+      return;
+    }
+    const otherAxis = match.axis === "x"
+      ? (Math.max(movingBounds.minZ, reference.bounds.minZ) <= Math.min(movingBounds.maxZ, reference.bounds.maxZ)
+        ? (Math.max(movingBounds.minZ, reference.bounds.minZ) + Math.min(movingBounds.maxZ, reference.bounds.maxZ)) / 2
+        : (movingCenter.z + reference.frame.center.z) / 2)
+      : (Math.max(movingBounds.minX, reference.bounds.minX) <= Math.min(movingBounds.maxX, reference.bounds.maxX)
+        ? (Math.max(movingBounds.minX, reference.bounds.minX) + Math.min(movingBounds.maxX, reference.bounds.maxX)) / 2
+        : (movingCenter.x + reference.frame.center.x) / 2);
+    const lineStart = match.axis === "x"
+      ? new THREE.Vector3(match.movingEdge, movingCenter.y, otherAxis)
+      : new THREE.Vector3(otherAxis, movingCenter.y, match.movingEdge);
+    const lineEnd = match.axis === "x"
+      ? new THREE.Vector3(match.referenceEdge, movingCenter.y, otherAxis)
+      : new THREE.Vector3(otherAxis, movingCenter.y, match.referenceEdge);
+    const start = project(lineStart);
+    const end = project(lineEnd);
+    if (![start, end].every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))) {
+      return;
+    }
+    guides.push({
+      key: `distance-${match.axis}-${match.referenceId}`,
+      axis: match.axis as SmartGuideAxis,
+      kind: "distance",
+      x1: start.x,
+      y1: start.y,
+      x2: end.x,
+      y2: end.y,
+      labelX: (start.x + end.x) / 2,
+      labelY: (start.y + end.y) / 2 - 18 - index * 24,
+      label: `${smartGuideDirectionLabel(match.axis, match.direction)} · ${formatMeasure(match.gap, accuracy)}`,
+    });
+  });
+  updateSmartGuideOverlayIfChanged(overlayRef, setOverlay, guides.length > 0 ? { guides } : null);
 }
 
 function syncTransformOverlay(

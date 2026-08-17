@@ -74,6 +74,7 @@ import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPatte
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
+import { stlHoleCount, stlSolidCount, stlSourceShapes, type StlExportScope } from "@/lib/stlExport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
 import {
   SKETCHFORGE_MCP_POLL_MS,
@@ -2329,6 +2330,20 @@ function normalFor(a: Vec3, b: Vec3, c: Vec3): Vec3 {
   const nz = ux * vy - uy * vx;
   const length = Math.hypot(nx, ny, nz) || 1;
   return [nx / length, ny / length, nz / length];
+}
+
+function stlMeshIsUsable(mesh: MeshData) {
+  if (mesh.vertices.length < 3 || mesh.faces.length < 1) {
+    return false;
+  }
+
+  return mesh.vertices.every((vertex) => vertex.every(Number.isFinite)) && mesh.faces.every(([a, b, c]) => {
+    if (![a, b, c].every((index) => Number.isInteger(index) && index >= 0 && index < mesh.vertices.length)) {
+      return false;
+    }
+    const normal = normalFor(mesh.vertices[a], mesh.vertices[b], mesh.vertices[c]);
+    return normal.every(Number.isFinite);
+  });
 }
 
 function toStl(meshes: MeshData[]) {
@@ -5185,6 +5200,7 @@ export function SketchForgeEditor({
   const [repeatDefaults, setRepeatDefaults] = useState({ count: 3, offsetX: 20, offsetY: 0, offsetZ: 0 });
   const [menuOpen, setMenuOpen] = useState(false);
   const [topPanel, setTopPanel] = useState<TopPanel>(null);
+  const [stlExporting, setStlExporting] = useState(false);
   const [stepExporting, setStepExporting] = useState(false);
   const [alignMode, setAlignMode] = useState(false);
   const [alignAnchorId, setAlignAnchorId] = useState<string | null>(null);
@@ -5471,10 +5487,11 @@ export function SketchForgeEditor({
     });
   }, []);
   const exportableShapeCount = useMemo(() => (hasSelection ? selectedShapes : shapes).filter((shape) => !shape.hole).length, [hasSelection, selectedShapes, shapes]);
-  const exportScopeLabel = hasSelection ? "selected" : "total";
+  const designExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes)), [selectedShapes, shapes]);
+  const selectedExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes, "selection")), [selectedShapes, shapes]);
   const exportPreflight = useMemo(
-    () => checkPrintability(hasSelection ? selectedShapes : shapes, workspaceSettings),
-    [hasSelection, selectedShapes, shapes, workspaceSettings],
+    () => checkPrintability(stlSourceShapes(shapes, selectedShapes), workspaceSettings),
+    [selectedShapes, shapes, workspaceSettings],
   );
   const effectiveAlignAnchorId = useMemo(
     () => effectiveAlignmentAnchorId(selectedShapes, alignAnchorId),
@@ -7666,35 +7683,72 @@ export function SketchForgeEditor({
     void run();
   }, [commitShapes]);
 
-  const exportDesign = useCallback((format: ExportFormat) => {
-    const sourceShapes = hasSelection ? selectedShapes : shapes;
+  const exportDesign = useCallback((format: ExportFormat, requestedScope?: StlExportScope) => {
+    const scope: StlExportScope = requestedScope ?? (format === "stl" ? "design" : hasSelection ? "selection" : "design");
+    const sourceShapes = format === "stl"
+      ? stlSourceShapes(shapes, selectedShapes, scope)
+      : (scope === "selection" ? selectedShapes : shapes).filter((shape) => !shape.hidden);
     const exportable = sourceShapes.filter((shape) => !shape.hole);
     if (exportable.length === 0) {
-      setNotice(hasSelection ? "Select at least one solid shape before exporting" : "Add a solid shape before exporting");
+      setNotice(scope === "selection" ? "Select at least one solid shape before exporting" : "Add a solid shape before exporting");
       return;
     }
-    const meshes = exportable.map(meshForShape);
-    const selectedNotice = `Exported ${exportable.length} selected shape${exportable.length === 1 ? "" : "s"}`;
+
     const finishNotice = (label: string, result: DownloadResult) => {
       if (result.mode === "folder") {
         setNotice(`Saved ${label} to ${result.path}`);
         return;
       }
-      setNotice(hasSelection ? `${selectedNotice} as ${label}` : `Exported ${label}`);
+      const scopeNotice = scope === "selection" ? ` ${exportable.length} selected shape${exportable.length === 1 ? "" : "s"}` : " full design";
+      setNotice(`Exported${scopeNotice} as ${label}`);
     };
     const failNotice = (label: string, error: unknown) => {
       setNotice(error instanceof Error ? error.message : `Could not export ${label}`);
     };
+
     if (format === "stl") {
-      void downloadTextFile(projectExportFileName(projectName, "stl"), toStl(meshes), "model/stl")
-        .then((result) => finishNotice("STL", result))
-        .catch((error: unknown) => failNotice("STL", error));
+      if (stlExporting) {
+        return;
+      }
+
+      setStlExporting(true);
+      setNotice(scope === "selection" ? "Preparing selected shapes for STL…" : "Preparing the full design for STL…");
+      void (async () => {
+        try {
+          const prepared = await buildGroupedShapeFromSelection(sourceShapes);
+          if (prepared.hasHole && !prepared.group) {
+            throw new Error(`${prepared.failureNotice}. The STL was not downloaded.`);
+          }
+
+          const meshes = prepared.group
+            ? [meshForShape(prepared.group)]
+            : exportable.map(meshForShape);
+          if (!meshes.every(stlMeshIsUsable)) {
+            throw new Error("The design did not produce valid solid geometry for STL export. The STL was not downloaded.");
+          }
+
+          const result = await downloadTextFile(projectExportFileName(projectName, "stl"), toStl(meshes), "model/stl");
+          if (result.mode === "folder") {
+            setNotice(`Saved STL for ${scope === "selection" ? "the selection" : "the full design"} to ${result.path}`);
+          } else {
+            const holeCount = stlHoleCount(prepared.booleanSelection);
+            const holeNote = holeCount > 0 ? `; applied ${holeCount} hole cut${holeCount === 1 ? "" : "s"}` : "";
+            setNotice(`Exported STL for ${scope === "selection" ? "the selection" : "the full design"}${holeNote}`);
+          }
+        } catch (error: unknown) {
+          failNotice("STL", error);
+        } finally {
+          setStlExporting(false);
+        }
+      })();
       return;
     }
+
+    const meshes = exportable.map(meshForShape);
     void downloadTextFile(projectExportFileName(projectName, "obj"), toObj(meshes), "text/plain")
       .then((result) => finishNotice("OBJ", result))
       .catch((error: unknown) => failNotice("OBJ", error));
-  }, [hasSelection, projectName, selectedShapes, shapes]);
+  }, [hasSelection, projectName, selectedShapes, shapes, stlExporting]);
 
   const exportStepDesign = useCallback(async () => {
     if (stepExporting) {
@@ -8349,7 +8403,9 @@ export function SketchForgeEditor({
         <TopActionPanel
           panel={topPanel}
           shapeCount={exportableShapeCount}
-          scopeLabel={exportScopeLabel}
+          designShapeCount={designExportableShapeCount}
+          selectedShapeCount={selectedExportableShapeCount}
+          hasSelection={hasSelection}
           onClose={() => setTopPanel(null)}
           onExport={exportDesign}
           onExportStep={exportStepDesign}
@@ -8365,6 +8421,7 @@ export function SketchForgeEditor({
           driveFile={driveFileLink}
           onRepeat={repeatSelected}
           repeatDefaults={repeatDefaults}
+          stlExporting={stlExporting}
           stepExporting={stepExporting}
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
@@ -9057,7 +9114,9 @@ function TutorialPanel({
 function TopActionPanel({
   panel,
   shapeCount,
-  scopeLabel,
+  designShapeCount,
+  selectedShapeCount,
+  hasSelection,
   onClose,
   onExport,
   onExportStep,
@@ -9070,6 +9129,7 @@ function TopActionPanel({
   driveFile,
   onRepeat,
   repeatDefaults,
+  stlExporting,
   stepExporting,
   onImportFiles,
   onPickFile,
@@ -9077,9 +9137,11 @@ function TopActionPanel({
 }: {
   panel: Exclude<TopPanel, null>;
   shapeCount: number;
-  scopeLabel: "selected" | "total";
+  designShapeCount: number;
+  selectedShapeCount: number;
+  hasSelection: boolean;
   onClose: () => void;
-  onExport: (format: ExportFormat) => void;
+  onExport: (format: ExportFormat, scope?: StlExportScope) => void;
   onExportStep: () => void;
   preflight: PrintabilityReport;
   onSaveProject: () => void;
@@ -9090,6 +9152,7 @@ function TopActionPanel({
   driveFile: ProjectDriveFile | null;
   onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void;
   repeatDefaults: { count: number; offsetX: number; offsetY: number; offsetZ: number };
+  stlExporting: boolean;
   stepExporting: boolean;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
@@ -9200,15 +9263,19 @@ function TopActionPanel({
             ) : preflight.issues.length === 0 ? (
               <p className="panel-note export-ready-line">
                 <Check size={14} strokeWidth={3} />
-                {shapeCount} solid shape{shapeCount === 1 ? "" : "s"}
-                {scopeLabel === "selected" ? " selected" : ""} · ready to print
+                {designShapeCount} visible solid shape{designShapeCount === 1 ? "" : "s"} · full design ready to print
               </p>
             ) : (
               <PrintabilityPreflight report={preflight} />
             )}
             <div className="export-format-row">
-              <button title="Best for most 3D printing" onClick={() => onExport("stl")} disabled={shapeCount === 0}>
-                STL
+              <button
+                className="panel-primary-button"
+                title="Export the complete visible design, prepared for 3D printing"
+                onClick={() => onExport("stl", "design")}
+                disabled={stlExporting || designShapeCount === 0}
+              >
+                {stlExporting ? "STL…" : "STL"}
               </button>
               <button title="Mesh with named parts" onClick={() => onExport("obj")} disabled={shapeCount === 0}>
                 OBJ
@@ -9221,7 +9288,19 @@ function TopActionPanel({
                 {stepExporting ? "STEP…" : "STEP"}
               </button>
             </div>
-            <p className="panel-note">STL for 3D printing · STEP for other CAD tools</p>
+            {hasSelection && selectedShapeCount > 0 ? (
+              <button
+                className="export-selection-button"
+                title="Export only the currently selected solid shapes as STL"
+                onClick={() => onExport("stl", "selection")}
+                disabled={stlExporting}
+              >
+                Export selection as STL ({selectedShapeCount})
+              </button>
+            ) : null}
+            <p className="panel-note">
+              STL exports the full visible design and applies hole cuts. {hasSelection ? "Use the selection option only for an intentional partial export. " : ""}OBJ for mesh parts · STEP for other CAD tools.
+            </p>
           </section>
         </div>
       ) : null}

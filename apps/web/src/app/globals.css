@@ -2357,6 +2357,23 @@ button {
   cursor: default;
 }
 
+.top-action-body .export-selection-button {
+  min-height: 34px;
+  color: #0a6aad;
+  background: #f2f9fd;
+  border-color: #b9dced;
+  font-size: 12px;
+}
+
+.top-action-body .export-selection-button:hover {
+  background: #e6f5fc;
+}
+
+.top-action-body .export-selection-button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .export-format-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -3309,6 +3326,61 @@ button {
   stroke-width: 1.5;
   stroke-dasharray: 4 4;
   vector-effect: non-scaling-stroke;
+}
+
+.smart-guide-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.smart-guide-guides {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.smart-guide-guides line {
+  fill: none;
+  stroke: #00aeea;
+  stroke-width: 1.7;
+  stroke-dasharray: 7 4;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.9));
+}
+
+.smart-guide-guides line.distance {
+  stroke: #f59e0b;
+  stroke-width: 1.4;
+  stroke-dasharray: 3 3;
+}
+
+.smart-guide-label {
+  position: absolute;
+  z-index: 1;
+  min-width: 88px;
+  padding: 4px 8px;
+  color: #075985;
+  background: rgba(240, 252, 255, 0.96);
+  border: 1px solid rgba(0, 174, 234, 0.74);
+  border-radius: 999px;
+  box-shadow: 0 1px 5px rgba(15, 67, 87, 0.18);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.smart-guide-label.distance {
+  min-width: 72px;
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.97);
+  border-color: rgba(245, 158, 11, 0.76);
 }
 
 .align-dot {
