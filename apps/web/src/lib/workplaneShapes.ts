@@ -1,4 +1,4 @@
-import type { WorkplaneShape } from "@/types/sketchforge";
+import type { GridSize, WorkplaneShape } from "@/types/sketchforge";
 
 export function normalizeDegrees(value: number) {
   return ((value % 360) + 360) % 360;
@@ -22,6 +22,11 @@ export function cleanNearZero(value: number, epsilon = 0.005) {
 }
 
 export const DUPLICATE_PLACEMENT_OFFSET = 2;
+
+export function keyboardMoveStep(grid: GridSize, coarse: boolean) {
+  const base = grid === "Off" ? 1 : grid === "Brick" ? 8 : Number.parseFloat(grid) || 1;
+  return coarse ? (grid === "Off" ? 5 : base * 10) : base;
+}
 
 export function duplicateAxisOffset(
   values: number[],

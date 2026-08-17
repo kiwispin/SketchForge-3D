@@ -1,6 +1,10 @@
 import type { CSSProperties } from "react";
 import {
   measureKeyForHandle,
+  orthographicFitZoom,
+  rotationWheelLocalRadius,
+  rotationWheelPoint,
+  rotationSnapDelta,
   type TransformOverlayProps,
   type TransformOverlayState,
 } from "@/components/workplane/transformOverlayTypes";
@@ -8,19 +12,57 @@ import {
 export {
   getElevationMeasureKey,
   measureKeyForHandle,
+  orthographicFitZoom,
   projectedMoveHandle,
+  projectedRotationWheel,
+  buildRotationPlaneDescriptor,
+  feedbackScreenPoint,
+  formatAngleText,
+  formatDeltaText,
+  rotationWheelLocalRadius,
+  rotationWheelPoint,
+  rotationSnapDelta,
   screenRotationWheel,
   separatedLiftHandlePoint,
+  signedAngleAroundAxis,
+  unwrapRadians,
+  worldPlaneHandleAnchor,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
   type PinnedRotationWheelView,
   type RotationAxis,
   type RotationReadout,
+  type RotationPlaneDescriptor,
   type RotationWheelView,
+  type ScreenVec2,
   type TransformHandleKind,
   type TransformOverlayState,
+  type WorldVec3,
 } from "@/components/workplane/transformOverlayTypes";
+
+function annularSectorPath(startRadians: number, endRadians: number, innerRadius: number, outerRadius: number) {
+  const delta = endRadians - startRadians;
+  const magnitude = Math.min(Math.abs(delta), Math.PI * 2 - 0.0001);
+  if (magnitude < 0.0001) {
+    return "";
+  }
+  const direction = delta >= 0 ? 1 : -1;
+  const end = startRadians + direction * magnitude;
+  const largeArc = magnitude > Math.PI ? 1 : 0;
+  const sweep = direction > 0 ? 1 : 0;
+  const outerStart = { x: Math.cos(startRadians) * outerRadius, y: Math.sin(startRadians) * outerRadius };
+  const outerEnd = { x: Math.cos(end) * outerRadius, y: Math.sin(end) * outerRadius };
+  const innerEnd = { x: Math.cos(end) * innerRadius, y: Math.sin(end) * innerRadius };
+  const innerStart = { x: Math.cos(startRadians) * innerRadius, y: Math.sin(startRadians) * innerRadius };
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${outerRadius} ${outerRadius} 0 ${largeArc} ${sweep} ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerEnd.x} ${innerEnd.y}`,
+    `A ${innerRadius} ${innerRadius} 0 ${largeArc} ${sweep ? 0 : 1} ${innerStart.x} ${innerStart.y}`,
+    "Z",
+  ].join(" ");
+}
 
 export function TransformOverlay({
   box,
@@ -29,6 +71,7 @@ export function TransformOverlay({
   editingRotation,
   rotationReadout,
   showRotationWheel,
+  activeRotationAxis,
   hideSelectionChrome,
   hideDimensionMarks,
   rotationWheelAxis,
@@ -44,6 +87,8 @@ export function TransformOverlay({
   onCommitDimensionEdit,
   onCancelDimensionEdit,
   onBeginRotationEdit,
+  onHoverRotationHandle,
+  onLeaveRotationHandle,
   onEditingRotationChange,
   onCommitRotationEdit,
   onCancelRotationEdit,
@@ -54,9 +99,10 @@ export function TransformOverlay({
   const pinnedWheel = pinnedRotationWheelView?.axis === rotationWheelAxis ? pinnedRotationWheelView : null;
   const wheel = pinnedWheel?.wheel ?? box.rotationWheels[rotationWheelAxis] ?? box.rotationWheel;
   const protractorRadius = wheel?.radius ?? 76;
+  const protractorInnerRadius = Math.max(18, protractorRadius - 18);
+  const zeroRadians = wheel?.zeroRadians ?? -Math.PI / 2;
   const protractorTicks = Array.from({ length: 16 }, (_, index) => {
-    const degrees = index * 22.5 - 90;
-    const radians = degrees * Math.PI / 180;
+    const radians = zeroRadians + index * 22.5 * Math.PI / 180;
     const major = index % 2 === 0;
     const outer = protractorRadius;
     const inner = protractorRadius - (major ? 12 : 7);
@@ -70,12 +116,23 @@ export function TransformOverlay({
     };
   });
   const activeAngle = rotationReadout?.angle ?? 0;
-  const activeRadians = (activeAngle - 90) * Math.PI / 180;
+  const activeRadians = zeroRadians + activeAngle * Math.PI / 180;
   const activeLineRadius = Math.max(12, protractorRadius - 5);
   const activeLine = {
     x: Math.cos(activeRadians) * activeLineRadius,
     y: Math.sin(activeRadians) * activeLineRadius,
   };
+  const activeSectorPath = wheel && Math.abs(activeAngle) > 0.001
+    ? annularSectorPath(zeroRadians, zeroRadians + activeAngle * Math.PI / 180, protractorInnerRadius, protractorRadius)
+    : "";
+  const zeroLine = {
+    x: Math.cos(zeroRadians) * activeLineRadius,
+    y: Math.sin(zeroRadians) * activeLineRadius,
+  };
+  const wheelTransform = wheel?.matrix
+    ? `matrix(${wheel.matrix[0]} ${wheel.matrix[1]} ${wheel.matrix[2]} ${wheel.matrix[3]} ${wheel.x} ${wheel.y})`
+    : `translate(${wheel?.x ?? 0} ${wheel?.y ?? 0})`;
+  const zeroLabelPoint = wheel ? rotationWheelPoint(wheel, 0, protractorRadius + 17) : { x: 0, y: 0 };
   return (
     <div className={`transform-overlay ${hideSelectionChrome ? "hide-selection-chrome" : ""}`} aria-hidden="true">
       {showRotationWheel && wheel ? (
@@ -84,8 +141,20 @@ export function TransformOverlay({
           viewBox={`0 0 ${box.width} ${box.height}`}
           preserveAspectRatio="none"
         >
-          <g transform={`translate(${wheel.x} ${wheel.y})`}>
+          <g transform={wheelTransform}>
             <circle className="rotation-protractor-outer" cx="0" cy="0" r={protractorRadius} />
+            {Array.from({ length: 16 }, (_, index) => {
+              const start = zeroRadians + (index * 22.5 + 0.7) * Math.PI / 180;
+              const end = zeroRadians + ((index + 1) * 22.5 - 0.7) * Math.PI / 180;
+              return (
+                <path
+                  key={`segment-${index}`}
+                  className={`rotation-protractor-segment ${index % 2 === 0 ? "major" : ""}`}
+                  d={annularSectorPath(start, end, protractorInnerRadius, protractorRadius - 1)}
+                />
+              );
+            })}
+            {activeSectorPath ? <path className="rotation-active-sector" d={activeSectorPath} /> : null}
             {protractorTicks.map((tick) => (
               <line
                 key={tick.key}
@@ -97,15 +166,12 @@ export function TransformOverlay({
               />
             ))}
             <circle className="rotation-protractor-center" cx="0" cy="0" r="3" />
-            <line className="rotation-zero-line" x1="0" y1="0" x2="0" y2={-activeLineRadius} />
+            <line className="rotation-zero-line" x1="0" y1="0" x2={zeroLine.x} y2={zeroLine.y} />
             <line className="rotation-current-line" x1="0" y1="0" x2={activeLine.x} y2={activeLine.y} />
-            <text className="rotation-zero-label" x="0" y={-protractorRadius + 17}>
-              0&deg;
-            </text>
-            <text className="rotation-axis-label" x="0" y="15">
-              {rotationWheelAxis.toUpperCase()}
-            </text>
           </g>
+          <text className="rotation-zero-label" x={zeroLabelPoint.x} y={zeroLabelPoint.y}>
+            0&deg;
+          </text>
         </svg>
       ) : null}
       <svg className="transform-guides" viewBox={`0 0 ${box.width} ${box.height}`} preserveAspectRatio="none">
@@ -213,13 +279,15 @@ export function TransformOverlay({
       {box.rotateHandles.map((handle) => (
         <button
           key={handle.key}
-          className={`rotate-handle ${handle.className}`}
+          className={`rotate-handle ${handle.className} ${activeRotationAxis === handle.axis ? "active" : ""}`}
           style={{
             "--overlay-x": `${handle.x}px`,
             "--overlay-y": `${handle.y}px`,
             "--rotate-handle-angle": `${handle.angle}deg`,
           } as CSSProperties}
           title={`Rotate around ${handle.axis.toUpperCase()} axis`}
+          onPointerEnter={() => onHoverRotationHandle(handle.axis)}
+          onPointerLeave={onLeaveRotationHandle}
           onPointerDown={(event) => onBeginTransform("rotate", handle.key, event)}
           onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
           onPointerUp={onFinishTransform}
@@ -231,14 +299,13 @@ export function TransformOverlay({
         >
           <span className="rotate-handle-icon" aria-hidden="true">
             <svg viewBox="0 0 44 44" focusable="false">
-              <path className="rotate-arc" d="M7.9 20.87 A15 15 0 0 1 36.1 20.87" />
-              <path className="rotate-arrow" d="M5.51 27.45 L4.14 19.5 L11.66 22.24 Z" />
-              <path className="rotate-arrow" d="M38.49 27.45 L32.34 22.24 L39.86 19.5 Z" />
+              <path className="rotate-arc" d="M8 27 A16 16 0 0 1 30 9" />
+              <path className="rotate-arrow" d="M7 18 L7 28 L15 23 Z" />
             </svg>
           </span>
         </button>
       ))}
-      {!hideDimensionMarks && rotationReadout ? (
+      {rotationReadout && (!hideDimensionMarks || rotationReadout.text.startsWith("Δ")) ? (
         <div className="rotation-readout" style={{ "--overlay-x": `${rotationReadout.x}px`, "--overlay-y": `${rotationReadout.y}px` } as CSSProperties}>
           {rotationReadout.text}
         </div>
