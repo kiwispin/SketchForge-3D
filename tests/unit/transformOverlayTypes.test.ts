@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_LIFT_HANDLE_SCREEN_GAP,
   ROTATION_PROTRACTOR_RADIUS,
+  ROTATION_COARSE_SNAP_RADIUS_RATIO,
   WORLD_ROTATION_PLANES,
   buildRotationPlaneDescriptor,
   feedbackScreenPoint,
@@ -22,6 +23,13 @@ import {
 } from "@/components/workplane/transformOverlayTypes";
 
 describe("transform overlay geometry", () => {
+  it("uses Tinkercad's inner snap band rather than the whole protractor", () => {
+    const boundary = ROTATION_PROTRACTOR_RADIUS * ROTATION_COARSE_SNAP_RADIUS_RATIO;
+    expect(rotationSnapDelta(20, boundary - 0.1, ROTATION_PROTRACTOR_RADIUS)).toBe(22.5);
+    expect(rotationSnapDelta(20, boundary + 0.1, ROTATION_PROTRACTOR_RADIUS)).toBe(20);
+    expect(rotationSnapDelta(20, boundary + 0.1, ROTATION_PROTRACTOR_RADIUS, true)).toBe(0);
+  });
+
   it("places a movement handle along the projected world axis", () => {
     expect(projectedMoveHandle({ x: 100, y: 100 }, { x: 110, y: 100 }, 0)).toEqual({
       x: 136,

@@ -17,6 +17,20 @@ import optimerBoldFontJson from "three/examples/fonts/optimer_bold.typeface.json
 import { AlignOverlay, MirrorOverlay, SmartGuideOverlay, type AlignOverlayState, type MirrorOverlayState, type SmartGuideOverlayState } from "@/components/workplane/ActionOverlays";
 import { ShapeInspector, SnapGridControl, type ShapeInspectorUpdateOptions } from "@/components/workplane/ShapeInspector";
 import { WorkspaceSettingsModal } from "@/components/workplane/WorkspaceSettingsModal";
+import {
+  cameraYawInSelectionFrame,
+  createRotationPresentationState,
+  lowerRotationFaceAnchor,
+  placeRigidRotationGlyph,
+  projectedRotationGlyphMatrix,
+  rotationControlsHidden,
+  rotationGlyphAngleTowardFace,
+  rotationPlaneFacing,
+  UPPER_ROTATION_GLYPH_GAP_PX,
+  upperRotationFaceAnchor,
+  updateRotationPresentationState,
+  type RotationPresentationState,
+} from "@/components/workplane/gizmoV2";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
 import { cleanNearZero, cleanRotationDegrees, constrainedAxisMoveDelta, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { planeBasisMatrix, planeFromFace, workplanePlane, type WorkplaneOrientation, type WorkplanePlane } from "@/lib/workplanePlanes";
@@ -38,7 +52,6 @@ import {
   separatedLiftHandlePoint,
   signedAngleAroundAxis,
   unwrapRadians,
-  worldPlaneHandleAnchor,
   type DimensionMark,
   type EditingDimension,
   type EditingRotation,
@@ -219,6 +232,9 @@ type ThreeState = {
   animationId: number;
   needsRender: boolean;
   wasCameraMoving: boolean;
+  cameraInteractionActive: boolean;
+  cameraMotionActive: boolean;
+  rotationPresentation: RotationPresentationState | null;
   lastOverlaySync: number;
   lastViewCubeSync: number;
   disposeInteractionListeners: () => void;
@@ -888,6 +904,7 @@ function boundsIntersectRect(bounds: NonNullable<ReturnType<typeof shapeScreenBo
 
 function rotationAxisVectorForFrame(handleKey: string, frame: SelectionFrame) {
   const axis = rotationAxisForHandle(handleKey);
+  if (handleKey === "rotate-y-workplane") return new THREE.Vector3(0, 1, 0);
   if (axis === "x") return frame.xAxis.clone().normalize();
   if (axis === "z") return frame.zAxis.clone().normalize();
   return frame.yAxis.clone().normalize();
@@ -900,49 +917,6 @@ function rayPointOnRotationPlane(state: ThreeState, clientX: number, clientY: nu
   state.raycaster.setFromCamera(state.pointer, state.camera);
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axis.clone().normalize(), pivot);
   return state.raycaster.ray.intersectPlane(plane, new THREE.Vector3());
-}
-
-type ScreenRotationHandleSlots = {
-  x: { x: number; y: number };
-  z: { x: number; y: number };
-  y: { x: number; y: number };
-};
-
-function rotationHandleWorldAnchors(
-  frame: SelectionFrame,
-  cameraPosition: THREE.Vector3,
-  previous: Record<RotationAxis, WorldVec3 | null>,
-): Record<RotationAxis, WorldVec3> {
-  const corners = selectionFrameCorners(frame).map(vector3ToWorldVec3);
-  const center = vector3ToWorldVec3(frame.center);
-  const camera = vector3ToWorldVec3(cameraPosition);
-  return {
-    x: worldPlaneHandleAnchor("x", corners, center, camera, previous.x),
-    z: worldPlaneHandleAnchor("z", corners, center, camera, previous.z),
-    y: worldPlaneHandleAnchor("y", corners, center, camera, previous.y),
-  };
-}
-
-function screenRotationHandleSlots(
-  frame: SelectionFrame,
-  worldAnchors: Record<RotationAxis, WorldVec3>,
-  project: (point: THREE.Vector3) => { x: number; y: number },
-  rect: DOMRect,
-): ScreenRotationHandleSlots {
-  const center = project(frame.center);
-  const gap = clamp(Math.min(rect.width, rect.height) * 0.018, 12, 24);
-  const makeSlot = (axis: RotationAxis) => {
-    const anchor = new THREE.Vector3(worldAnchors[axis].x, worldAnchors[axis].y, worldAnchors[axis].z);
-    const projected = project(anchor);
-    const dx = projected.x - center.x;
-    const dy = projected.y - center.y;
-    const distance = Math.max(1, Math.hypot(dx, dy));
-    return {
-      x: clamp(projected.x + (dx / distance) * gap, 24, rect.width - 24),
-      y: clamp(projected.y + (dy / distance) * gap, 24, rect.height - 24),
-    };
-  };
-  return { x: makeSlot("x"), z: makeSlot("z"), y: makeSlot("y") };
 }
 
 function projectedWorldYForScreenY(state: ThreeState, shape: WorkplaneShape, targetScreenY: number, startWorldY: number) {
@@ -1604,6 +1578,7 @@ export function WorkplaneViewport({
       const now = performance.now();
       const controlsChanged = state.controls.update();
       const cameraSettled = state.wasCameraMoving && !controlsChanged;
+      state.cameraMotionActive = rotationControlsHidden(state.cameraInteractionActive, controlsChanged);
       if (!controlsChanged && !state.needsRender && !cameraSettled) {
         return;
       }
@@ -3692,6 +3667,9 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
     animationId: 0,
     needsRender: true,
     wasCameraMoving: false,
+    cameraInteractionActive: false,
+    cameraMotionActive: false,
+    rotationPresentation: null,
     lastOverlaySync: 0,
     lastViewCubeSync: 0,
     disposeInteractionListeners: () => {},
@@ -3699,6 +3677,15 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
   };
   const requestRender = () => {
     state.needsRender = true;
+  };
+  const beginCameraInteraction = () => {
+    state.cameraInteractionActive = true;
+    state.cameraMotionActive = true;
+    requestRender();
+  };
+  const endCameraInteraction = () => {
+    state.cameraInteractionActive = false;
+    requestRender();
   };
   const configureSketchForgeMouseButtons = (event: PointerEvent) => {
     controls.mouseButtons.LEFT = event.button === 0 && (event.ctrlKey || event.metaKey) ? THREE.MOUSE.PAN : null;
@@ -3714,6 +3701,8 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
     event.preventDefault();
   };
   controls.addEventListener("change", requestRender);
+  controls.addEventListener("start", beginCameraInteraction);
+  controls.addEventListener("end", endCameraInteraction);
   renderer.domElement.addEventListener("pointerdown", configureSketchForgeMouseButtons, { capture: true });
   renderer.domElement.addEventListener("pointerup", resetSketchForgeMouseButtons);
   renderer.domElement.addEventListener("pointercancel", resetSketchForgeMouseButtons);
@@ -3722,6 +3711,8 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
   renderer.domElement.addEventListener("pointerdown", requestRender);
   state.disposeInteractionListeners = () => {
     controls.removeEventListener("change", requestRender);
+    controls.removeEventListener("start", beginCameraInteraction);
+    controls.removeEventListener("end", endCameraInteraction);
     renderer.domElement.removeEventListener("pointerdown", configureSketchForgeMouseButtons, { capture: true });
     renderer.domElement.removeEventListener("pointerup", resetSketchForgeMouseButtons);
     renderer.domElement.removeEventListener("pointercancel", resetSketchForgeMouseButtons);
@@ -4520,13 +4511,101 @@ function syncTransformOverlay(
       y: ((1 - projected.y) / 2) * rect.height,
     };
   };
-  const previousRotationAnchors: Record<RotationAxis, WorldVec3 | null> = {
-    x: overlayRef.current?.rotationPlanes?.x?.handleWorldAnchor ?? null,
-    z: overlayRef.current?.rotationPlanes?.z?.handleWorldAnchor ?? null,
-    y: overlayRef.current?.rotationPlanes?.y?.handleWorldAnchor ?? null,
+  const selectionId = frame.ids.join("|");
+  const cameraOffset = state.camera.position.clone().sub(frame.center);
+  const presentationYaw = cameraYawInSelectionFrame(
+    vector3ToWorldVec3(cameraOffset),
+    vector3ToWorldVec3(frame.xAxis),
+    vector3ToWorldVec3(frame.zAxis),
+  );
+  if (!keepVisibleDuringInteraction || !state.rotationPresentation || state.rotationPresentation.selectionId !== selectionId) {
+    state.rotationPresentation = updateRotationPresentationState(
+      state.rotationPresentation,
+      selectionId,
+      presentationYaw,
+    );
+  }
+  const presentation = state.rotationPresentation ?? createRotationPresentationState(selectionId, presentationYaw);
+  state.rotationPresentation = presentation;
+  const lowerAnchorLocal = lowerRotationFaceAnchor(presentation.face, {
+    min: vector3ToWorldVec3(frame.min),
+    max: vector3ToWorldVec3(frame.max),
+  });
+  const lowerFaceWorld = framePoint(
+    frame,
+    lowerAnchorLocal.point.x,
+    lowerAnchorLocal.point.y,
+    lowerAnchorLocal.point.z,
+  );
+  const lowerOutwardWorld = frame.xAxis.clone().multiplyScalar(lowerAnchorLocal.outward.x)
+    .add(frame.yAxis.clone().multiplyScalar(lowerAnchorLocal.outward.y))
+    .add(frame.zAxis.clone().multiplyScalar(lowerAnchorLocal.outward.z))
+    .normalize();
+  const cameraInSelectionFrame = {
+    x: cameraOffset.dot(frame.xAxis),
+    y: cameraOffset.dot(frame.yAxis),
+    z: cameraOffset.dot(frame.zAxis),
   };
-  const rotationAnchorWorld = rotationHandleWorldAnchors(frame, state.camera.position, previousRotationAnchors);
-  const rotationSlots = screenRotationHandleSlots(frame, rotationAnchorWorld, project, rect);
+  const frameBounds = {
+    min: vector3ToWorldVec3(frame.min),
+    max: vector3ToWorldVec3(frame.max),
+  };
+  const upperXLocal = upperRotationFaceAnchor("x", cameraInSelectionFrame, frameBounds);
+  const upperZLocal = upperRotationFaceAnchor("z", cameraInSelectionFrame, frameBounds);
+  const upperWorld = (anchor: typeof upperXLocal) => framePoint(frame, anchor.point.x, anchor.point.y, anchor.point.z);
+  const upperXWorld = upperWorld(upperXLocal);
+  const upperZWorld = upperWorld(upperZLocal);
+  const rotationAnchorWorld: Record<RotationAxis, WorldVec3> = {
+    x: vector3ToWorldVec3(upperXWorld),
+    y: vector3ToWorldVec3(lowerFaceWorld),
+    z: vector3ToWorldVec3(upperZWorld),
+  };
+  const lowerFaceScreen = project(lowerFaceWorld);
+  const upperXFaceScreen = project(upperXWorld);
+  const upperZFaceScreen = project(upperZWorld);
+  const selectionCenterScreen = project(frame.center);
+  const projectedVectorAt = (anchor: THREE.Vector3, vector: THREE.Vector3) => {
+    const origin = project(anchor);
+    const endpoint = project(anchor.clone().add(vector));
+    return { x: endpoint.x - origin.x, y: endpoint.y - origin.y };
+  };
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const upperXOutwardScreen = project(upperXWorld.clone().add(worldUp));
+  const upperZOutwardScreen = project(upperZWorld.clone().add(worldUp));
+  const upperXSlot = placeRigidRotationGlyph(
+    upperXFaceScreen,
+    upperXOutwardScreen,
+    selectionCenterScreen,
+    UPPER_ROTATION_GLYPH_GAP_PX,
+  );
+  const upperZSlot = placeRigidRotationGlyph(
+    upperZFaceScreen,
+    upperZOutwardScreen,
+    selectionCenterScreen,
+    UPPER_ROTATION_GLYPH_GAP_PX,
+  );
+  const lowerTangentWorld = new THREE.Vector3(-lowerOutwardWorld.z, 0, lowerOutwardWorld.x).normalize();
+  const upperXGlyphMatrix = projectedRotationGlyphMatrix(
+    projectedVectorAt(upperXWorld, new THREE.Vector3(0, 0, 1)),
+    projectedVectorAt(upperXWorld, worldUp),
+  );
+  const upperZGlyphMatrix = projectedRotationGlyphMatrix(
+    projectedVectorAt(upperZWorld, new THREE.Vector3(1, 0, 0)),
+    projectedVectorAt(upperZWorld, worldUp),
+  );
+  const lowerGlyphMatrix = projectedRotationGlyphMatrix(
+    projectedVectorAt(lowerFaceWorld, lowerTangentWorld),
+    projectedVectorAt(lowerFaceWorld, lowerOutwardWorld),
+  );
+  const rotationSlots = {
+    x: upperXSlot,
+    z: upperZSlot,
+    y: placeRigidRotationGlyph(
+      lowerFaceScreen,
+      project(lowerFaceWorld.clone().add(lowerOutwardWorld)),
+      selectionCenterScreen,
+    ),
+  };
 
   const worldMinY = Math.min(...corners.map((corner) => corner.y));
   const worldMaxY = Math.max(...corners.map((corner) => corner.y));
@@ -4542,7 +4621,7 @@ function syncTransformOverlay(
   const liftOffset = Math.max(2, worldHeight * 0.08);
   const verticalBase = new THREE.Vector3(worldCenterX, worldMinY, worldCenterZ);
   const verticalTop = new THREE.Vector3(worldCenterX, worldMaxY, worldCenterZ);
-  const showLowerHandles = state.camera.position.y < frame.center.y;
+  const showLowerHandles = state.camera.position.y < worldMinY - 0.001;
   const liftHandle = new THREE.Vector3(worldCenterX, showLowerHandles ? worldMinY - liftOffset : worldMaxY + liftOffset, worldCenterZ);
   const xFootAxis = frame.xAxis.clone().normalize();
   const zFootAxis = frame.zAxis.clone().normalize();
@@ -4576,7 +4655,7 @@ function syncTransformOverlay(
   const topPoint = project(topCenterWorld);
   const heightPoint = project(showLowerHandles ? bottomCenterWorld : topCenterWorld);
   const liftPoint = separatedLiftHandlePoint(heightPoint, project(liftHandle), showLowerHandles);
-  const centerPoint = project(frame.center);
+  const centerPoint = selectionCenterScreen;
   const xMoveAxisPoint = project(new THREE.Vector3(worldMaxX, worldCenterY, worldCenterZ));
   const zMoveAxisPoint = project(new THREE.Vector3(worldCenterX, worldCenterY, worldMaxZ));
   const xMoveEdgeDistance = Math.hypot(xMoveAxisPoint.x - centerPoint.x, xMoveAxisPoint.y - centerPoint.y);
@@ -4647,6 +4726,8 @@ function syncTransformOverlay(
   const rotateLeft = rotationSlots.x;
   const rotateRight = rotationSlots.z;
   const rotateBottom = rotationSlots.y;
+  const upperXVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "x") >= 0.12;
+  const upperZVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "z") >= 0.12;
   const makeWorldPoint = (point: THREE.Vector3) => ({ x: point.x, y: point.y, z: point.z });
   const projectWorldPoint = (point: WorldVec3) => project(new THREE.Vector3(point.x, point.y, point.z));
   const rotationPlanes: Record<RotationAxis, RotationPlaneDescriptor> = {
@@ -4664,9 +4745,6 @@ function syncTransformOverlay(
     y: makeWorldPoint(frame.center),
     z: makeWorldPoint(frame.center),
   };
-  const rotationIconAngle = (slot: { x: number; y: number }) =>
-    THREE.MathUtils.radToDeg(Math.atan2(slot.y - centerPoint.y, slot.x - centerPoint.x)) + 90;
-
   const next = {
     id: frame.ids.join("|"),
     width: rect.width,
@@ -4690,35 +4768,50 @@ function syncTransformOverlay(
       { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, title: "Move up or down" },
     ],
     rotateHandles: [
-      {
+      ...(upperXVisible ? [{
         key: "rotate-x",
         axis: "x" as const,
-        className: "axis-x",
+        className: "axis-x axis-upper",
+        glyph: "tinkercad-double" as const,
         x: rotateLeft.x,
         y: rotateLeft.y,
-        angle: rotationIconAngle(rotateLeft),
+        angle: rotationGlyphAngleTowardFace(rotateLeft, upperXFaceScreen),
+        glyphMatrix: upperXGlyphMatrix,
         editX: rotateLeft.x + 34,
         editY: rotateLeft.y - 28,
-      },
-      {
+        faceAnchorX: upperXFaceScreen.x,
+        faceAnchorY: upperXFaceScreen.y,
+        presentationFace: upperXLocal.face,
+      }] : []),
+      ...(upperZVisible ? [{
         key: "rotate-z",
         axis: "z" as const,
-        className: "axis-z",
+        className: "axis-z axis-upper",
+        glyph: "tinkercad-double" as const,
         x: rotateRight.x,
         y: rotateRight.y,
-        angle: rotationIconAngle(rotateRight),
+        angle: rotationGlyphAngleTowardFace(rotateRight, upperZFaceScreen),
+        glyphMatrix: upperZGlyphMatrix,
         editX: rotateRight.x + 34,
         editY: rotateRight.y - 28,
-      },
+        faceAnchorX: upperZFaceScreen.x,
+        faceAnchorY: upperZFaceScreen.y,
+        presentationFace: upperZLocal.face,
+      }] : []),
       {
-        key: "rotate-y",
+        key: "rotate-y-workplane",
         axis: "y" as const,
-        className: "axis-y",
+        className: "axis-y axis-y-workplane",
+        glyph: "tinkercad-double" as const,
         x: rotateBottom.x,
         y: rotateBottom.y,
-        angle: rotationIconAngle(rotateBottom),
+        angle: rotationGlyphAngleTowardFace(rotateBottom, lowerFaceScreen),
+        glyphMatrix: lowerGlyphMatrix,
         editX: rotateBottom.x + 34,
         editY: rotateBottom.y - 28,
+        faceAnchorX: lowerFaceScreen.x,
+        faceAnchorY: lowerFaceScreen.y,
+        presentationFace: presentation.face,
       },
     ],
     dimensions: dimensionMarks,
@@ -4726,6 +4819,7 @@ function syncTransformOverlay(
     rotationWheels,
     rotationPlaneCenters,
     rotationPlanes,
+    rotationControlsHidden: state.cameraMotionActive,
   };
 
   updateTransformOverlayIfChanged(overlayRef, setOverlay, next);

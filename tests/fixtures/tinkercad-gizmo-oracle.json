@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "coordinateSystem": {
+    "workplane": "world X-Z",
+    "vertical": "world Y",
+    "lowerRotationAxis": "world Y"
+  },
+  "cameraLifecycle": {
+    "hideCompactRotationControlsOnOrbitStart": true,
+    "keepHiddenDuringDamping": true,
+    "reappearOnFirstSettledFrame": true,
+    "allowVisibleFaceSliding": false,
+    "presentationFaceHandoffDegrees": 5
+  },
+  "lowerRotationControl": {
+    "anchor": "bottom midpoint of the presented vertical selection face",
+    "glyphSpace": "one symmetric SVG primitive affinely projected into the world workplane",
+    "glyphWidthPx": 36,
+    "glyphHeightPx": 26,
+    "anchorGapPx": 52,
+    "minimumProjectedDepthRatio": 0.6,
+    "arrowheads": 2,
+    "opensTowardFace": true,
+    "protractorPlane": "world workplane"
+  },
+  "upperRotationControls": {
+    "count": 2,
+    "anchor": "top midpoint of the matching camera-facing selection face",
+    "axisToFace": {
+      "worldX": "camera-facing X face; glyph lies in world Y-Z",
+      "worldZ": "camera-facing Z face; glyph lies in world X-Y"
+    },
+    "projection": "one affine SVG transform per world rotation plane",
+    "edgeOnVisibilityThreshold": 0.12,
+    "risePx": 34,
+    "arrowheadsPerGlyph": 2,
+    "protractorPlanes": ["world Y-Z", "world X-Y"]
+  },
+  "moveControls": {
+    "workplaneAxes": ["world X", "world Z"],
+    "glyph": "two opposing filled triangles with no connecting shaft",
+    "glyphWidthPx": 40,
+    "glyphHeightPx": 22
+  },
+  "rotationSnapping": {
+    "innerBandDegrees": 22.5,
+    "outerBandDegrees": 1,
+    "shiftDegrees": 45,
+    "innerBandRadiusPx": 129,
+    "outerRadiusPx": 168
+  }
+}

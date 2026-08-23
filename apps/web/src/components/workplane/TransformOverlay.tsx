@@ -252,6 +252,8 @@ export function TransformOverlay({
             "--overlay-y": `${handle.y}px`,
             "--move-handle-angle": `${handle.angle ?? 0}deg`,
           } as CSSProperties}
+          data-transform-control={handle.key}
+          aria-label={handle.title}
           title={handle.title}
           onPointerEnter={() => onHoverMeasure(handle.kind === "lift" ? null : handleMeasureKey(handle))}
           onPointerLeave={() => onHoverMeasure(null)}
@@ -270,21 +272,28 @@ export function TransformOverlay({
           }}
         >
           {handle.kind === "move" ? (
-            <svg viewBox="0 0 36 18" aria-hidden="true" focusable="false">
-              <path d="M5 9h26M25 3l6 6-6 6M11 3 5 9l6 6" />
+            <svg className="tinkercad-move-glyph" viewBox="0 0 40 22" aria-hidden="true" focusable="false">
+              <path d="M2 11 L12 4 L12 18 Z" />
+              <path d="M38 11 L28 4 L28 18 Z" />
             </svg>
           ) : null}
         </button>
       ))}
-      {box.rotateHandles.map((handle) => (
+      {(box.rotationControlsHidden ? [] : box.rotateHandles).map((handle) => (
         <button
           key={handle.key}
           className={`rotate-handle ${handle.className} ${activeRotationAxis === handle.axis ? "active" : ""}`}
           style={{
             "--overlay-x": `${handle.x}px`,
             "--overlay-y": `${handle.y}px`,
-            "--rotate-handle-angle": `${handle.angle}deg`,
+            "--rotate-handle-angle": `${handle.glyphMatrix ? 0 : handle.angle}deg`,
           } as CSSProperties}
+          data-rotation-control={handle.key}
+          data-presentation-face={handle.presentationFace}
+          data-face-anchor-x={handle.faceAnchorX}
+          data-face-anchor-y={handle.faceAnchorY}
+          data-rotation-axis={handle.axis}
+          aria-label={`Rotate around ${handle.axis.toUpperCase()} axis`}
           title={`Rotate around ${handle.axis.toUpperCase()} axis`}
           onPointerEnter={() => onHoverRotationHandle(handle.axis)}
           onPointerLeave={onLeaveRotationHandle}
@@ -292,16 +301,26 @@ export function TransformOverlay({
           onPointerMove={(event) => onMoveTransform(event.clientX, event.clientY, event.shiftKey, event.altKey)}
           onPointerUp={onFinishTransform}
           onPointerCancel={onFinishTransform}
-          onClick={(event) => {
-            event.stopPropagation();
-            onBeginRotationEdit(handle.key, handle.editX, handle.editY);
-          }}
         >
-          <span className="rotate-handle-icon" aria-hidden="true">
-            <svg viewBox="0 0 44 44" focusable="false">
-              <path className="rotate-arc" d="M8 27 A16 16 0 0 1 30 9" />
-              <path className="rotate-arrow" d="M7 18 L7 28 L15 23 Z" />
-            </svg>
+          <span
+            className="rotate-handle-icon"
+            aria-hidden="true"
+            style={handle.glyphMatrix ? {
+              transform: `translate(-50%, -50%) matrix(${handle.glyphMatrix.join(",")})`,
+            } : undefined}
+          >
+            {handle.glyph === "tinkercad-double" ? (
+              <svg className="tinkercad-rotation-glyph" viewBox="0 0 44 32" focusable="false">
+                <path className="rotate-arc" d="M7 9 C10 24 34 24 37 9" />
+                <path className="rotate-arrow" d="M7 9 L6 17 L14 14 Z" />
+                <path className="rotate-arrow" d="M37 9 L30 14 L38 17 Z" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 44 44" focusable="false">
+                <path className="rotate-arc" d="M8 27 A16 16 0 0 1 30 9" />
+                <path className="rotate-arrow" d="M7 18 L7 28 L15 23 Z" />
+              </svg>
+            )}
           </span>
         </button>
       ))}

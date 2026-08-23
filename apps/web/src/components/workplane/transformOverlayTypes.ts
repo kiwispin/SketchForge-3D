@@ -141,11 +141,16 @@ export type RotationHandleView = {
   key: string;
   axis: RotationAxis;
   className: string;
+  glyph?: "legacy-single" | "tinkercad-double";
   x: number;
   y: number;
   angle: number;
+  glyphMatrix?: [number, number, number, number];
   editX: number;
   editY: number;
+  faceAnchorX?: number;
+  faceAnchorY?: number;
+  presentationFace?: string;
 };
 
 export type PinnedRotationWheelView = {
@@ -181,6 +186,7 @@ export type TransformOverlayState = {
   guides: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   handles: Array<{ key: string; className: string; kind: TransformHandleKind; x: number; y: number; title: string; angle?: number }>;
   rotateHandles: RotationHandleView[];
+  rotationControlsHidden?: boolean;
   dimensions: Record<string, DimensionMark[]>;
   rotationWheel: RotationWheelView | null;
   rotationWheels: Record<RotationAxis, RotationWheelView>;
@@ -259,6 +265,7 @@ export function measureKeyForHandle(kind: TransformHandleKind, handleKey: string
 export const MIN_LIFT_HANDLE_SCREEN_GAP = 32;
 export const MOVE_HANDLE_SCREEN_OFFSET = 36;
 export const ROTATION_PROTRACTOR_RADIUS = 168;
+export const ROTATION_COARSE_SNAP_RADIUS_RATIO = 129 / ROTATION_PROTRACTOR_RADIUS;
 
 function worldVec3Axis(value: WorldVec3, axis: RotationAxis) {
   return axis === "x" ? value.x : axis === "y" ? value.y : value.z;
@@ -393,7 +400,7 @@ export function rotationSnapDelta(rawDegrees: number, radialDistance: number, wh
   if (shiftKey) {
     return Math.round(rawDegrees / 45) * 45;
   }
-  if (Number.isFinite(wheelRadius) && radialDistance <= wheelRadius) {
+  if (Number.isFinite(wheelRadius) && radialDistance <= wheelRadius * ROTATION_COARSE_SNAP_RADIUS_RATIO) {
     return Math.round(rawDegrees / 22.5) * 22.5;
   }
   return Math.round(rawDegrees);

@@ -3679,13 +3679,31 @@ button {
 
 .transform-handle.move-axis {
   z-index: 4;
-  width: 40px;
-  height: 26px;
+  width: 44px;
+  height: 30px;
   border: 0;
   background: transparent;
   box-shadow: none;
+  color: #17222a;
   cursor: grab;
   transform: translate3d(var(--overlay-x, 0), var(--overlay-y, 0), 0) translate(-50%, -50%) rotate(var(--move-handle-angle, 0deg));
+}
+
+.transform-handle.move-axis:hover,
+.transform-handle.move-axis:focus-visible,
+.transform-handle.move-axis:active {
+  color: #e45135;
+  outline: none;
+}
+
+.transform-handle.move-axis .tinkercad-move-glyph {
+  display: block;
+  width: 40px;
+  height: 22px;
+}
+
+.transform-handle.move-axis .tinkercad-move-glyph path {
+  fill: currentColor;
 }
 
 .transform-handle.move-axis:active {
@@ -3700,7 +3718,7 @@ button {
   width: 42px;
   height: 42px;
   padding: 0;
-  color: rgba(47, 61, 70, 0.68);
+  color: #5f6466;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -3734,12 +3752,42 @@ button {
   height: 30px;
 }
 
+.rotate-handle.axis-y-workplane {
+  width: 46px;
+  height: 34px;
+}
+
+.rotate-handle.axis-upper {
+  width: 44px;
+  height: 34px;
+}
+
+.rotate-handle.axis-upper .rotate-handle-icon,
+.rotate-handle.axis-upper .rotate-handle-icon svg {
+  width: 34px;
+  height: 25px;
+}
+
+.rotate-handle.axis-upper .rotate-arc {
+  stroke-width: 2.5;
+}
+
+.rotate-handle.axis-y-workplane .rotate-handle-icon,
+.rotate-handle.axis-y-workplane .rotate-handle-icon svg {
+  width: 36px;
+  height: 26px;
+}
+
+.rotate-handle.axis-y-workplane .rotate-arc {
+  stroke-width: 2.6;
+}
+
 .rotate-handle-icon {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  filter: drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.96)) drop-shadow(0 0 1.4px rgba(255, 255, 255, 0.96));
+  filter: drop-shadow(0 0 0.65px rgba(255, 255, 255, 0.88));
 }
 
 .rotate-arc {
