@@ -272,9 +272,9 @@ export function TransformOverlay({
           }}
         >
           {handle.kind === "move" ? (
-            <svg className="tinkercad-move-glyph" viewBox="0 0 40 22" aria-hidden="true" focusable="false">
-              <path d="M2 11 L12 4 L12 18 Z" />
-              <path d="M38 11 L28 4 L28 18 Z" />
+            <svg className="tinkercad-move-glyph" viewBox="0 0 30 16" aria-hidden="true" focusable="false">
+              <path d="M2 8 L9 3 L9 13 Z" />
+              <path d="M28 8 L21 3 L21 13 Z" />
             </svg>
           ) : null}
         </button>
@@ -311,9 +311,9 @@ export function TransformOverlay({
           >
             {handle.glyph === "tinkercad-double" ? (
               <svg className="tinkercad-rotation-glyph" viewBox="0 0 44 32" focusable="false">
-                <path className="rotate-arc" d="M7 9 C10 24 34 24 37 9" />
-                <path className="rotate-arrow" d="M7 9 L6 17 L14 14 Z" />
-                <path className="rotate-arrow" d="M37 9 L30 14 L38 17 Z" />
+                <path className="rotate-arc" d="M8 10 C11 23 33 23 36 10" />
+                <path className="rotate-arrow" d="M8 10 L7 16 L13 14 Z" />
+                <path className="rotate-arrow" d="M36 10 L31 14 L37 16 Z" />
               </svg>
             ) : (
               <svg viewBox="0 0 44 44" focusable="false">

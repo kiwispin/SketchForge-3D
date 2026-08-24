@@ -27,6 +27,24 @@ presentations; all three Home hit targets; lower, X, and Z hover protractors;
 a measured lower-axis drag on an asymmetric box; immediate post-drag cleanup;
 and X/Z move drags that changed only their matching inspector coordinate.
 
+## Visual-mask correction
+
+The first V2 visual gate failed despite passing interaction tests: affine glyph
+projection enlarged and skewed the visible rotation curves, the move triangles
+were oversized, and a white halo made the controls unlike the Tinkercad
+reference. That render must not be treated as an acceptable baseline.
+
+The corrected implementation keeps the generous interaction targets but renders
+the visible rotation masks in fixed 44 x 28 CSS boxes, with an approximately
+28 x 12 pixel dark mask. Both arrowheads and the curve are defined by one
+symmetric SVG primitive, so the two arrowheads share the curve endpoints and
+centreline. The move mask is 34 x 18 pixels and has no shaft. The idle rotation
+color is `#555b5e` and no drop shadow is applied.
+
+Post-correction browser checks covered the selected cube at Home and Fit
+Selection zoom, fixed-size mask rendering at both zoom levels, three visible
+Home rotation targets, and a clean runtime error log.
+
 `tests/unit/transformOverlayTypes.test.ts` covers projected protractors, signed
 world-plane angles, movement projection, and the measured 129/168 inner snap
 band with 22.5-degree, one-degree, and Shift 45-degree behavior.
