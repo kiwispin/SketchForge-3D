@@ -2350,13 +2350,18 @@ export function WorkplaneViewport({
     }, 250);
   }, []);
 
-  const finishTransform = useCallback((event: ReactPointerEvent<Element>) => {
+  const finishTransform = useCallback((event: ReactPointerEvent<Element> | PointerEvent) => {
     const transform = transformRef.current;
     if (!transform) {
       return;
     }
-    if (event.currentTarget.hasPointerCapture(transform.pointerId)) {
-      event.currentTarget.releasePointerCapture(transform.pointerId);
+    const eventTarget = event.currentTarget instanceof Element
+      ? event.currentTarget
+      : event.target instanceof Element
+        ? event.target
+        : null;
+    if (eventTarget?.hasPointerCapture(transform.pointerId)) {
+      eventTarget.releasePointerCapture(transform.pointerId);
     }
     const bakeRotatedShapes = transform.kind === "rotate" && transform.hasMoved ? transform.ids : [];
     if (transform.kind === "lift") {
@@ -2382,6 +2387,35 @@ export function WorkplaneViewport({
     onInteractionActiveChange?.(false);
     bakeRotatedShapes.forEach((id) => onUpdateShape(id, { bakeTransform: true }));
   }, [onInteractionActiveChange, onUpdateShape, suppressLiftEditAfterDrag]);
+
+  useEffect(() => {
+    const onWindowPointerMove = (event: PointerEvent) => {
+      const transform = transformRef.current;
+      if (!transform || transform.kind !== "rotate" || transform.handleKey !== "rotate-y-workplane" || transform.pointerId !== event.pointerId) {
+        return;
+      }
+      const target = event.target instanceof Element ? event.target.closest("[data-transform-control]") : null;
+      if (target?.getAttribute("data-transform-control") === transform.handleKey) {
+        return;
+      }
+      updateTransform(event.clientX, event.clientY, event.shiftKey, event.altKey);
+    };
+    const onWindowPointerEnd = (event: PointerEvent) => {
+      const transform = transformRef.current;
+      if (!transform || transform.kind !== "rotate" || transform.handleKey !== "rotate-y-workplane" || transform.pointerId !== event.pointerId) {
+        return;
+      }
+      finishTransform(event);
+    };
+    window.addEventListener("pointermove", onWindowPointerMove);
+    window.addEventListener("pointerup", onWindowPointerEnd);
+    window.addEventListener("pointercancel", onWindowPointerEnd);
+    return () => {
+      window.removeEventListener("pointermove", onWindowPointerMove);
+      window.removeEventListener("pointerup", onWindowPointerEnd);
+      window.removeEventListener("pointercancel", onWindowPointerEnd);
+    };
+  }, [finishTransform, updateTransform]);
 
   const beginDimensionEdit = useCallback((mark: DimensionMark) => {
     const id = selectedIdsRef.current[0];
@@ -4584,7 +4618,6 @@ function syncTransformOverlay(
     selectionCenterScreen,
     UPPER_ROTATION_GLYPH_GAP_PX,
   );
-  const lowerTangentWorld = new THREE.Vector3(-lowerOutwardWorld.z, 0, lowerOutwardWorld.x).normalize();
   const upperXGlyphMatrix = projectedRotationGlyphMatrix(
     projectedVectorAt(upperXWorld, new THREE.Vector3(0, 0, 1)),
     projectedVectorAt(upperXWorld, worldUp),
@@ -4592,10 +4625,6 @@ function syncTransformOverlay(
   const upperZGlyphMatrix = projectedRotationGlyphMatrix(
     projectedVectorAt(upperZWorld, new THREE.Vector3(1, 0, 0)),
     projectedVectorAt(upperZWorld, worldUp),
-  );
-  const lowerGlyphMatrix = projectedRotationGlyphMatrix(
-    projectedVectorAt(lowerFaceWorld, lowerTangentWorld),
-    projectedVectorAt(lowerFaceWorld, lowerOutwardWorld),
   );
   const rotationSlots = {
     x: upperXSlot,
@@ -4806,7 +4835,6 @@ function syncTransformOverlay(
         x: rotateBottom.x,
         y: rotateBottom.y,
         angle: rotationGlyphAngleTowardFace(rotateBottom, lowerFaceScreen),
-        glyphMatrix: lowerGlyphMatrix,
         editX: rotateBottom.x + 34,
         editY: rotateBottom.y - 28,
         faceAnchorX: lowerFaceScreen.x,

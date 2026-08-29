@@ -45,6 +45,14 @@ Post-correction browser checks covered the selected cube at Home and Fit
 Selection zoom, fixed-size mask rendering at both zoom levels, three visible
 Home rotation targets, and a clean runtime error log.
 
+## Bottom-control transform correction
+
+The bottom control must use the rigid face-facing angle directly. Applying the
+workplane projection matrix to the compact idle SVG can yield a discarded CSS
+matrix while also suppressing that angle, which leaves an unrotated partial
+curve. Only the hover/drag protractor is plane-projected. The idle bottom mask
+remains complete, fixed-size, and rotates as one unit toward the active face.
+
 `tests/unit/transformOverlayTypes.test.ts` covers projected protractors, signed
 world-plane angles, movement projection, and the measured 129/168 inner snap
 band with 22.5-degree, one-degree, and Shift 45-degree behavior.

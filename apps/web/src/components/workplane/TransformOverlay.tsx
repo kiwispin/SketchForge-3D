@@ -311,9 +311,19 @@ export function TransformOverlay({
           >
             {handle.glyph === "tinkercad-double" ? (
               <svg className="tinkercad-rotation-glyph" viewBox="0 0 44 32" focusable="false">
-                <path className="rotate-arc" d="M8 10 C11 23 33 23 36 10" />
-                <path className="rotate-arrow" d="M8 10 L7 16 L13 14 Z" />
-                <path className="rotate-arrow" d="M36 10 L31 14 L37 16 Z" />
+                {handle.axis === "y" ? (
+                  <>
+                    <path className="rotate-arc" d="M11.5 13.5 C14 22.5 30 22.5 32.5 13.5" />
+                    <path className="rotate-arrow" d="M8.5 9 L16 12 L11 18 Z" />
+                    <path className="rotate-arrow" d="M35.5 9 L28 12 L33 18 Z" />
+                  </>
+                ) : (
+                  <>
+                    <path className="rotate-arc" d="M8 10 C11 23 33 23 36 10" />
+                    <path className="rotate-arrow" d="M8 10 L7 16 L13 14 Z" />
+                    <path className="rotate-arrow" d="M36 10 L31 14 L37 16 Z" />
+                  </>
+                )}
               </svg>
             ) : (
               <svg viewBox="0 0 44 44" focusable="false">

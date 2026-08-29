@@ -3755,6 +3755,16 @@ button {
 .rotate-handle.axis-y-workplane {
   width: 46px;
   height: 34px;
+  color: #42484a;
+  touch-action: none;
+  user-select: none;
+}
+
+.rotate-handle.axis-y-workplane:hover,
+.rotate-handle.axis-y-workplane:focus-visible,
+.rotate-handle.axis-y-workplane:active,
+.rotate-handle.axis-y-workplane.active {
+  color: #e45135;
 }
 
 .rotate-handle.axis-upper {
@@ -3780,6 +3790,12 @@ button {
 
 .rotate-handle.axis-y-workplane .rotate-arc {
   stroke-width: 2.6;
+}
+
+.rotate-handle.axis-y-workplane .rotate-arrow {
+  stroke: currentColor;
+  stroke-width: 0.5;
+  stroke-linejoin: round;
 }
 
 .rotate-handle-icon {
