@@ -110,9 +110,8 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
     expect(rotationGlyphAngleTowardFace({ x: 134, y: 100 }, { x: 100, y: 100 })).toBeCloseTo(-90);
   });
 
-  it("hides rotation controls throughout camera interaction and damping", () => {
-    expect(rotationControlsHidden(true, false)).toBe(true);
-    expect(rotationControlsHidden(false, true)).toBe(true);
-    expect(rotationControlsHidden(false, false)).toBe(false);
+  it("restores rotation controls as soon as the camera gesture ends", () => {
+    expect(rotationControlsHidden(true)).toBe(true);
+    expect(rotationControlsHidden(false)).toBe(false);
   });
 });

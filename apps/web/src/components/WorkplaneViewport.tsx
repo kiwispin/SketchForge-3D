@@ -1578,7 +1578,11 @@ export function WorkplaneViewport({
       const now = performance.now();
       const controlsChanged = state.controls.update();
       const cameraSettled = state.wasCameraMoving && !controlsChanged;
-      state.cameraMotionActive = rotationControlsHidden(state.cameraInteractionActive, controlsChanged);
+      // OrbitControls can keep reporting camera changes for seconds while its
+      // damping settles. Tinkercad restores the compact controls when the
+      // pointer gesture ends, then keeps their projected positions in sync
+      // throughout damping instead of delaying their return.
+      state.cameraMotionActive = rotationControlsHidden(state.cameraInteractionActive);
       if (!controlsChanged && !state.needsRender && !cameraSettled) {
         return;
       }

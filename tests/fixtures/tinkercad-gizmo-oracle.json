@@ -7,8 +7,8 @@
   },
   "cameraLifecycle": {
     "hideCompactRotationControlsOnOrbitStart": true,
-    "keepHiddenDuringDamping": true,
-    "reappearOnFirstSettledFrame": true,
+    "keepHiddenDuringDamping": false,
+    "reappearOnFirstPostReleaseFrame": true,
     "allowVisibleFaceSliding": false,
     "presentationFaceHandoffDegrees": 5
   },

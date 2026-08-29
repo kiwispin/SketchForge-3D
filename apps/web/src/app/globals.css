@@ -3729,6 +3729,11 @@ button {
   will-change: transform;
 }
 
+.rotate-handle.camera-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .rotate-handle:active {
   cursor: grabbing;
   color: #e45135;

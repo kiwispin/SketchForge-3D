@@ -8,8 +8,8 @@ presentation, visibility lifecycle, projection, rendering, and drag math.
 - Lower control is outside the presented face and its open side points back to that face.
 - Both lower arrowheads share one symmetric SVG primitive; the whole primitive receives one affine workplane projection at oblique camera poses.
 - Lower control is not covered by the lift-control hitbox.
-- Camera orbit hides compact rotation controls immediately and through damping.
-- The first settled frame re-presents the lower control on the state-machine-selected face.
+- Camera orbit hides compact rotation controls only while the pointer gesture is active.
+- The first post-release frame re-presents the lower control on the state-machine-selected face and keeps it projected correctly while camera damping settles.
 - Hovering the lower control shows the workplane protractor.
 - Hovering either upper control shows the corresponding vertical protractor.
 - A vertical control is suppressed when its world rotation plane is edge-on.
@@ -20,7 +20,8 @@ presentation, visibility lifecycle, projection, rendering, and drag math.
 
 `tests/unit/gizmoV2.test.ts` covers face resolution, five-degree directional
 handoff, new-selection reset, local-camera yaw, lower and upper anchors, affine
-glyph projection, edge-on suppression, placement/orientation, and orbit visibility.
+glyph projection, edge-on suppression, placement/orientation, and immediate
+post-release orbit visibility.
 
 The live 1600 × 1000 browser matrix covered Home, Front, Right, and Top
 presentations; all three Home hit targets; lower, X, and Z hover protractors;

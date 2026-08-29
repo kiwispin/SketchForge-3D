@@ -62,9 +62,10 @@ export function createRotationPresentationState(selectionId: string, yawRadians:
 
 /**
  * Tinkercad does not visibly slide a compact rotation control around a corner.
- * It hides the control during camera motion and hands its presentation to the
- * next vertical face shortly after leaving a cardinal view. This state machine
- * records that discrete handoff; the caller owns the visible/hidden lifecycle.
+ * It hides the control during the active camera gesture and hands its
+ * presentation to the next vertical face shortly after leaving a cardinal
+ * view. This state machine records that discrete handoff; the caller owns the
+ * visible/hidden lifecycle.
  */
 export function updateRotationPresentationState(
   current: RotationPresentationState | null,
@@ -227,6 +228,6 @@ export function rotationGlyphAngleTowardFace(glyphCenter: GizmoScreenPoint, face
   return ((degrees + 180) % 360 + 360) % 360 - 180;
 }
 
-export function rotationControlsHidden(cameraInteractionActive: boolean, orbitControlsChanged: boolean) {
-  return cameraInteractionActive || orbitControlsChanged;
+export function rotationControlsHidden(cameraInteractionActive: boolean) {
+  return cameraInteractionActive;
 }

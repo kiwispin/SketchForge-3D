@@ -279,10 +279,10 @@ export function TransformOverlay({
           ) : null}
         </button>
       ))}
-      {(box.rotationControlsHidden ? [] : box.rotateHandles).map((handle) => (
+      {box.rotateHandles.map((handle) => (
         <button
           key={handle.key}
-          className={`rotate-handle ${handle.className} ${activeRotationAxis === handle.axis ? "active" : ""}`}
+          className={`rotate-handle ${handle.className} ${activeRotationAxis === handle.axis ? "active" : ""} ${box.rotationControlsHidden ? "camera-hidden" : ""}`}
           style={{
             "--overlay-x": `${handle.x}px`,
             "--overlay-y": `${handle.y}px`,
