@@ -4619,7 +4619,15 @@ function syncTransformOverlay(
   const upperXFaceScreen = project(upperXWorld);
   const upperZFaceScreen = project(upperZWorld);
   const selectionCenterScreen = project(frame.center);
-  const upperControlScreen = project(upperControlWorld);
+  const upperHeightScreen = project(framePoint(frame, 0, frame.max.y, 0));
+  // Keep the compact rotation glyph aligned with the visible lift control's
+  // collision-separated anchor. Using the raw 3D point here leaves only a few
+  // pixels between the glyph and the box in a straight-on view.
+  const upperControlScreen = separatedLiftHandlePoint(
+    upperHeightScreen,
+    project(upperControlWorld),
+    false,
+  );
   const upperXVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "x") >= 0.12;
   const upperZVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "z") >= 0.12;
   const upperVisibleCount = Number(upperXVisible) + Number(upperZVisible);
