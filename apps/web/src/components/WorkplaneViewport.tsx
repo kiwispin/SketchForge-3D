@@ -85,6 +85,12 @@ const SMART_GUIDE_TOLERANCE = 1.25;
 const SMART_GUIDE_MAX_DISTANCE = 60;
 const CAMERA_MIN_TARGET_Y = -70;
 const CAMERA_MAX_TARGET_Y = 120;
+// Camera motion is rendered every animation frame, but the DOM transform
+// overlay does not need to be rebuilt at the same rate. Rotation controls are
+// hidden while the camera is moving and are projected exactly on the first
+// settled frame, so this bound prevents OrbitControls damping from starving
+// the browser with React updates without allowing visible handle drift.
+const CAMERA_OVERLAY_SYNC_INTERVAL_MS = 32;
 const SHAPE_KINDS = new Set<ShapeAsset["kind"]>([
   "box",
   "cylinder",
@@ -1597,7 +1603,7 @@ export function WorkplaneViewport({
         syncViewCube(state, viewCubeRef.current);
         state.lastViewCubeSync = now;
       }
-      if (controlsChanged || cameraSettled || state.needsRender || now - state.lastOverlaySync > 96) {
+      if (cameraSettled || state.needsRender || now - state.lastOverlaySync > CAMERA_OVERLAY_SYNC_INTERVAL_MS) {
         const previewShapes = previewShapesForDrag(shapesRef.current, dragRef.current);
         syncTransformOverlay(
           state,
