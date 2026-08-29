@@ -41,7 +41,10 @@ export type RotationPlaneDescriptor = {
 
 export const WORLD_ROTATION_PLANES: Record<RotationAxis, { axisVector: WorldVec3; planeU: WorldVec3; planeV: WorldVec3 }> = {
   x: { axisVector: { x: 1, y: 0, z: 0 }, planeU: { x: 0, y: 1, z: 0 }, planeV: { x: 0, y: 0, z: 1 } },
-  y: { axisVector: { x: 0, y: 1, z: 0 }, planeU: { x: 1, y: 0, z: 0 }, planeV: { x: 0, y: 0, z: 1 } },
+  // Keep every plane basis right-handed: planeU × planeV = axisVector.
+  // Using +Z here produces -Y and makes the workplane angle marker travel
+  // opposite to the actual positive-Y object rotation.
+  y: { axisVector: { x: 0, y: 1, z: 0 }, planeU: { x: 1, y: 0, z: 0 }, planeV: { x: 0, y: 0, z: -1 } },
   z: { axisVector: { x: 0, y: 0, z: 1 }, planeU: { x: 1, y: 0, z: 0 }, planeV: { x: 0, y: 1, z: 0 } },
 };
 

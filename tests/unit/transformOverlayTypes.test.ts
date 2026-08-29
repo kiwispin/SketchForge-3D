@@ -23,6 +23,19 @@ import {
 } from "@/components/workplane/transformOverlayTypes";
 
 describe("transform overlay geometry", () => {
+  it("uses right-handed plane bases so protractor angles follow object rotation", () => {
+    Object.values(WORLD_ROTATION_PLANES).forEach(({ axisVector, planeU, planeV }) => {
+      const normal = {
+        x: planeU.y * planeV.z - planeU.z * planeV.y,
+        y: planeU.z * planeV.x - planeU.x * planeV.z,
+        z: planeU.x * planeV.y - planeU.y * planeV.x,
+      };
+      expect(normal.x).toBeCloseTo(axisVector.x);
+      expect(normal.y).toBeCloseTo(axisVector.y);
+      expect(normal.z).toBeCloseTo(axisVector.z);
+    });
+  });
+
   it("uses Tinkercad's inner snap band rather than the whole protractor", () => {
     const boundary = ROTATION_PROTRACTOR_RADIUS * ROTATION_COARSE_SNAP_RADIUS_RATIO;
     expect(rotationSnapDelta(20, boundary - 0.1, ROTATION_PROTRACTOR_RADIUS)).toBe(22.5);
@@ -169,9 +182,10 @@ describe("shared rotation-plane descriptor (Stage 1)", () => {
     expect(descriptor.axisVector).toEqual({ x: 0, y: 1, z: 0 });
     expect(descriptor.screenCenter).toEqual(project(pivot));
     expect(descriptor.handleWorldAnchor).toEqual({ x: 5, y: 6, z: 7 });
-    // screenU is the projected +X axis, screenV the projected +Z axis.
+    // screenU is projected +X and screenV projected -Z, preserving +Y
+    // as the right-handed rotation normal.
     expect(descriptor.screenU.x).toBeCloseTo(project({ x: pivot.x + 1, y: pivot.y, z: pivot.z }).x - project(pivot).x, 5);
-    expect(descriptor.screenV.y).toBeCloseTo(project({ x: pivot.x, y: pivot.y, z: pivot.z + 1 }).y - project(pivot).y, 5);
+    expect(descriptor.screenV.y).toBeCloseTo(project({ x: pivot.x, y: pivot.y, z: pivot.z - 1 }).y - project(pivot).y, 5);
     expect(descriptor.wheel.radius).toBe(ROTATION_PROTRACTOR_RADIUS);
     const length = Math.hypot(descriptor.screenU.x, descriptor.screenU.y);
     expect(descriptor.wheel.matrix?.[0]).toBeCloseTo(descriptor.screenU.x / Math.max(length, 0.0001), 5);
