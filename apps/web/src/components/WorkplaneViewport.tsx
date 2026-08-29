@@ -26,8 +26,8 @@ import {
   rotationControlsHidden,
   rotationGlyphAngleTowardFace,
   rotationPlaneFacing,
-  UPPER_ROTATION_GLYPH_GAP_PX,
   upperRotationFaceAnchor,
+  upperRotationScreenSlots,
   updateRotationPresentationState,
   type RotationPresentationState,
 } from "@/components/workplane/gizmoV2";
@@ -4593,40 +4593,6 @@ function syncTransformOverlay(
   const upperWorld = (anchor: typeof upperXLocal) => framePoint(frame, anchor.point.x, anchor.point.y, anchor.point.z);
   const upperXWorld = upperWorld(upperXLocal);
   const upperZWorld = upperWorld(upperZLocal);
-  const rotationAnchorWorld: Record<RotationAxis, WorldVec3> = {
-    x: vector3ToWorldVec3(upperXWorld),
-    y: vector3ToWorldVec3(lowerFaceWorld),
-    z: vector3ToWorldVec3(upperZWorld),
-  };
-  const lowerFaceScreen = project(lowerFaceWorld);
-  const upperXFaceScreen = project(upperXWorld);
-  const upperZFaceScreen = project(upperZWorld);
-  const selectionCenterScreen = project(frame.center);
-  const worldUp = new THREE.Vector3(0, 1, 0);
-  const upperXOutwardScreen = project(upperXWorld.clone().add(worldUp));
-  const upperZOutwardScreen = project(upperZWorld.clone().add(worldUp));
-  const upperXSlot = placeRigidRotationGlyph(
-    upperXFaceScreen,
-    upperXOutwardScreen,
-    selectionCenterScreen,
-    UPPER_ROTATION_GLYPH_GAP_PX,
-  );
-  const upperZSlot = placeRigidRotationGlyph(
-    upperZFaceScreen,
-    upperZOutwardScreen,
-    selectionCenterScreen,
-    UPPER_ROTATION_GLYPH_GAP_PX,
-  );
-  const rotationSlots = {
-    x: upperXSlot,
-    z: upperZSlot,
-    y: placeRigidRotationGlyph(
-      lowerFaceScreen,
-      project(lowerFaceWorld.clone().add(lowerOutwardWorld)),
-      selectionCenterScreen,
-    ),
-  };
-
   const worldMinY = Math.min(...corners.map((corner) => corner.y));
   const worldMaxY = Math.max(...corners.map((corner) => corner.y));
   const worldMinX = Math.min(...corners.map((corner) => corner.x));
@@ -4639,6 +4605,42 @@ function syncTransformOverlay(
   const worldCenter = new THREE.Vector3(worldCenterX, worldCenterY, worldCenterZ);
   const worldHeight = Math.max(MIN_SHAPE_SIZE, worldMaxY - worldMinY);
   const liftOffset = Math.max(2, worldHeight * 0.08);
+  // Tinkercad's compact upper control is presented at the elevated top/lift
+  // anchor, not from a projected top-face corner.  The latter puts the glyph
+  // inside the face in a front view because the near top edge projects well
+  // below the visual top of the box.
+  const upperControlWorld = new THREE.Vector3(worldCenterX, worldMaxY + liftOffset, worldCenterZ);
+  const rotationAnchorWorld: Record<RotationAxis, WorldVec3> = {
+    x: vector3ToWorldVec3(upperXWorld),
+    y: vector3ToWorldVec3(lowerFaceWorld),
+    z: vector3ToWorldVec3(upperZWorld),
+  };
+  const lowerFaceScreen = project(lowerFaceWorld);
+  const upperXFaceScreen = project(upperXWorld);
+  const upperZFaceScreen = project(upperZWorld);
+  const selectionCenterScreen = project(frame.center);
+  const upperControlScreen = project(upperControlWorld);
+  const upperXVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "x") >= 0.12;
+  const upperZVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "z") >= 0.12;
+  const upperVisibleCount = Number(upperXVisible) + Number(upperZVisible);
+  const upperSlots = upperRotationScreenSlots(
+    selectionCenterScreen,
+    upperControlScreen,
+    upperXFaceScreen,
+    upperZFaceScreen,
+    0,
+    upperVisibleCount > 1 ? 31 : 0,
+  );
+  const rotationSlots = {
+    x: upperSlots.x,
+    z: upperSlots.z,
+    y: placeRigidRotationGlyph(
+      lowerFaceScreen,
+      project(lowerFaceWorld.clone().add(lowerOutwardWorld)),
+      selectionCenterScreen,
+    ),
+  };
+
   const lowerProtractorPivot = lowerWorkplaneProtractorPivot(
     { x: worldMinX, y: worldMinY, z: worldMinZ },
     { x: worldMaxX, y: worldMaxY, z: worldMaxZ },
@@ -4754,8 +4756,6 @@ function syncTransformOverlay(
   const rotateLeft = rotationSlots.x;
   const rotateRight = rotationSlots.z;
   const rotateBottom = rotationSlots.y;
-  const upperXVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "x") >= 0.12;
-  const upperZVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "z") >= 0.12;
   const makeWorldPoint = (point: THREE.Vector3) => ({ x: point.x, y: point.y, z: point.z });
   const projectWorldPoint = (point: WorldVec3) => project(new THREE.Vector3(point.x, point.y, point.z));
   const rotationPlanes: Record<RotationAxis, RotationPlaneDescriptor> = {
