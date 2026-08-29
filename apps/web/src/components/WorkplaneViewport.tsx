@@ -23,6 +23,7 @@ import {
   lowerRotationFaceAnchor,
   lowerWorkplaneProtractorPivot,
   placeRigidRotationGlyph,
+  placeUpperRotationGlyphAboveTop,
   rotationControlsHidden,
   rotationGlyphAngleTowardFace,
   rotationPlaneFacing,
@@ -4605,11 +4606,6 @@ function syncTransformOverlay(
   const worldCenter = new THREE.Vector3(worldCenterX, worldCenterY, worldCenterZ);
   const worldHeight = Math.max(MIN_SHAPE_SIZE, worldMaxY - worldMinY);
   const liftOffset = Math.max(2, worldHeight * 0.08);
-  // Tinkercad's compact upper control is presented at the elevated top/lift
-  // anchor, not from a projected top-face corner.  The latter puts the glyph
-  // inside the face in a front view because the near top edge projects well
-  // below the visual top of the box.
-  const upperControlWorld = new THREE.Vector3(worldCenterX, worldMaxY + liftOffset, worldCenterZ);
   const rotationAnchorWorld: Record<RotationAxis, WorldVec3> = {
     x: vector3ToWorldVec3(upperXWorld),
     y: vector3ToWorldVec3(lowerFaceWorld),
@@ -4619,15 +4615,14 @@ function syncTransformOverlay(
   const upperXFaceScreen = project(upperXWorld);
   const upperZFaceScreen = project(upperZWorld);
   const selectionCenterScreen = project(frame.center);
-  const upperHeightScreen = project(framePoint(frame, 0, frame.max.y, 0));
-  // Keep the compact rotation glyph aligned with the visible lift control's
-  // collision-separated anchor. Using the raw 3D point here leaves only a few
-  // pixels between the glyph and the box in a straight-on view.
-  const upperControlScreen = separatedLiftHandlePoint(
-    upperHeightScreen,
-    project(upperControlWorld),
-    false,
-  );
+  const topCenterScreen = project(framePoint(frame, 0, frame.max.y, 0));
+  const topFaceScreen = [
+    project(framePoint(frame, frame.min.x, frame.max.y, frame.min.z)),
+    project(framePoint(frame, frame.max.x, frame.max.y, frame.min.z)),
+    project(framePoint(frame, frame.max.x, frame.max.y, frame.max.z)),
+    project(framePoint(frame, frame.min.x, frame.max.y, frame.max.z)),
+  ];
+  const upperControlScreen = placeUpperRotationGlyphAboveTop(topCenterScreen, topFaceScreen);
   const upperXVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "x") >= 0.12;
   const upperZVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "z") >= 0.12;
   const upperVisibleCount = Number(upperXVisible) + Number(upperZVisible);

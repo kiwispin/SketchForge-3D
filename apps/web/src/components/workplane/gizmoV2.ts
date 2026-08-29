@@ -147,6 +147,20 @@ export function upperRotationFaceAnchor(
   };
 }
 
+/** Places the compact upper glyph outside the projected top silhouette. */
+export function placeUpperRotationGlyphAboveTop(
+  topCenter: GizmoScreenPoint,
+  topFacePoints: readonly GizmoScreenPoint[],
+  glyphHalfHeight = 17,
+  clearance = 8,
+) {
+  const topY = topFacePoints.reduce((minimum, point) => Math.min(minimum, point.y), Number.POSITIVE_INFINITY);
+  return {
+    x: topCenter.x,
+    y: Number.isFinite(topY) ? topY - glyphHalfHeight - clearance : topCenter.y - glyphHalfHeight - clearance,
+  };
+}
+
 export function rotationPlaneFacing(cameraOffset: GizmoWorldVector, axis: "x" | "z") {
   const length = Math.max(0.0001, Math.hypot(cameraOffset.x, cameraOffset.y, cameraOffset.z));
   return Math.abs((axis === "x" ? cameraOffset.x : cameraOffset.z) / length);

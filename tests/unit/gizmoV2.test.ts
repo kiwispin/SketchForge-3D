@@ -6,6 +6,7 @@ import {
   lowerWorkplaneProtractorPivot,
   nearestPresentationFace,
   placeRigidRotationGlyph,
+  placeUpperRotationGlyphAboveTop,
   rotationControlsHidden,
   rotationGlyphAngleTowardFace,
   rotationPlaneFacing,
@@ -98,6 +99,13 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
       x: { x: 131, y: 66 },
       z: { x: 69, y: 66 },
     });
+  });
+
+  it("keeps the upper glyph outside the projected top silhouette", () => {
+    expect(placeUpperRotationGlyphAboveTop(
+      { x: 100, y: 140 },
+      [{ x: 60, y: 100 }, { x: 140, y: 94 }, { x: 150, y: 155 }, { x: 50, y: 160 }],
+    )).toEqual({ x: 100, y: 69 });
   });
 
   it("places a rigid glyph outward from the exact face anchor", () => {
