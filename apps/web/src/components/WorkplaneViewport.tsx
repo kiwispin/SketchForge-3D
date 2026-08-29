@@ -35,7 +35,7 @@ import {
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
 import { cleanNearZero, cleanRotationDegrees, constrainedAxisMoveDelta, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { planeBasisMatrix, planeFromFace, workplanePlane, type WorkplaneOrientation, type WorkplanePlane } from "@/lib/workplanePlanes";
-import { viewFaceDirection, viewFaceUp, type ViewCubeFace } from "@/lib/viewCube";
+import { frontAlignedHomePosition, viewFaceDirection, viewFaceUp, type ViewCubeFace } from "@/lib/viewCube";
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
@@ -75,7 +75,7 @@ const MIN_GRID_BLOCK_SIZE = 1;
 const MAX_GRID_BLOCK_SIZE = 200;
 const WORKSPACE_DEFAULTS_STORAGE_PREFIX = "sketchForge.workspaceDefault.";
 const DEFAULT_WORKSPACE = DEFAULT_WORKPLANE_WORKSPACE;
-const CAMERA_HOME = new THREE.Vector3(118, 96, 118);
+const CAMERA_HOME = frontAlignedHomePosition();
 const CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
 const MIN_SHAPE_SIZE = 0.01;
 const CUT_PREVIEW_PADDING = 0.01;

@@ -5,6 +5,7 @@ presentation, visibility lifecycle, projection, rendering, and drag math.
 
 ## Required browser checks
 
+- Initial load and Home reset use a front-aligned, zero-yaw camera pose while retaining enough elevation to show the workplane.
 - Lower control is outside the presented face and its open side points back to that face.
 - The lower control's expanded protractor lies on the selection's lower workplane-contact level, not through its vertical centre.
 - Every projected protractor uses a right-handed plane basis, so its angle marker advances in the same direction as the object rotation.
