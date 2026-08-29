@@ -147,25 +147,6 @@ export function upperRotationFaceAnchor(
   };
 }
 
-export function projectedRotationGlyphMatrix(
-  projectedTangent: GizmoScreenPoint,
-  projectedOutward: GizmoScreenPoint,
-  minimumOutwardRatio = 0.6,
-): [number, number, number, number] {
-  const tangentLength = Math.max(0.0001, Math.hypot(projectedTangent.x, projectedTangent.y));
-  const tangentX = projectedTangent.x / tangentLength;
-  const tangentY = projectedTangent.y / tangentLength;
-  let outwardX = projectedOutward.x / tangentLength;
-  let outwardY = projectedOutward.y / tangentLength;
-  const outwardLength = Math.hypot(outwardX, outwardY);
-  if (outwardLength < minimumOutwardRatio) {
-    const sign = tangentX * outwardY - tangentY * outwardX >= 0 ? 1 : -1;
-    outwardX = -tangentY * minimumOutwardRatio * sign;
-    outwardY = tangentX * minimumOutwardRatio * sign;
-  }
-  return [tangentX, tangentY, outwardX, outwardY];
-}
-
 export function rotationPlaneFacing(cameraOffset: GizmoWorldVector, axis: "x" | "z") {
   const length = Math.max(0.0001, Math.hypot(cameraOffset.x, cameraOffset.y, cameraOffset.z));
   return Math.abs((axis === "x" ? cameraOffset.x : cameraOffset.z) / length);

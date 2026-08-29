@@ -148,7 +148,6 @@ export type RotationHandleView = {
   x: number;
   y: number;
   angle: number;
-  glyphMatrix?: [number, number, number, number];
   editX: number;
   editY: number;
   faceAnchorX?: number;

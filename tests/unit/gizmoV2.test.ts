@@ -6,7 +6,6 @@ import {
   lowerWorkplaneProtractorPivot,
   nearestPresentationFace,
   placeRigidRotationGlyph,
-  projectedRotationGlyphMatrix,
   rotationControlsHidden,
   rotationGlyphAngleTowardFace,
   rotationPlaneFacing,
@@ -84,15 +83,6 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
     });
   });
 
-  it("projects one symmetric glyph as a single affine plane primitive", () => {
-    const faceOn = projectedRotationGlyphMatrix({ x: 10, y: 0 }, { x: 0, y: 5 });
-    expect(faceOn[0]).toBeCloseTo(1);
-    expect(faceOn[1]).toBeCloseTo(0);
-    expect(faceOn[2]).toBeCloseTo(0);
-    expect(faceOn[3]).toBeCloseTo(0.6);
-    expect(projectedRotationGlyphMatrix({ x: 0, y: 10 }, { x: 0, y: 0 })).toEqual([0, 1, -0.6, 0]);
-  });
-
   it("suppresses only vertical rotation planes that are edge-on", () => {
     expect(rotationPlaneFacing({ x: 0, y: 2, z: 10 }, "x")).toBeCloseTo(0);
     expect(rotationPlaneFacing({ x: 0, y: 2, z: 10 }, "z")).toBeGreaterThan(0.9);
@@ -120,6 +110,7 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
   it("orients the canonical open side back toward the face", () => {
     expect(rotationGlyphAngleTowardFace({ x: 100, y: 152 }, { x: 100, y: 100 })).toBeCloseTo(0);
     expect(rotationGlyphAngleTowardFace({ x: 134, y: 100 }, { x: 100, y: 100 })).toBeCloseTo(-90);
+    expect(Math.abs(rotationGlyphAngleTowardFace({ x: 100, y: 66 }, { x: 100, y: 100 }))).toBeCloseTo(180);
   });
 
   it("restores rotation controls as soon as the camera gesture ends", () => {

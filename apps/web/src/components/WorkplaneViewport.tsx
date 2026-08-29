@@ -23,7 +23,6 @@ import {
   lowerRotationFaceAnchor,
   lowerWorkplaneProtractorPivot,
   placeRigidRotationGlyph,
-  projectedRotationGlyphMatrix,
   rotationControlsHidden,
   rotationGlyphAngleTowardFace,
   rotationPlaneFacing,
@@ -4603,11 +4602,6 @@ function syncTransformOverlay(
   const upperXFaceScreen = project(upperXWorld);
   const upperZFaceScreen = project(upperZWorld);
   const selectionCenterScreen = project(frame.center);
-  const projectedVectorAt = (anchor: THREE.Vector3, vector: THREE.Vector3) => {
-    const origin = project(anchor);
-    const endpoint = project(anchor.clone().add(vector));
-    return { x: endpoint.x - origin.x, y: endpoint.y - origin.y };
-  };
   const worldUp = new THREE.Vector3(0, 1, 0);
   const upperXOutwardScreen = project(upperXWorld.clone().add(worldUp));
   const upperZOutwardScreen = project(upperZWorld.clone().add(worldUp));
@@ -4622,14 +4616,6 @@ function syncTransformOverlay(
     upperZOutwardScreen,
     selectionCenterScreen,
     UPPER_ROTATION_GLYPH_GAP_PX,
-  );
-  const upperXGlyphMatrix = projectedRotationGlyphMatrix(
-    projectedVectorAt(upperXWorld, new THREE.Vector3(0, 0, 1)),
-    projectedVectorAt(upperXWorld, worldUp),
-  );
-  const upperZGlyphMatrix = projectedRotationGlyphMatrix(
-    projectedVectorAt(upperZWorld, new THREE.Vector3(1, 0, 0)),
-    projectedVectorAt(upperZWorld, worldUp),
   );
   const rotationSlots = {
     x: upperXSlot,
@@ -4821,7 +4807,6 @@ function syncTransformOverlay(
         x: rotateLeft.x,
         y: rotateLeft.y,
         angle: rotationGlyphAngleTowardFace(rotateLeft, upperXFaceScreen),
-        glyphMatrix: upperXGlyphMatrix,
         editX: rotateLeft.x + 34,
         editY: rotateLeft.y - 28,
         faceAnchorX: upperXFaceScreen.x,
@@ -4836,7 +4821,6 @@ function syncTransformOverlay(
         x: rotateRight.x,
         y: rotateRight.y,
         angle: rotationGlyphAngleTowardFace(rotateRight, upperZFaceScreen),
-        glyphMatrix: upperZGlyphMatrix,
         editX: rotateRight.x + 34,
         editY: rotateRight.y - 28,
         faceAnchorX: upperZFaceScreen.x,
