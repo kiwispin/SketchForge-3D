@@ -6,6 +6,7 @@ presentation, visibility lifecycle, projection, rendering, and drag math.
 ## Required browser checks
 
 - Lower control is outside the presented face and its open side points back to that face.
+- The lower control's expanded protractor lies on the selection's lower workplane-contact level, not through its vertical centre.
 - Both lower arrowheads share one symmetric SVG primitive; the whole primitive receives one affine workplane projection at oblique camera poses.
 - Lower control is not covered by the lift-control hitbox.
 - Camera orbit hides compact rotation controls only while the pointer gesture is active.

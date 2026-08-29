@@ -3,6 +3,7 @@ import {
   cameraYawInSelectionFrame,
   createRotationPresentationState,
   lowerRotationFaceAnchor,
+  lowerWorkplaneProtractorPivot,
   nearestPresentationFace,
   placeRigidRotationGlyph,
   projectedRotationGlyphMatrix,
@@ -15,6 +16,17 @@ import {
 } from "@/components/workplane/gizmoV2";
 
 describe("Tinkercad-style gizmo V2 presentation", () => {
+  it("pins the lower protractor to the selection's lower world level", () => {
+    expect(lowerWorkplaneProtractorPivot(
+      { x: -5, y: 0, z: -10 },
+      { x: 5, y: 20, z: 10 },
+    )).toEqual({ x: 0, y: 0, z: 0 });
+    expect(lowerWorkplaneProtractorPivot(
+      { x: 4, y: 7, z: -2 },
+      { x: 14, y: 27, z: 8 },
+    )).toEqual({ x: 9, y: 7, z: 3 });
+  });
+
   it("maps camera yaw to the nearest vertical presentation face", () => {
     expect(nearestPresentationFace(0)).toBe("z-max");
     expect(nearestPresentationFace(Math.PI / 2)).toBe("x-max");

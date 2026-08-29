@@ -51,6 +51,15 @@ export function nearestPresentationFace(yawRadians: number): VerticalPresentatio
   return FACE_ORDER[(index + FACE_ORDER.length) % FACE_ORDER.length];
 }
 
+/** Places the workplane protractor at the selection's lower world level. */
+export function lowerWorkplaneProtractorPivot(min: GizmoWorldVector, max: GizmoWorldVector): GizmoWorldVector {
+  return {
+    x: (min.x + max.x) / 2,
+    y: min.y,
+    z: (min.z + max.z) / 2,
+  };
+}
+
 export function createRotationPresentationState(selectionId: string, yawRadians: number): RotationPresentationState {
   return {
     selectionId,

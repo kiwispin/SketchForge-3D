@@ -21,6 +21,7 @@ import {
   cameraYawInSelectionFrame,
   createRotationPresentationState,
   lowerRotationFaceAnchor,
+  lowerWorkplaneProtractorPivot,
   placeRigidRotationGlyph,
   projectedRotationGlyphMatrix,
   rotationControlsHidden,
@@ -4652,7 +4653,15 @@ function syncTransformOverlay(
   const worldCenter = new THREE.Vector3(worldCenterX, worldCenterY, worldCenterZ);
   const worldHeight = Math.max(MIN_SHAPE_SIZE, worldMaxY - worldMinY);
   const liftOffset = Math.max(2, worldHeight * 0.08);
-  const verticalBase = new THREE.Vector3(worldCenterX, worldMinY, worldCenterZ);
+  const lowerProtractorPivot = lowerWorkplaneProtractorPivot(
+    { x: worldMinX, y: worldMinY, z: worldMinZ },
+    { x: worldMaxX, y: worldMaxY, z: worldMaxZ },
+  );
+  const verticalBase = new THREE.Vector3(
+    lowerProtractorPivot.x,
+    lowerProtractorPivot.y,
+    lowerProtractorPivot.z,
+  );
   const verticalTop = new THREE.Vector3(worldCenterX, worldMaxY, worldCenterZ);
   const showLowerHandles = state.camera.position.y < worldMinY - 0.001;
   const liftHandle = new THREE.Vector3(worldCenterX, showLowerHandles ? worldMinY - liftOffset : worldMaxY + liftOffset, worldCenterZ);
@@ -4765,7 +4774,10 @@ function syncTransformOverlay(
   const projectWorldPoint = (point: WorldVec3) => project(new THREE.Vector3(point.x, point.y, point.z));
   const rotationPlanes: Record<RotationAxis, RotationPlaneDescriptor> = {
     x: buildRotationPlaneDescriptor("x", makeWorldPoint(frame.center), projectWorldPoint, rotateLeft, rotationAnchorWorld.x, rect),
-    y: buildRotationPlaneDescriptor("y", makeWorldPoint(frame.center), projectWorldPoint, rotateBottom, rotationAnchorWorld.y, rect),
+    // The lower Y control is a workplane protractor. Its world axis still
+    // passes through the selection centre in X/Z, but its visible plane sits
+    // at the selection's lower contact level instead of floating at mid-height.
+    y: buildRotationPlaneDescriptor("y", makeWorldPoint(verticalBase), projectWorldPoint, rotateBottom, rotationAnchorWorld.y, rect),
     z: buildRotationPlaneDescriptor("z", makeWorldPoint(frame.center), projectWorldPoint, rotateRight, rotationAnchorWorld.z, rect),
   };
   const rotationWheels: Record<RotationAxis, RotationWheelView> = {
@@ -4775,7 +4787,7 @@ function syncTransformOverlay(
   };
   const rotationPlaneCenters: Record<RotationAxis, { x: number; y: number; z: number }> = {
     x: makeWorldPoint(frame.center),
-    y: makeWorldPoint(frame.center),
+    y: makeWorldPoint(verticalBase),
     z: makeWorldPoint(frame.center),
   };
   const next = {
