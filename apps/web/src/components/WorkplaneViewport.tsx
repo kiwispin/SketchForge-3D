@@ -3723,6 +3723,7 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
   const requestRender = () => {
     state.needsRender = true;
   };
+  let poleOrbitGesture: PoleOrbitGesture | null = null;
   const beginCameraInteraction = () => {
     state.cameraInteractionActive = true;
     state.cameraMotionActive = true;
@@ -3745,10 +3746,59 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
   const preventContextMenu = (event: MouseEvent) => {
     event.preventDefault();
   };
+  const beginPoleOrbit = (event: PointerEvent) => {
+    if (event.button !== 2 || !isExactVerticalCameraPole(state)) {
+      return;
+    }
+    state.camera.updateMatrixWorld();
+    const offset = state.camera.position.clone().sub(state.controls.target);
+    const baseRight = new THREE.Vector3().setFromMatrixColumn(state.camera.matrixWorld, 0).normalize();
+    poleOrbitGesture = {
+      pointerId: event.pointerId,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      baseOffset: offset,
+      baseUp: state.camera.up.clone().normalize(),
+      baseRight,
+      roll: 0,
+      tilt: 0,
+    };
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    state.controls.enabled = false;
+    beginCameraInteraction();
+    renderer.domElement.setPointerCapture?.(event.pointerId);
+  };
+  const movePoleOrbit = (event: PointerEvent) => {
+    if (!poleOrbitGesture || event.pointerId !== poleOrbitGesture.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    updatePoleOrbit(state, poleOrbitGesture, event.clientX, event.clientY);
+  };
+  const endPoleOrbit = (event: PointerEvent) => {
+    if (!poleOrbitGesture || event.pointerId !== poleOrbitGesture.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (renderer.domElement.hasPointerCapture?.(event.pointerId)) {
+      renderer.domElement.releasePointerCapture(event.pointerId);
+    }
+    poleOrbitGesture = null;
+    state.controls.enabled = true;
+    endCameraInteraction();
+    state.needsRender = true;
+  };
   controls.addEventListener("change", requestRender);
   controls.addEventListener("start", beginCameraInteraction);
   controls.addEventListener("end", endCameraInteraction);
   renderer.domElement.addEventListener("pointerdown", configureSketchForgeMouseButtons, { capture: true });
+  renderer.domElement.addEventListener("pointerdown", beginPoleOrbit, { capture: true });
+  renderer.domElement.addEventListener("pointermove", movePoleOrbit, { capture: true });
+  renderer.domElement.addEventListener("pointerup", endPoleOrbit, { capture: true });
+  renderer.domElement.addEventListener("pointercancel", endPoleOrbit, { capture: true });
   renderer.domElement.addEventListener("pointerup", resetSketchForgeMouseButtons);
   renderer.domElement.addEventListener("pointercancel", resetSketchForgeMouseButtons);
   renderer.domElement.addEventListener("contextmenu", preventContextMenu);
@@ -3759,6 +3809,10 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
     controls.removeEventListener("start", beginCameraInteraction);
     controls.removeEventListener("end", endCameraInteraction);
     renderer.domElement.removeEventListener("pointerdown", configureSketchForgeMouseButtons, { capture: true });
+    renderer.domElement.removeEventListener("pointerdown", beginPoleOrbit, { capture: true });
+    renderer.domElement.removeEventListener("pointermove", movePoleOrbit, { capture: true });
+    renderer.domElement.removeEventListener("pointerup", endPoleOrbit, { capture: true });
+    renderer.domElement.removeEventListener("pointercancel", endPoleOrbit, { capture: true });
     renderer.domElement.removeEventListener("pointerup", resetSketchForgeMouseButtons);
     renderer.domElement.removeEventListener("pointercancel", resetSketchForgeMouseButtons);
     renderer.domElement.removeEventListener("contextmenu", preventContextMenu);
@@ -3802,7 +3856,6 @@ function setCameraProjection(state: ThreeState, mode: ProjectionMode) {
   next.updateProjectionMatrix();
   state.camera = next;
   state.controls.object = next;
-  syncOrbitControlsUpAxis(state.controls, next.up);
   clearOrbitControlsMotion(state.controls);
   state.controls.target.copy(target);
   state.controls.update();
@@ -3811,7 +3864,6 @@ function setCameraProjection(state: ThreeState, mode: ProjectionMode) {
 
 function resetCamera(state: ThreeState) {
   state.camera.up.set(0, 1, 0);
-  syncOrbitControlsUpAxis(state.controls, state.camera.up);
   clearOrbitControlsMotion(state.controls);
   if (state.camera instanceof THREE.OrthographicCamera) {
     state.camera.zoom = 1;
@@ -3828,11 +3880,10 @@ function setCameraToViewFace(state: ThreeState, face: ViewCubeFace) {
   const distance = clamp(offset.length(), 22, 4200);
   const direction = viewFaceDirection(face);
   state.camera.up.copy(viewFaceUp(face));
-  // OrbitControls caches the camera-up basis when it is constructed. A view
-  // cube pole changes that basis (Top/Bottom use Z as screen-up), so update
-  // the controller before its next update or the first orbit mixes the old
-  // +Y frame with the new camera frame and can roll the workplane edge-on.
-  syncOrbitControlsUpAxis(state.controls, state.camera.up);
+  // Keep OrbitControls' world-Y orbit basis intact. Top/Bottom use a separate
+  // screen-up vector so the exact pole remains upright; pole drags are handled
+  // explicitly by createThreeScene below so a horizontal drag spins the view
+  // instead of turning into a sideways tilt.
   clearOrbitControlsMotion(state.controls);
   state.camera.position.copy(state.controls.target).add(direction.multiplyScalar(distance));
   state.camera.lookAt(state.controls.target);
@@ -3842,26 +3893,11 @@ function setCameraToViewFace(state: ThreeState, face: ViewCubeFace) {
 }
 
 type OrbitControlsWithCameraUp = OrbitControls & {
-  _quat?: THREE.Quaternion;
-  _quatInverse?: THREE.Quaternion;
   _sphericalDelta?: THREE.Spherical;
   _panOffset?: THREE.Vector3;
   _scale?: number;
   _performCursorZoom?: boolean;
 };
-
-function syncOrbitControlsUpAxis(controls: OrbitControls, up: THREE.Vector3) {
-  // OrbitControls intentionally keeps these implementation details private;
-  // there is no public setter for its cached camera-up basis. Keeping this
-  // tiny compatibility shim here makes every manual camera pose use the same
-  // frame that the controller will use for its next orbit.
-  const orbitControls = controls as OrbitControlsWithCameraUp;
-  if (!orbitControls._quat || !orbitControls._quatInverse) {
-    return;
-  }
-  orbitControls._quat.setFromUnitVectors(up.clone().normalize(), new THREE.Vector3(0, 1, 0));
-  orbitControls._quatInverse.copy(orbitControls._quat).invert();
-}
 
 function clearOrbitControlsMotion(controls: OrbitControls) {
   // A view-cube click is an absolute pose change. Discard any damped orbit,
@@ -3872,6 +3908,49 @@ function clearOrbitControlsMotion(controls: OrbitControls) {
   orbitControls._panOffset?.set(0, 0, 0);
   orbitControls._scale = 1;
   orbitControls._performCursorZoom = false;
+}
+
+type PoleOrbitGesture = {
+  pointerId: number;
+  lastX: number;
+  lastY: number;
+  baseOffset: THREE.Vector3;
+  baseUp: THREE.Vector3;
+  baseRight: THREE.Vector3;
+  roll: number;
+  tilt: number;
+};
+
+function isExactVerticalCameraPole(state: ThreeState) {
+  const offset = state.camera.position.clone().sub(state.controls.target);
+  const distance = offset.length();
+  return distance > 0.001
+    && Math.hypot(offset.x, offset.z) <= Math.max(0.01, distance * 0.00001)
+    && Math.abs(offset.y) / distance >= 0.999999;
+}
+
+function updatePoleOrbit(state: ThreeState, gesture: PoleOrbitGesture, clientX: number, clientY: number) {
+  const elementHeight = Math.max(1, state.renderer.domElement.clientHeight || state.renderer.domElement.getBoundingClientRect().height);
+  const radiansPerPixel = (2 * Math.PI * state.controls.rotateSpeed) / elementHeight;
+  const deltaX = clientX - gesture.lastX;
+  const deltaY = clientY - gesture.lastY;
+  gesture.lastX = clientX;
+  gesture.lastY = clientY;
+  gesture.roll += deltaX * radiansPerPixel;
+  gesture.tilt = clamp(gesture.tilt - deltaY * radiansPerPixel, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+
+  const viewAxis = gesture.baseOffset.clone().normalize().negate();
+  const rolledRight = gesture.baseRight.clone().applyAxisAngle(viewAxis, gesture.roll).normalize();
+  const offset = gesture.baseOffset.clone().applyAxisAngle(rolledRight, gesture.tilt);
+  const up = gesture.baseUp.clone()
+    .applyAxisAngle(viewAxis, gesture.roll)
+    .applyAxisAngle(rolledRight, gesture.tilt)
+    .normalize();
+  state.camera.position.copy(state.controls.target).add(offset);
+  state.camera.up.copy(up);
+  state.camera.lookAt(state.controls.target);
+  state.camera.updateProjectionMatrix();
+  state.needsRender = true;
 }
 
 function constrainCamera(state: ThreeState, workspace: WorkspaceSettings) {
