@@ -3766,9 +3766,6 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
       baseRight,
       roll: 0,
       tilt: 0,
-      axisLock: "undecided",
-      accumulatedX: 0,
-      accumulatedY: 0,
     };
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -3926,9 +3923,6 @@ type PoleOrbitGesture = {
   baseRight: THREE.Vector3;
   roll: number;
   tilt: number;
-  axisLock: "undecided" | "horizontal" | "vertical" | "free";
-  accumulatedX: number;
-  accumulatedY: number;
 };
 
 function isExactVerticalCameraPole(state: ThreeState) {
@@ -3942,39 +3936,10 @@ function isExactVerticalCameraPole(state: ThreeState) {
 function updatePoleOrbit(state: ThreeState, gesture: PoleOrbitGesture, clientX: number, clientY: number) {
   const elementHeight = Math.max(1, state.renderer.domElement.clientHeight || state.renderer.domElement.getBoundingClientRect().height);
   const radiansPerPixel = (2 * Math.PI * state.controls.rotateSpeed) / elementHeight;
-  const rawDeltaX = clientX - gesture.lastX;
-  const rawDeltaY = clientY - gesture.lastY;
+  const deltaX = clientX - gesture.lastX;
+  const deltaY = clientY - gesture.lastY;
   gesture.lastX = clientX;
   gesture.lastY = clientY;
-  gesture.accumulatedX += rawDeltaX;
-  gesture.accumulatedY += rawDeltaY;
-  if (gesture.axisLock === "undecided" && Math.hypot(gesture.accumulatedX, gesture.accumulatedY) >= 4) {
-    const absoluteX = Math.abs(gesture.accumulatedX);
-    const absoluteY = Math.abs(gesture.accumulatedY);
-    if (absoluteX >= absoluteY * 1.35) {
-      gesture.axisLock = "horizontal";
-    } else if (absoluteY >= absoluteX * 1.35) {
-      gesture.axisLock = "vertical";
-    } else {
-      gesture.axisLock = "free";
-    }
-  }
-  if (gesture.axisLock === "undecided") {
-    return;
-  }
-  const bufferedX = gesture.accumulatedX;
-  const bufferedY = gesture.accumulatedY;
-  const hasBufferedMovement = Math.hypot(bufferedX, bufferedY) > 0;
-  const movementX = hasBufferedMovement ? bufferedX : rawDeltaX;
-  const movementY = hasBufferedMovement ? bufferedY : rawDeltaY;
-  const deltaX = gesture.axisLock === "vertical"
-    ? 0
-    : movementX;
-  const deltaY = gesture.axisLock === "horizontal"
-    ? 0
-    : movementY;
-  gesture.accumulatedX = 0;
-  gesture.accumulatedY = 0;
   gesture.roll += deltaX * radiansPerPixel;
   gesture.tilt = clamp(gesture.tilt - deltaY * radiansPerPixel, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
 
