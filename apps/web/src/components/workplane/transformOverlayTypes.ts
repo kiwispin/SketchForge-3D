@@ -148,6 +148,8 @@ export type RotationHandleView = {
   x: number;
   y: number;
   angle: number;
+  /** Optional affine projection of the glyph into its world rotation plane. */
+  glyphMatrix?: [number, number, number, number];
   editX: number;
   editY: number;
   faceAnchorX?: number;

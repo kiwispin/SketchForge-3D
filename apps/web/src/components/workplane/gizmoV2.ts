@@ -161,6 +161,73 @@ export function placeUpperRotationGlyphAboveTop(
   };
 }
 
+/**
+ * Places one upper control along its own top-edge normal and keeps the full
+ * glyph outside the projected top silhouette.  The distance is solved in
+ * screen space, but the travel direction comes from the projected 3D top
+ * normal, so the control remains attached to its face instead of being
+ * re-centered in a camera-horizontal row.
+ */
+export function placeUpperRotationGlyphFromFace(
+  faceAnchor: GizmoScreenPoint,
+  projectedTopNormal: GizmoScreenPoint,
+  topFacePoints: readonly GizmoScreenPoint[],
+  fallbackCenter: GizmoScreenPoint,
+  glyphHalfHeight = 17,
+  clearance = 8,
+  minimumGap = UPPER_ROTATION_GLYPH_GAP_PX,
+) {
+  let dx = projectedTopNormal.x - faceAnchor.x;
+  let dy = projectedTopNormal.y - faceAnchor.y;
+  let normalLength = Math.hypot(dx, dy);
+  if (normalLength < 0.5) {
+    dx = faceAnchor.x - fallbackCenter.x;
+    dy = faceAnchor.y - fallbackCenter.y;
+    normalLength = Math.hypot(dx, dy);
+  }
+  if (normalLength < 0.5) {
+    dx = 0;
+    dy = -1;
+    normalLength = 1;
+  }
+  dx /= normalLength;
+  dy /= normalLength;
+  const topY = topFacePoints.reduce((minimum, point) => Math.min(minimum, point.y), Number.POSITIVE_INFINITY);
+  const requiredY = Number.isFinite(topY) ? topY - glyphHalfHeight - clearance : faceAnchor.y - minimumGap;
+  const screenGap = dy < -0.01 ? Math.max(minimumGap, (faceAnchor.y - requiredY) / -dy) : minimumGap;
+  return {
+    x: faceAnchor.x + dx * screenGap,
+    y: faceAnchor.y + dy * screenGap,
+  };
+}
+
+/**
+ * Maps the compact double-ended glyph into the projected rotation plane.
+ *
+ * The glyph's local X axis is its arrow-to-arrow chord and its local Y axis
+ * points from that chord toward the curve.  Keeping both projected basis
+ * vectors preserves the plane's screen orientation (including its foreshorten-
+ * ing) instead of billboard-rendering every upper control horizontally.
+ */
+export function projectedRotationGlyphMatrix(
+  projectedTangent: GizmoScreenPoint,
+  projectedOutward: GizmoScreenPoint,
+  minimumOutwardRatio = 0.6,
+): [number, number, number, number] {
+  const tangentLength = Math.max(0.0001, Math.hypot(projectedTangent.x, projectedTangent.y));
+  const tangentX = projectedTangent.x / tangentLength;
+  const tangentY = projectedTangent.y / tangentLength;
+  let outwardX = projectedOutward.x / tangentLength;
+  let outwardY = projectedOutward.y / tangentLength;
+  const outwardLength = Math.hypot(outwardX, outwardY);
+  if (outwardLength < minimumOutwardRatio) {
+    const sign = tangentX * outwardY - tangentY * outwardX >= 0 ? 1 : -1;
+    outwardX = -tangentY * minimumOutwardRatio * sign;
+    outwardY = tangentX * minimumOutwardRatio * sign;
+  }
+  return [tangentX, tangentY, outwardX, outwardY];
+}
+
 export function rotationPlaneFacing(cameraOffset: GizmoWorldVector, axis: "x" | "z") {
   const length = Math.max(0.0001, Math.hypot(cameraOffset.x, cameraOffset.y, cameraOffset.z));
   return Math.abs((axis === "x" ? cameraOffset.x : cameraOffset.z) / length);

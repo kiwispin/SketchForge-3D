@@ -6,7 +6,9 @@ import {
   lowerWorkplaneProtractorPivot,
   nearestPresentationFace,
   placeRigidRotationGlyph,
+  placeUpperRotationGlyphFromFace,
   placeUpperRotationGlyphAboveTop,
+  projectedRotationGlyphMatrix,
   rotationControlsHidden,
   rotationGlyphAngleTowardFace,
   rotationPlaneFacing,
@@ -89,6 +91,24 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
     expect(rotationPlaneFacing({ x: 0, y: 2, z: 10 }, "z")).toBeGreaterThan(0.9);
   });
 
+  it("projects each upper glyph from its rotation-plane basis", () => {
+    const faceOn = projectedRotationGlyphMatrix({ x: 10, y: 0 }, { x: 0, y: 5 });
+    expect(faceOn[0]).toBeCloseTo(1);
+    expect(faceOn[1]).toBeCloseTo(0);
+    expect(faceOn[2]).toBeCloseTo(0);
+    expect(faceOn[3]).toBeCloseTo(0.6);
+    const edgeOn = projectedRotationGlyphMatrix({ x: 0, y: 10 }, { x: 0, y: 0 });
+    expect(edgeOn[0]).toBeCloseTo(0);
+    expect(edgeOn[1]).toBeCloseTo(1);
+    expect(edgeOn[2]).toBeCloseTo(-0.6);
+    expect(edgeOn[3]).toBeCloseTo(0);
+    const diagonal = projectedRotationGlyphMatrix({ x: 6, y: 8 }, { x: -8, y: 6 });
+    expect(diagonal[0]).toBeCloseTo(0.6);
+    expect(diagonal[1]).toBeCloseTo(0.8);
+    expect(diagonal[2]).toBeCloseTo(-0.8);
+    expect(diagonal[3]).toBeCloseTo(0.6);
+  });
+
   it("places upper controls above the top center on opposite sides", () => {
     expect(upperRotationScreenSlots(
       { x: 100, y: 140 },
@@ -106,6 +126,21 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
       { x: 100, y: 140 },
       [{ x: 60, y: 100 }, { x: 140, y: 94 }, { x: 150, y: 155 }, { x: 50, y: 160 }],
     )).toEqual({ x: 100, y: 69 });
+  });
+
+  it("keeps each upper glyph above the silhouette while following its face anchor", () => {
+    expect(placeUpperRotationGlyphFromFace(
+      { x: 150, y: 170 },
+      { x: 150, y: 169 },
+      [{ x: 80, y: 120 }, { x: 220, y: 120 }, { x: 240, y: 180 }, { x: 60, y: 180 }],
+      { x: 150, y: 150 },
+    )).toEqual({ x: 150, y: 95 });
+    expect(placeUpperRotationGlyphFromFace(
+      { x: 100, y: 150 },
+      { x: 92, y: 142 },
+      [{ x: 70, y: 100 }, { x: 180, y: 100 }, { x: 200, y: 160 }, { x: 50, y: 160 }],
+      { x: 100, y: 120 },
+    ).y).toBeLessThanOrEqual(100 - 17 - 8);
   });
 
   it("places a rigid glyph outward from the exact face anchor", () => {

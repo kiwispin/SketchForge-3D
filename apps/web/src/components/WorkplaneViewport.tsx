@@ -23,12 +23,12 @@ import {
   lowerRotationFaceAnchor,
   lowerWorkplaneProtractorPivot,
   placeRigidRotationGlyph,
-  placeUpperRotationGlyphAboveTop,
+  placeUpperRotationGlyphFromFace,
+  projectedRotationGlyphMatrix,
   rotationControlsHidden,
   rotationGlyphAngleTowardFace,
   rotationPlaneFacing,
   upperRotationFaceAnchor,
-  upperRotationScreenSlots,
   updateRotationPresentationState,
   type RotationPresentationState,
 } from "@/components/workplane/gizmoV2";
@@ -4621,28 +4621,46 @@ function syncTransformOverlay(
   const upperXFaceScreen = project(upperXWorld);
   const upperZFaceScreen = project(upperZWorld);
   const selectionCenterScreen = project(frame.center);
-  const topCenterScreen = project(framePoint(frame, 0, frame.max.y, 0));
+  const upperXVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "x") >= 0.12;
+  const upperZVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "z") >= 0.12;
   const topFaceScreen = [
     project(framePoint(frame, frame.min.x, frame.max.y, frame.min.z)),
     project(framePoint(frame, frame.max.x, frame.max.y, frame.min.z)),
     project(framePoint(frame, frame.max.x, frame.max.y, frame.max.z)),
     project(framePoint(frame, frame.min.x, frame.max.y, frame.max.z)),
   ];
-  const upperControlScreen = placeUpperRotationGlyphAboveTop(topCenterScreen, topFaceScreen);
-  const upperXVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "x") >= 0.12;
-  const upperZVisible = rotationPlaneFacing(vector3ToWorldVec3(cameraOffset), "z") >= 0.12;
-  const upperVisibleCount = Number(upperXVisible) + Number(upperZVisible);
-  const upperSlots = upperRotationScreenSlots(
-    selectionCenterScreen,
-    upperControlScreen,
+  const projectedVectorAt = (anchor: THREE.Vector3, vector: THREE.Vector3) => {
+    const origin = project(anchor);
+    const endpoint = project(anchor.clone().add(vector));
+    return { x: endpoint.x - origin.x, y: endpoint.y - origin.y };
+  };
+  const upperWorldUp = frame.yAxis.clone().normalize();
+  const upperXSlot = placeUpperRotationGlyphFromFace(
     upperXFaceScreen,
+    project(upperXWorld.clone().add(upperWorldUp)),
+    topFaceScreen,
+    selectionCenterScreen,
+  );
+  const upperZSlot = placeUpperRotationGlyphFromFace(
     upperZFaceScreen,
-    0,
-    upperVisibleCount > 1 ? 31 : 0,
+    project(upperZWorld.clone().add(upperWorldUp)),
+    topFaceScreen,
+    selectionCenterScreen,
+  );
+  // X rotates in the YZ plane, so its glyph chord follows the selected
+  // frame's Z edge. Z rotates in XY, so its chord follows the selected X
+  // edge. Both use the top-face normal for the curve's outward direction.
+  const upperXGlyphMatrix = projectedRotationGlyphMatrix(
+    projectedVectorAt(upperXWorld, frame.zAxis),
+    projectedVectorAt(upperXWorld, upperWorldUp),
+  );
+  const upperZGlyphMatrix = projectedRotationGlyphMatrix(
+    projectedVectorAt(upperZWorld, frame.xAxis),
+    projectedVectorAt(upperZWorld, upperWorldUp),
   );
   const rotationSlots = {
-    x: upperSlots.x,
-    z: upperSlots.z,
+    x: upperXSlot,
+    z: upperZSlot,
     y: placeRigidRotationGlyph(
       lowerFaceScreen,
       project(lowerFaceWorld.clone().add(lowerOutwardWorld)),
@@ -4816,6 +4834,7 @@ function syncTransformOverlay(
         x: rotateLeft.x,
         y: rotateLeft.y,
         angle: rotationGlyphAngleTowardFace(rotateLeft, upperXFaceScreen),
+        glyphMatrix: upperXGlyphMatrix,
         editX: rotateLeft.x + 34,
         editY: rotateLeft.y - 28,
         faceAnchorX: upperXFaceScreen.x,
@@ -4830,6 +4849,7 @@ function syncTransformOverlay(
         x: rotateRight.x,
         y: rotateRight.y,
         angle: rotationGlyphAngleTowardFace(rotateRight, upperZFaceScreen),
+        glyphMatrix: upperZGlyphMatrix,
         editX: rotateRight.x + 34,
         editY: rotateRight.y - 28,
         faceAnchorX: upperZFaceScreen.x,

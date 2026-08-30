@@ -293,12 +293,13 @@ export function TransformOverlay({
           style={{
             "--overlay-x": `${handle.x}px`,
             "--overlay-y": `${handle.y}px`,
-            "--rotate-handle-angle": `${handle.angle}deg`,
+            "--rotate-handle-angle": `${handle.glyphMatrix ? 0 : handle.angle}deg`,
           } as CSSProperties}
           data-rotation-control={handle.key}
           data-presentation-face={handle.presentationFace}
           data-face-anchor-x={handle.faceAnchorX}
           data-face-anchor-y={handle.faceAnchorY}
+          data-rotation-glyph-matrix={handle.glyphMatrix?.join(",")}
           data-rotation-axis={handle.axis}
           aria-label={`Rotate around ${handle.axis.toUpperCase()} axis`}
           title={`Rotate around ${handle.axis.toUpperCase()} axis`}
@@ -312,6 +313,9 @@ export function TransformOverlay({
           <span
             className="rotate-handle-icon"
             aria-hidden="true"
+            style={handle.glyphMatrix ? {
+              transform: `translate(-50%, -50%) matrix(${handle.glyphMatrix.join(",")}, 0, 0)`,
+            } : undefined}
           >
             {handle.glyph === "tinkercad-double" ? (
               <svg className="tinkercad-rotation-glyph" viewBox="0 0 44 32" focusable="false">
