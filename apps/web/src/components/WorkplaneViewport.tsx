@@ -4635,6 +4635,12 @@ function syncTransformOverlay(
     return { x: endpoint.x - origin.x, y: endpoint.y - origin.y };
   };
   const upperWorldUp = frame.yAxis.clone().normalize();
+  // The SVG glyph's local +Y points from its arrow chord into the curve.
+  // Screen +Y points down, while the selected frame's world +Y projects up;
+  // use the opposite world direction so the upper glyph keeps its Tinkercad
+  // U-shaped curve body toward the selected top face instead of being
+  // vertically mirrored into an upside-down arc.
+  const upperGlyphCurveDirection = upperWorldUp.clone().multiplyScalar(-1);
   const upperXSlot = placeUpperRotationGlyphFromFace(
     upperXFaceScreen,
     project(upperXWorld.clone().add(upperWorldUp)),
@@ -4649,14 +4655,15 @@ function syncTransformOverlay(
   );
   // X rotates in the YZ plane, so its glyph chord follows the selected
   // frame's Z edge. Z rotates in XY, so its chord follows the selected X
-  // edge. Both use the top-face normal for the curve's outward direction.
+  // edge. The curve direction is the screen-down side of the top face; this
+  // compensates for SVG +Y being screen-down while world +Y projects up.
   const upperXGlyphMatrix = projectedRotationGlyphMatrix(
     projectedVectorAt(upperXWorld, frame.zAxis),
-    projectedVectorAt(upperXWorld, upperWorldUp),
+    projectedVectorAt(upperXWorld, upperGlyphCurveDirection),
   );
   const upperZGlyphMatrix = projectedRotationGlyphMatrix(
     projectedVectorAt(upperZWorld, frame.xAxis),
-    projectedVectorAt(upperZWorld, upperWorldUp),
+    projectedVectorAt(upperZWorld, upperGlyphCurveDirection),
   );
   const rotationSlots = {
     x: upperXSlot,
