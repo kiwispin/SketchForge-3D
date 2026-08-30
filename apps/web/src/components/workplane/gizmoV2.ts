@@ -132,14 +132,16 @@ export function upperRotationFaceAnchor(
   const centerX = (bounds.min.x + bounds.max.x) / 2;
   const centerZ = (bounds.min.z + bounds.max.z) / 2;
   if (axis === "x") {
-    const sign = cameraInSelectionFrame.x >= 0 ? 1 : -1;
+    // Tinkercad presents the upper control on the far top edge, opposite the
+    // camera-facing side, so the glyph remains visible above the shape.
+    const sign = cameraInSelectionFrame.x >= 0 ? -1 : 1;
     return {
       point: { x: sign > 0 ? bounds.max.x : bounds.min.x, y: bounds.max.y, z: centerZ },
       outward: { x: sign, y: 0.72, z: 0 },
       face: sign > 0 ? "x-max" as const : "x-min" as const,
     };
   }
-  const sign = cameraInSelectionFrame.z >= 0 ? 1 : -1;
+  const sign = cameraInSelectionFrame.z >= 0 ? -1 : 1;
   return {
     point: { x: centerX, y: bounds.max.y, z: sign > 0 ? bounds.max.z : bounds.min.z },
     outward: { x: 0, y: 0.72, z: sign },

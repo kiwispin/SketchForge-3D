@@ -72,17 +72,17 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
     });
   });
 
-  it("anchors upper X and Z controls to separate camera-facing top edges", () => {
+  it("anchors upper X and Z controls to separate far top edges", () => {
     const bounds = { min: { x: -10, y: 0, z: -8 }, max: { x: 10, y: 20, z: 8 } };
     expect(upperRotationFaceAnchor("x", { x: 5, y: 4, z: 6 }, bounds)).toEqual({
-      point: { x: 10, y: 20, z: 0 },
-      outward: { x: 1, y: 0.72, z: 0 },
-      face: "x-max",
+      point: { x: -10, y: 20, z: 0 },
+      outward: { x: -1, y: 0.72, z: 0 },
+      face: "x-min",
     });
     expect(upperRotationFaceAnchor("z", { x: 5, y: 4, z: 6 }, bounds)).toEqual({
-      point: { x: 0, y: 20, z: 8 },
-      outward: { x: 0, y: 0.72, z: 1 },
-      face: "z-max",
+      point: { x: 0, y: 20, z: -8 },
+      outward: { x: 0, y: 0.72, z: -1 },
+      face: "z-min",
     });
   });
 
