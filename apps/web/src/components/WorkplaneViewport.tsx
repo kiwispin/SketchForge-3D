@@ -3802,6 +3802,8 @@ function setCameraProjection(state: ThreeState, mode: ProjectionMode) {
   next.updateProjectionMatrix();
   state.camera = next;
   state.controls.object = next;
+  syncOrbitControlsUpAxis(state.controls, next.up);
+  clearOrbitControlsMotion(state.controls);
   state.controls.target.copy(target);
   state.controls.update();
   state.needsRender = true;
@@ -3809,6 +3811,8 @@ function setCameraProjection(state: ThreeState, mode: ProjectionMode) {
 
 function resetCamera(state: ThreeState) {
   state.camera.up.set(0, 1, 0);
+  syncOrbitControlsUpAxis(state.controls, state.camera.up);
+  clearOrbitControlsMotion(state.controls);
   if (state.camera instanceof THREE.OrthographicCamera) {
     state.camera.zoom = 1;
   }
@@ -3824,11 +3828,50 @@ function setCameraToViewFace(state: ThreeState, face: ViewCubeFace) {
   const distance = clamp(offset.length(), 22, 4200);
   const direction = viewFaceDirection(face);
   state.camera.up.copy(viewFaceUp(face));
+  // OrbitControls caches the camera-up basis when it is constructed. A view
+  // cube pole changes that basis (Top/Bottom use Z as screen-up), so update
+  // the controller before its next update or the first orbit mixes the old
+  // +Y frame with the new camera frame and can roll the workplane edge-on.
+  syncOrbitControlsUpAxis(state.controls, state.camera.up);
+  clearOrbitControlsMotion(state.controls);
   state.camera.position.copy(state.controls.target).add(direction.multiplyScalar(distance));
   state.camera.lookAt(state.controls.target);
   state.camera.updateProjectionMatrix();
   state.controls.update();
   state.needsRender = true;
+}
+
+type OrbitControlsWithCameraUp = OrbitControls & {
+  _quat?: THREE.Quaternion;
+  _quatInverse?: THREE.Quaternion;
+  _sphericalDelta?: THREE.Spherical;
+  _panOffset?: THREE.Vector3;
+  _scale?: number;
+  _performCursorZoom?: boolean;
+};
+
+function syncOrbitControlsUpAxis(controls: OrbitControls, up: THREE.Vector3) {
+  // OrbitControls intentionally keeps these implementation details private;
+  // there is no public setter for its cached camera-up basis. Keeping this
+  // tiny compatibility shim here makes every manual camera pose use the same
+  // frame that the controller will use for its next orbit.
+  const orbitControls = controls as OrbitControlsWithCameraUp;
+  if (!orbitControls._quat || !orbitControls._quatInverse) {
+    return;
+  }
+  orbitControls._quat.setFromUnitVectors(up.clone().normalize(), new THREE.Vector3(0, 1, 0));
+  orbitControls._quatInverse.copy(orbitControls._quat).invert();
+}
+
+function clearOrbitControlsMotion(controls: OrbitControls) {
+  // A view-cube click is an absolute pose change. Discard any damped orbit,
+  // pan, or cursor-zoom remainder from the preceding pointer gesture so it
+  // cannot continue moving the newly selected view on the following frames.
+  const orbitControls = controls as OrbitControlsWithCameraUp;
+  orbitControls._sphericalDelta?.set(0, 0, 0);
+  orbitControls._panOffset?.set(0, 0, 0);
+  orbitControls._scale = 1;
+  orbitControls._performCursorZoom = false;
 }
 
 function constrainCamera(state: ThreeState, workspace: WorkspaceSettings) {
