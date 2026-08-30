@@ -12,6 +12,7 @@ import {
   projectedRotationWheel,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  rotationWheelZeroMarkerPath,
   rotationSnapDelta,
   signedAngleAroundAxis,
   worldPlaneHandleAnchor,
@@ -80,6 +81,17 @@ describe("transform overlay geometry", () => {
       y: 280,
       radius: ROTATION_PROTRACTOR_RADIUS,
     });
+  });
+
+  it("anchors the dark zero marker to the projected front-back wheel", () => {
+    const path = rotationWheelZeroMarkerPath({
+      x: 0,
+      y: 0,
+      radius: 168,
+      zeroRadians: -Math.PI / 2,
+      matrix: [1, 0, 0, 1],
+    });
+    expect(path).toMatch(/^M 0 -140 L 7 -125 L -7 -125 Z$/);
   });
 
   it("keeps the rotation protractor compact in a small viewport", () => {

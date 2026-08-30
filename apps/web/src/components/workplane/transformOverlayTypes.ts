@@ -378,6 +378,28 @@ export function rotationWheelPoint(wheel: RotationWheelView, angleDegrees: numbe
 }
 
 /**
+ * Builds the dark zero-position marker used by Tinkercad's active protractor.
+ * The points are intentionally returned in the wheel's local circle space so
+ * the same affine projection that draws the selected world plane also
+ * projects the marker.  That keeps the front/back marker attached to the
+ * protractor instead of turning it into a screen-space decoration.
+ */
+export function rotationWheelZeroMarkerPath(wheel: RotationWheelView) {
+  const zeroRadians = wheel.zeroRadians ?? -Math.PI / 2;
+  const tipRadius = Math.max(18, wheel.radius - 28);
+  const baseRadius = Math.max(4, tipRadius - 15);
+  const halfWidth = 7;
+  const radial = { x: Math.cos(zeroRadians), y: Math.sin(zeroRadians) };
+  const tangent = { x: -radial.y, y: radial.x };
+  const tip = { x: radial.x * tipRadius, y: radial.y * tipRadius };
+  const base = { x: radial.x * baseRadius, y: radial.y * baseRadius };
+  const left = { x: base.x + tangent.x * halfWidth, y: base.y + tangent.y * halfWidth };
+  const right = { x: base.x - tangent.x * halfWidth, y: base.y - tangent.y * halfWidth };
+  const format = (value: number) => Number(value.toFixed(6));
+  return `M ${format(tip.x)} ${format(tip.y)} L ${format(left.x)} ${format(left.y)} L ${format(right.x)} ${format(right.y)} Z`;
+}
+
+/**
  * Converts a screen-space point back into the wheel's local projected plane
  * and returns its local radial distance. This keeps coarse/fine snapping on
  * the annular band correct when the plane is foreshortened by the camera.

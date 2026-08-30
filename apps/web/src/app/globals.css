@@ -3587,6 +3587,14 @@ button {
   vector-effect: non-scaling-stroke;
 }
 
+.rotation-zero-marker {
+  fill: #273137;
+  stroke: rgba(255, 255, 255, 0.76);
+  stroke-width: 0.8;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
 .rotation-zero-label {
   fill: #16283a;
   paint-order: stroke;

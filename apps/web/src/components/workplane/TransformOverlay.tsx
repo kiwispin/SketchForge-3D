@@ -4,6 +4,7 @@ import {
   orthographicFitZoom,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  rotationWheelZeroMarkerPath,
   rotationSnapDelta,
   type TransformOverlayProps,
   type TransformOverlayState,
@@ -21,6 +22,7 @@ export {
   formatDeltaText,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  rotationWheelZeroMarkerPath,
   rotationSnapDelta,
   screenRotationWheel,
   separatedLiftHandlePoint,
@@ -168,6 +170,11 @@ export function TransformOverlay({
             <circle className="rotation-protractor-center" cx="0" cy="0" r="3" />
             <line className="rotation-zero-line" x1="0" y1="0" x2={zeroLine.x} y2={zeroLine.y} />
             <line className="rotation-current-line" x1="0" y1="0" x2={activeLine.x} y2={activeLine.y} />
+            <path
+              className="rotation-zero-marker"
+              data-rotation-zero-marker="true"
+              d={rotationWheelZeroMarkerPath(wheel)}
+            />
           </g>
           <text className="rotation-zero-label" x={zeroLabelPoint.x} y={zeroLabelPoint.y}>
             0&deg;
