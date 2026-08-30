@@ -2,6 +2,8 @@ import * as THREE from "three";
 
 export type ViewCubeFace = "top" | "bottom" | "front" | "back" | "right" | "left";
 
+const POLE_OFFSET_RADIANS = THREE.MathUtils.degToRad(0.01);
+
 export function viewFaceDirection(face: ViewCubeFace) {
   const direction: Record<ViewCubeFace, [number, number, number]> = {
     top: [0, 1, 0],
@@ -14,10 +16,20 @@ export function viewFaceDirection(face: ViewCubeFace) {
   return new THREE.Vector3(...direction[face]);
 }
 
-export function viewFaceUp(face: ViewCubeFace) {
-  if (face === "top") return new THREE.Vector3(0, 0, -1);
-  if (face === "bottom") return new THREE.Vector3(0, 0, 1);
-  return new THREE.Vector3(0, 1, 0);
+export function viewFaceOrbitPose(face: ViewCubeFace) {
+  const direction = viewFaceDirection(face);
+  if (face === "top" || face === "bottom") {
+    const verticalDirection = face === "top" ? 1 : -1;
+    direction.set(
+      0,
+      verticalDirection * Math.cos(POLE_OFFSET_RADIANS),
+      Math.sin(POLE_OFFSET_RADIANS),
+    );
+  }
+  return {
+    direction,
+    up: new THREE.Vector3(0, 1, 0),
+  };
 }
 
 /** Front-aligned Home pose with enough elevation to keep the workplane visible. */
