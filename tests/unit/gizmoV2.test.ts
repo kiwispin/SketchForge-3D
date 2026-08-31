@@ -3,6 +3,7 @@ import {
   cameraYawInSelectionFrame,
   createRotationPresentationState,
   lowerRotationFaceAnchor,
+  lowerRotationGlyphWorldGap,
   lowerWorkplaneProtractorPivot,
   nearestPresentationFace,
   placeRigidRotationGlyph,
@@ -70,6 +71,12 @@ describe("Tinkercad-style gizmo V2 presentation", () => {
       point: { x: -10, y: 0, z: 0 },
       outward: { x: -1, y: 0, z: 0 },
     });
+  });
+
+  it("keeps the lower glyph's ground-plane gap bounded when the plane is edge-on", () => {
+    expect(lowerRotationGlyphWorldGap(0, 20)).toBeCloseTo(12.4);
+    expect(lowerRotationGlyphWorldGap(4, 20)).toBeCloseTo(12.4);
+    expect(lowerRotationGlyphWorldGap(20, 20)).toBeCloseTo(2.6);
   });
 
   it("anchors upper X and Z controls to separate far top edges", () => {

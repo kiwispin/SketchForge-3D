@@ -21,8 +21,8 @@ import {
   cameraYawInSelectionFrame,
   createRotationPresentationState,
   lowerRotationFaceAnchor,
+  lowerRotationGlyphWorldGap,
   lowerWorkplaneProtractorPivot,
-  placeRigidRotationGlyph,
   placeUpperRotationGlyphFromFace,
   projectedRotationGlyphMatrix,
   rotationControlsHidden,
@@ -4689,14 +4689,24 @@ function syncTransformOverlay(
     projectedVectorAt(upperZWorld, frame.xAxis),
     projectedVectorAt(upperZWorld, upperGlyphCurveDirection),
   );
+  const projectedLowerOutward = projectedVectorAt(lowerFaceWorld, lowerOutwardWorld);
+  const lowerWorldGap = lowerRotationGlyphWorldGap(
+    Math.hypot(projectedLowerOutward.x, projectedLowerOutward.y),
+    Math.min(frame.width, frame.depth),
+  );
+  const lowerGlyphWorld = lowerFaceWorld.clone().add(lowerOutwardWorld.clone().multiplyScalar(lowerWorldGap));
+  const lowerGlyphTangentWorld = presentation.face === "x-max" || presentation.face === "x-min"
+    ? frame.zAxis.clone().normalize()
+    : frame.xAxis.clone().normalize();
+  const lowerYGlyphMatrix = projectedRotationGlyphMatrix(
+    projectedVectorAt(lowerGlyphWorld, lowerGlyphTangentWorld),
+    projectedVectorAt(lowerGlyphWorld, lowerOutwardWorld),
+    0,
+  );
   const rotationSlots = {
     x: upperXSlot,
     z: upperZSlot,
-    y: placeRigidRotationGlyph(
-      lowerFaceScreen,
-      project(lowerFaceWorld.clone().add(lowerOutwardWorld)),
-      selectionCenterScreen,
-    ),
+    y: project(lowerGlyphWorld),
   };
 
   const lowerProtractorPivot = lowerWorkplaneProtractorPivot(
@@ -4894,7 +4904,8 @@ function syncTransformOverlay(
         glyph: "tinkercad-double" as const,
         x: rotateBottom.x,
         y: rotateBottom.y,
-        angle: rotationGlyphAngleTowardFace(rotateBottom, lowerFaceScreen),
+        angle: 0,
+        glyphMatrix: lowerYGlyphMatrix,
         editX: rotateBottom.x + 34,
         editY: rotateBottom.y - 28,
         faceAnchorX: lowerFaceScreen.x,

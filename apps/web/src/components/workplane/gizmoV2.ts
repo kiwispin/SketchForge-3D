@@ -12,6 +12,7 @@ export type RotationPresentationState = {
 
 export const ROTATION_FACE_HANDOFF_DEGREES = 5;
 export const LOWER_ROTATION_GLYPH_GAP_PX = 52;
+export const LOWER_ROTATION_GLYPH_WORLD_GAP_RATIO = 0.62;
 export const UPPER_ROTATION_GLYPH_GAP_PX = 34;
 
 const FACE_ORDER: readonly VerticalPresentationFace[] = ["z-max", "x-max", "z-min", "x-min"];
@@ -122,6 +123,24 @@ export function lowerRotationFaceAnchor(
     return { point: { x: centerX, y: bounds.min.y, z: bounds.min.z }, outward: { x: 0, y: 0, z: -1 } };
   }
   return { point: { x: bounds.min.x, y: bounds.min.y, z: centerZ }, outward: { x: -1, y: 0, z: 0 } };
+}
+
+/**
+ * Converts the compact lower control's preferred screen gap into a bounded
+ * ground-plane distance. At a low camera elevation the outward ground-plane
+ * vector is nearly edge-on and has almost no screen projection; an unbounded
+ * screen-space solve would then push the control a long way off the shape.
+ */
+export function lowerRotationGlyphWorldGap(
+  projectedOutwardLength: number,
+  footprintSize: number,
+  desiredScreenGap = LOWER_ROTATION_GLYPH_GAP_PX,
+) {
+  const size = Math.max(1, footprintSize);
+  const minimum = size * 0.12;
+  const maximum = Math.max(minimum, size * LOWER_ROTATION_GLYPH_WORLD_GAP_RATIO);
+  const screenLength = Math.max(0.001, projectedOutwardLength);
+  return Math.min(maximum, Math.max(minimum, desiredScreenGap / screenLength));
 }
 
 export function upperRotationFaceAnchor(
