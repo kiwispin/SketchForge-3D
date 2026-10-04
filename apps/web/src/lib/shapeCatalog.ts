@@ -5,7 +5,7 @@ import type { ShapeAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/t
 
 export type ToolbarShapeAsset = ShapeAsset & { menuIcon: string };
 export type ShapeLibraryCategory = {
-  id: "basic" | "connectors" | "printableParts" | "text";
+  id: "basic" | "connectors" | "architectural" | "printableParts" | "text";
   label: string;
   shapes: ToolbarShapeAsset[];
 };
@@ -127,9 +127,17 @@ export const printablePartShapeAssets: ToolbarShapeAsset[] = [
   { id: "printable-spacer", name: "Spacer", src: "assets/sketchforge/printable-spacer.svg", menuIcon: "assets/sketchforge/printable-spacer.svg", kind: "tube", color: "#2563eb" },
 ];
 
+export const architecturalShapeAssets: ToolbarShapeAsset[] = [
+  { id: "architectural-wall", name: "Wall", src: "assets/sketchforge/architectural-wall.svg", menuIcon: "assets/sketchforge/architectural-wall.svg", kind: "box", color: "#b96f43" },
+  { id: "architectural-window", name: "Window", src: "assets/sketchforge/architectural-window.svg", menuIcon: "assets/sketchforge/architectural-window.svg", kind: "box", color: "#2f9fc2" },
+  { id: "architectural-door", name: "Door", src: "assets/sketchforge/architectural-door.svg", menuIcon: "assets/sketchforge/architectural-door.svg", kind: "box", color: "#8c5738" },
+  { id: "architectural-roof", name: "Roof", src: "assets/sketchforge/architectural-roof.svg", menuIcon: "assets/sketchforge/architectural-roof.svg", kind: "roundRoof", color: "#377b5b" },
+];
+
 export const shapeLibraryCategories: ShapeLibraryCategory[] = [
   { id: "basic", label: "Basic Shapes", shapes: toolbarShapeAssets.filter((shape) => shape.kind !== "text") },
   { id: "connectors", label: "Connectors", shapes: connectorShapeAssets },
+  { id: "architectural", label: "Architectural", shapes: architecturalShapeAssets },
   { id: "printableParts", label: "Printable Parts", shapes: printablePartShapeAssets },
   { id: "text", label: "Text", shapes: toolbarShapeAssets.filter((shape) => shape.kind === "text") },
 ];
@@ -192,12 +200,16 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
   const isPhoneStand = asset.id === "printable-phone-stand";
   const isCableGuide = asset.id === "printable-cable-guide";
   const isSpacer = asset.id === "printable-spacer";
+  const isArchitecturalWall = asset.id === "architectural-wall";
+  const isArchitecturalWindow = asset.id === "architectural-window";
+  const isArchitecturalDoor = asset.id === "architectural-door";
+  const isArchitecturalRoof = asset.id === "architectural-roof";
   const roundProfile = asset.kind === "sphere" || asset.kind === "torus" || asset.kind === "ring" || asset.kind === "halfSphere";
   const flatProfile = asset.kind === "torus" || asset.kind === "ring" || asset.kind === "text" || asset.kind === "gear";
-  const size = isConnectorPeg ? 8 : isConnectorSocket ? 10 : isCableGuide ? 18 : isSpacer ? 12 : asset.kind === "gear" ? 30 : roundProfile ? 22 : 20;
-  const height = isConnectorPeg ? 16 : isConnectorSocket ? 12 : isNameTag ? 3 : isPhoneStand ? 45 : isCableGuide ? 8 : isSpacer ? 10 : asset.kind === "gear" ? 6 : asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
-  const width = isNameTag || isPhoneStand ? 70 : asset.kind === "text" ? 86 : size;
-  const depth = isNameTag ? 28 : isPhoneStand ? 60 : asset.kind === "text" ? 28 : size;
+  const size = isConnectorPeg ? 8 : isConnectorSocket ? 10 : isCableGuide ? 18 : isSpacer ? 12 : isArchitecturalWall ? 80 : isArchitecturalWindow ? 50 : isArchitecturalDoor ? 50 : isArchitecturalRoof ? 80 : asset.kind === "gear" ? 30 : roundProfile ? 22 : 20;
+  const height = isConnectorPeg ? 16 : isConnectorSocket ? 12 : isNameTag ? 3 : isPhoneStand ? 45 : isCableGuide ? 8 : isSpacer ? 10 : isArchitecturalWall ? 40 : isArchitecturalWindow ? 44 : isArchitecturalDoor ? 64 : isArchitecturalRoof ? 20 : asset.kind === "gear" ? 6 : asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
+  const width = isNameTag || isPhoneStand ? 70 : isArchitecturalWall ? 80 : isArchitecturalWindow || isArchitecturalDoor ? 50 : isArchitecturalRoof ? 80 : asset.kind === "text" ? 86 : size;
+  const depth = isNameTag ? 28 : isPhoneStand ? 60 : isArchitecturalWall ? 8 : isArchitecturalWindow ? 6 : isArchitecturalDoor ? 8 : isArchitecturalRoof ? 60 : asset.kind === "text" ? 28 : size;
 
   if (isNameTag) {
     const color = asset.color;
@@ -265,6 +277,42 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
       ],
       locked: false,
       hidden: false,
+    };
+  }
+
+  if (isArchitecturalWindow || isArchitecturalDoor) {
+    const color = asset.color;
+    const child = (id: string, name: string, childWidth: number, childDepth: number, childHeight: number, x: number, z: number, elevation: number, childColor = color): WorkplaneShape => ({
+      id: createLocalId(id), name, kind: "box", color: childColor, x, z, elevation,
+      size: Math.max(childWidth, childDepth), width: childWidth, depth: childDepth, height: childHeight,
+      rotation: 0, rotationX: 0, rotationZ: 0, locked: false, hidden: false,
+    });
+    const window = isArchitecturalWindow;
+    const baseWidth = 50;
+    const baseDepth = window ? 6 : 8;
+    const baseHeight = window ? 44 : 64;
+    const children = window
+      ? [
+          child("architectural-window-glass", "Window glass", 38, 2, 32, 0, 0, 6, "#8ed5e8"),
+          child("architectural-window-left", "Window left frame", 4, 6, 44, -23, 0, 0),
+          child("architectural-window-right", "Window right frame", 4, 6, 44, 23, 0, 0),
+          child("architectural-window-sill", "Window sill", 50, 8, 4, 0, 0, 0),
+          child("architectural-window-header", "Window header", 50, 6, 4, 0, 0, 40),
+        ]
+      : [
+          child("architectural-door-leaf", "Door leaf", 42, 4, 56, 0, 0, 0, "#a96b43"),
+          child("architectural-door-left", "Door left frame", 4, 8, 64, -23, 0, 0),
+          child("architectural-door-right", "Door right frame", 4, 8, 64, 23, 0, 0),
+          child("architectural-door-header", "Door header", 50, 8, 4, 0, 0, 60),
+          child("architectural-door-handle", "Door handle", 3, 3, 3, 14, -2, 28, "#e2bd52"),
+        ];
+    return {
+      id: createLocalId(asset.id), name: asset.name, kind: "box", color,
+      x: point?.x ?? 0, z: point?.z ?? 0, elevation: point?.elevation ?? 0,
+      size: baseWidth, width: baseWidth, depth: baseDepth, height: baseHeight,
+      rotation: 0, rotationX: 0, rotationZ: 0,
+      groupedBaseWidth: baseWidth, groupedBaseDepth: baseDepth, groupedBaseHeight: baseHeight,
+      groupedShapes: children, locked: false, hidden: false,
     };
   }
 

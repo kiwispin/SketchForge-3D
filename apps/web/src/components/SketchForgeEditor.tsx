@@ -9171,7 +9171,7 @@ function SecondaryToolbar({
   const [visibilityMenuPosition, setVisibilityMenuPosition] = useState({ top: 0, left: 0 });
   const sketchCreateMenuRef = useRef<HTMLDivElement>(null);
   const visibilityMenuRef = useRef<HTMLDivElement>(null);
-  const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "printableParts" | "text">("basic");
+  const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "architectural" | "printableParts" | "text">("basic");
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const suppressNextShapeClickRef = useRef(false);
   const selectToolbarMode = (mode: "geometry" | "sketch") => {
