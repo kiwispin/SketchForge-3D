@@ -9,6 +9,13 @@ export type TutorialSignals = {
   holeCount: number;
   groupCount: number;
   rotatedCount: number;
+  /**
+   * Shapes whose transform was baked into an editable mesh. The editor bakes a
+   * rotation into the mesh as soon as the rotate gesture or typed angle is
+   * committed, which resets the rotation fields to zero, so a finished rotation
+   * shows up here rather than in rotatedCount.
+   */
+  bakedMeshCount: number;
   /** Summed width+depth+height across shapes; any resize changes it. */
   dimensionFingerprint: number;
 };
@@ -17,11 +24,16 @@ function isRotated(shape: WorkplaneShape): boolean {
   return (shape.rotation ?? 0) !== 0 || (shape.rotationX ?? 0) !== 0 || (shape.rotationZ ?? 0) !== 0;
 }
 
+function isBakedMesh(shape: WorkplaneShape): boolean {
+  return shape.kind === "mesh" && shape.importedMesh?.sourceFormat === "json" && !(shape.groupedShapes?.length);
+}
+
 export function computeTutorialSignals(shapes: WorkplaneShape[]): TutorialSignals {
   let solidCount = 0;
   let holeCount = 0;
   let groupCount = 0;
   let rotatedCount = 0;
+  let bakedMeshCount = 0;
   let dimensionFingerprint = 0;
   for (const shape of shapes) {
     if (shape.hole) {
@@ -35,6 +47,9 @@ export function computeTutorialSignals(shapes: WorkplaneShape[]): TutorialSignal
     if (isRotated(shape)) {
       rotatedCount += 1;
     }
+    if (isBakedMesh(shape)) {
+      bakedMeshCount += 1;
+    }
     dimensionFingerprint += (shape.width ?? 0) + (shape.depth ?? 0) + (shape.height ?? 0);
   }
   return {
@@ -43,6 +58,7 @@ export function computeTutorialSignals(shapes: WorkplaneShape[]): TutorialSignal
     holeCount,
     groupCount,
     rotatedCount,
+    bakedMeshCount,
     // Round to tame floating-point drift so equality comparisons are stable.
     dimensionFingerprint: Math.round(dimensionFingerprint * 1000) / 1000,
   };
@@ -95,7 +111,7 @@ const learnTheBasics: Tutorial = {
       title: "Rotate it",
       body: "Spin the shape using a curved rotate handle so it sits at an angle.",
       hint: "The curved arrows around the shape rotate it.",
-      check: (now, atStart) => now.rotatedCount > atStart.rotatedCount,
+      check: (now, atStart) => now.rotatedCount > atStart.rotatedCount || now.bakedMeshCount > atStart.bakedMeshCount,
     },
     {
       id: "hole",

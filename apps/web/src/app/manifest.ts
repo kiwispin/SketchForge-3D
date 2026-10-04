@@ -2,6 +2,8 @@ import type { MetadataRoute } from "next";
 
 export const dynamic = "force-static";
 
+// Paths are relative to the manifest's own URL, so they also work when the
+// static export is served from a GitHub Pages sub-path.
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "SketchForge 3D",

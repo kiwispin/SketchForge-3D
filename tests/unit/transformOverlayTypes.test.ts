@@ -5,6 +5,7 @@ import {
   ROTATION_COARSE_SNAP_RADIUS_RATIO,
   WORLD_ROTATION_PLANES,
   buildRotationPlaneDescriptor,
+  frameRotationPlanes,
   feedbackScreenPoint,
   formatAngleText,
   formatDeltaText,
@@ -201,6 +202,20 @@ describe("shared rotation-plane descriptor (Stage 1)", () => {
     expect(descriptor.wheel.radius).toBe(ROTATION_PROTRACTOR_RADIUS);
     const length = Math.hypot(descriptor.screenU.x, descriptor.screenU.y);
     expect(descriptor.wheel.matrix?.[0]).toBeCloseTo(descriptor.screenU.x / Math.max(length, 0.0001), 5);
+  });
+
+  it("expresses the plane bases in a placement workplane frame", () => {
+    // Base workplane: frame axes are the world axes.
+    expect(frameRotationPlanes({ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 })).toEqual(WORLD_ROTATION_PLANES);
+    // A workplane on a +X face (xAxis -Z, normal +X, zAxis = xAxis × normal = -Y)
+    // must keep planeU × planeV = axisVector for every handle.
+    const tilted = frameRotationPlanes({ x: 0, y: 0, z: -1 }, { x: 1, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+    Object.values(tilted).forEach(({ axisVector, planeU, planeV }) => {
+      expect(planeU.y * planeV.z - planeU.z * planeV.y).toBeCloseTo(axisVector.x);
+      expect(planeU.z * planeV.x - planeU.x * planeV.z).toBeCloseTo(axisVector.y);
+      expect(planeU.x * planeV.y - planeU.y * planeV.x).toBeCloseTo(axisVector.z);
+    });
+    expect(tilted.y.axisVector).toEqual({ x: 1, y: 0, z: 0 });
   });
 
   it("measures a signed angle around the shared world axis", () => {

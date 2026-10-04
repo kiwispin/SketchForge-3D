@@ -2,8 +2,9 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { Check, LoaderCircle, Minus, Plus, RotateCcw, X } from "lucide-react";
-import { displayStepFromMillimeters, displayToMillimeters, formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay } from "@/lib/measurementUnits";
+import { displayStepFromMillimeters, displayToMillimeters, formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay, parseMeasurementInput } from "@/lib/measurementUnits";
 import type { CadModifierKind, CadModifierQuality } from "@/lib/cadModifierTypes";
+import { CAD_MODIFIER_MAX_SHARP_ANGLE, edgeModifierSelectionStatus } from "@/lib/cadModifierRuntime";
 import type { WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 const MIN_EDGE_MODIFIER_AMOUNT = 0.001;
@@ -34,6 +35,7 @@ function EdgeModifierSlider({
   unit,
   workspace,
   length = false,
+  disabled = false,
   onChange,
 }: {
   label: string;
@@ -44,6 +46,7 @@ function EdgeModifierSlider({
   unit?: string;
   workspace: WorkplaneWorkspaceSettings;
   length?: boolean;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }) {
   const safeMin = Number.isFinite(min) ? min : 0;
@@ -68,7 +71,7 @@ function EdgeModifierSlider({
   const toModelValue = (nextValue: number) => length ? displayToMillimeters(nextValue, workspace) : nextValue;
 
   const commitDraft = () => {
-    const next = Number(draft);
+    const next = parseMeasurementInput(draft);
     const finiteNext = Number.isFinite(next) ? next : controlValue;
     onChange(clamp(toModelValue(finiteNext), safeMin, safeMax));
     setEditing(false);
@@ -86,12 +89,10 @@ function EdgeModifierSlider({
         <span className="range-property-name">{label}</span>
         <span className="range-value-control">
           <input
-            type="number"
-            min={controlMin}
-            max={controlMax}
-            step={controlStep}
+            type="text"
             value={editing ? draft : formatSliderValue(controlValue, workspace.accuracy, controlStep)}
             inputMode="decimal"
+            disabled={disabled}
             onFocus={() => {
               setDraft(formatSliderValue(controlValue, workspace.accuracy, controlStep));
               setEditing(true);
@@ -100,8 +101,12 @@ function EdgeModifierSlider({
             onBlur={commitDraft}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
+                event.preventDefault();
+                event.stopPropagation();
                 event.currentTarget.blur();
               } else if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
                 setDraft(formatSliderValue(controlValue, workspace.accuracy, controlStep));
                 setEditing(false);
               }
@@ -117,6 +122,7 @@ function EdgeModifierSlider({
           max={controlMax}
           step={controlStep}
           value={sliderValue}
+          disabled={disabled}
           onChange={(event) => handleSliderChange(Number(event.currentTarget.value))}
         />
       </div>
@@ -142,6 +148,7 @@ export function EdgeModifierPanel({
   selectedCount,
   availableCount,
   busy,
+  prepared,
   error,
   onAmountChange,
   onChamferAngleChange,
@@ -172,6 +179,7 @@ export function EdgeModifierPanel({
   selectedCount: number;
   availableCount: number;
   busy: boolean;
+  prepared: boolean;
   error: string | null;
   onAmountChange: (value: number) => void;
   onChamferAngleChange: (value: number) => void;
@@ -194,7 +202,7 @@ export function EdgeModifierPanel({
       <div className="edge-modifier-header">
         <div>
           <strong>{title}</strong>
-          <span>{selectedCount} of {availableCount} sharp edges selected</span>
+          <span>{edgeModifierSelectionStatus(prepared, selectedCount, availableCount)}</span>
         </div>
         <button type="button" aria-label={`Cancel ${kind}`} onClick={onCancel}><X size={20} /></button>
       </div>
@@ -205,12 +213,12 @@ export function EdgeModifierPanel({
       </div>
 
       <div className="edge-modifier-selection-help">
-        Click highlighted model edges to toggle them. Hold Shift to add or remove a single edge.
+        {prepared ? "Click highlighted model edges to toggle them. Hold Shift to add or remove a single edge." : "Loading CAD edge data from the local browser worker."}
       </div>
 
       <div className="edge-modifier-quick-actions">
-        <button type="button" onClick={onSelectAll}>All sharp edges</button>
-        <button type="button" onClick={onClear}>Clear</button>
+        <button type="button" disabled={!prepared || busy} onClick={onSelectAll}>All sharp edges</button>
+        <button type="button" disabled={!prepared || busy} onClick={onClear}>Clear</button>
       </div>
 
       {appliedFeatureCount > 0 ? (
@@ -253,26 +261,27 @@ export function EdgeModifierPanel({
         step={EDGE_MODIFIER_AMOUNT_STEP}
         workspace={workspace}
         length
+        disabled={!prepared || busy}
         onChange={onAmountChange}
       />
 
-      {kind === "chamfer" ? <EdgeModifierSlider label="Angle" value={chamferAngle} min={5} max={85} step={1} unit="deg" workspace={workspace} onChange={onChamferAngleChange} /> : null}
+      {kind === "chamfer" ? <EdgeModifierSlider label="Angle" value={chamferAngle} min={5} max={85} step={1} unit="deg" workspace={workspace} disabled={!prepared || busy} onChange={onChamferAngleChange} /> : null}
 
-      <EdgeModifierSlider label="Sharp-edge threshold" value={sharpAngle} min={1} max={120} step={1} unit="deg" workspace={workspace} onChange={onSharpAngleChange} />
+      <EdgeModifierSlider label="Sharp-edge threshold" value={sharpAngle} min={1} max={CAD_MODIFIER_MAX_SHARP_ANGLE} step={1} unit="deg" workspace={workspace} disabled={!prepared || busy} onChange={onSharpAngleChange} />
 
       <label className="edge-modifier-check">
-        <input type="checkbox" checked={tangentChain} onChange={(event) => onTangentChainChange(event.currentTarget.checked)} />
+        <input type="checkbox" checked={tangentChain} disabled={!prepared || busy} onChange={(event) => onTangentChainChange(event.currentTarget.checked)} />
         <span>Select tangent chains</span>
       </label>
 
       <label className="edge-modifier-check">
-        <input type="checkbox" checked={preserveEdgeSize} onChange={(event) => onPreserveEdgeSizeChange(event.currentTarget.checked)} />
+        <input type="checkbox" checked={preserveEdgeSize} disabled={!prepared || busy} onChange={(event) => onPreserveEdgeSizeChange(event.currentTarget.checked)} />
         <span>Keep edge size when resizing</span>
       </label>
 
       <label className="edge-modifier-field">
         <span>Preview quality</span>
-        <select value={quality} onChange={(event) => onQualityChange(event.currentTarget.value as CadModifierQuality)}>
+        <select value={quality} disabled={!prepared || busy} onChange={(event) => onQualityChange(event.currentTarget.value as CadModifierQuality)}>
           <option value="draft">Draft</option>
           <option value="standard">Standard</option>
           <option value="fine">Fine</option>
@@ -282,7 +291,7 @@ export function EdgeModifierPanel({
       {error ? <div className="edge-modifier-error" role="alert">{error}</div> : null}
       <div className="edge-modifier-footer">
         <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
-        <button type="button" className="primary" disabled={busy || selectedCount === 0 || Boolean(error)} onClick={onApply}>
+        <button type="button" className="primary" disabled={!prepared || busy || selectedCount === 0 || Boolean(error)} onClick={onApply}>
           {busy ? <LoaderCircle className="edge-modifier-spinner" size={17} /> : <Check size={17} />}
           Apply
         </button>

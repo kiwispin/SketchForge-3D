@@ -61,3 +61,13 @@ remains complete, fixed-size, and rotates as one unit toward the active face.
 `tests/unit/transformOverlayTypes.test.ts` covers projected protractors, signed
 world-plane angles, movement projection, and the measured 129/168 inner snap
 band with 22.5-degree, one-degree, and Shift 45-degree behavior.
+
+## Port note (upstream sync)
+
+Ported onto the upstream base with the rest of the fork's gizmo work. On this
+base the selection frame is aligned to the active placement workplane, so the
+"world" planes above are the workplane's axes: on the base workplane they are
+the world axes the oracle fixture describes, and on a tilted workplane the X/Y/Z
+controls rotate about that workplane's X, normal and Z
+(`frameRotationPlanes` in `transformOverlayTypes.ts`). The browser checks
+above were made against the fork and should be repeated on this base.

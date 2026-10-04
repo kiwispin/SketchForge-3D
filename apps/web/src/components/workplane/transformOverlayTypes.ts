@@ -1,4 +1,4 @@
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 
 export type TransformHandleKind = "scale" | "height" | "lift" | "move" | "rotate";
 export type RotationAxis = "x" | "y" | "z";
@@ -48,6 +48,26 @@ export const WORLD_ROTATION_PLANES: Record<RotationAxis, { axisVector: WorldVec3
   z: { axisVector: { x: 0, y: 0, z: 1 }, planeU: { x: 1, y: 0, z: 0 }, planeV: { x: 0, y: 1, z: 0 } },
 };
 
+export type RotationPlaneBasis = Record<RotationAxis, { axisVector: WorldVec3; planeU: WorldVec3; planeV: WorldVec3 }>;
+
+/**
+ * The same right-handed plane bases as WORLD_ROTATION_PLANES, expressed in a
+ * placement workplane's frame (xAxis, normal, zAxis). On the base workplane the
+ * frame axes are the world axes and this returns WORLD_ROTATION_PLANES; on a
+ * tilted workplane the X/Y/Z handles rotate about that workplane's axes.
+ * The frame must be right-handed (xAxis × normal = zAxis), which
+ * placementWorkplaneFromSurface guarantees.
+ */
+export function frameRotationPlanes(xAxis: WorldVec3, normal: WorldVec3, zAxis: WorldVec3): RotationPlaneBasis {
+  // `0 - v` (not `-v`) keeps zero components as +0 for stable equality.
+  const negativeZ = { x: 0 - zAxis.x, y: 0 - zAxis.y, z: 0 - zAxis.z };
+  return {
+    x: { axisVector: { ...xAxis }, planeU: { ...normal }, planeV: { ...zAxis } },
+    y: { axisVector: { ...normal }, planeU: { ...xAxis }, planeV: negativeZ },
+    z: { axisVector: { ...zAxis }, planeU: { ...xAxis }, planeV: { ...normal } },
+  };
+}
+
 function addWorldVec3(a: WorldVec3, b: WorldVec3): WorldVec3 {
   return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
 }
@@ -63,8 +83,9 @@ export function buildRotationPlaneDescriptor(
   handleAnchor: ScreenVec2,
   handleWorldAnchor: WorldVec3,
   viewport: { width: number; height: number },
+  planes: RotationPlaneBasis = WORLD_ROTATION_PLANES,
 ): RotationPlaneDescriptor {
-  const plane = WORLD_ROTATION_PLANES[axis];
+  const plane = planes[axis];
   const screenCenter = project(pivot);
   const screenU = subtractScreenVec2(project(addWorldVec3(pivot, plane.planeU)), screenCenter);
   const screenV = subtractScreenVec2(project(addWorldVec3(pivot, plane.planeV)), screenCenter);
@@ -233,6 +254,8 @@ export type TransformOverlayProps = {
   hideDimensionMarks: boolean;
   rotationWheelAxis: RotationAxis;
   pinnedRotationWheelView: PinnedRotationWheelView | null;
+  onBeginCameraDrag: (event: ReactPointerEvent<Element>) => void;
+  onCameraWheel: (event: ReactWheelEvent<Element>) => void;
   onBeginTransform: (kind: TransformHandleKind, handleKey: string, event: ReactPointerEvent<Element>) => void;
   onMoveTransform: (clientX: number, clientY: number, shiftKey?: boolean, altKey?: boolean) => boolean;
   onFinishTransform: (event: ReactPointerEvent<Element>) => void;

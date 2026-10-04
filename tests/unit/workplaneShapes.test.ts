@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { WorkplaneShape } from "@/types/sketchforge";
 import {
   canonicalizeShape,
+  cloneWorkplaneShapeTreeWithFreshIds,
   cleanNearZero,
   cleanRotationDegrees,
   constrainedAxisMoveDelta,
   duplicateAxisOffset,
   fallbackSolidColor,
   keyboardMoveStep,
+  meshYawDegrees,
   mirroredAxisCount,
   mirrorSign,
   normalizeDegrees,
@@ -20,6 +22,7 @@ import {
   serializeShapesForSync,
   shapeDepth,
   shapeWidth,
+  withHoleMode,
   workplaneShapesEqual,
 } from "@/lib/workplaneShapes";
 
@@ -47,8 +50,9 @@ describe("workplane shape helpers", () => {
   it("uses snap-aware keyboard movement steps", () => {
     expect(keyboardMoveStep("Off", false)).toBe(1);
     expect(keyboardMoveStep("Off", true)).toBe(5);
-    expect(keyboardMoveStep("1.0", false)).toBe(1);
-    expect(keyboardMoveStep("1.0", true)).toBe(10);
+    expect(keyboardMoveStep("1.0 mm", false)).toBe(1);
+    expect(keyboardMoveStep("1.0 mm", true)).toBe(10);
+    expect(keyboardMoveStep("0.5 mm", false)).toBe(0.5);
     expect(keyboardMoveStep("Brick", false)).toBe(8);
     expect(keyboardMoveStep("Brick", true)).toBe(80);
   });
@@ -60,6 +64,17 @@ describe("workplane shape helpers", () => {
     expect(cleanRotationDegrees(-0.2)).toBe(0);
     expect(cleanRotationDegrees(359.8)).toBe(0);
     expect(cleanRotationDegrees(12.34)).toBe(12.3);
+  });
+
+  it("preserves the meaningful yaw of low-sided circular primitives", () => {
+    const triangularPrism = shape({ kind: "cylinder", width: 10, depth: 10, sides: 3 });
+
+    expect(meshYawDegrees({ ...triangularPrism, rotation: 30 })).toBeCloseTo(30);
+    expect(meshYawDegrees({ ...triangularPrism, rotation: 150 })).toBeCloseTo(30);
+    expect(meshYawDegrees({ ...triangularPrism, rotation: 90 })).toBeCloseTo(-30);
+    expect(meshYawDegrees({ ...triangularPrism, width: 12, rotation: 150 })).toBe(150);
+    expect(meshYawDegrees({ ...triangularPrism, kind: "box", rotation: 30 })).toBe(30);
+    expect(meshYawDegrees({ ...triangularPrism, sides: 96, rotation: 90 })).toBe(0);
   });
 
   it("cleans near-zero values and derives dimensions", () => {
@@ -133,6 +148,34 @@ describe("workplane shape helpers", () => {
     expect(canonical.groupedShapes?.[0].mirrorZ).toBeUndefined();
   });
 
+  it("assigns fresh object IDs throughout duplicated group trees", () => {
+    const original = shape({
+      id: "outer-group",
+      kind: "mesh",
+      groupedShapes: [
+        shape({ id: "round-roof-child", kind: "roundRoof" }),
+        shape({
+          id: "nested-group",
+          kind: "mesh",
+          groupedShapes: [shape({ id: "nested-box" })],
+        }),
+      ],
+    });
+
+    const duplicate = cloneWorkplaneShapeTreeWithFreshIds(original, "copy");
+    const collectIds = (entry: WorkplaneShape): string[] => [
+      entry.id,
+      ...(entry.groupedShapes ?? []).flatMap(collectIds),
+    ];
+    const originalIds = collectIds(original);
+    const duplicateIds = collectIds(duplicate);
+
+    expect(new Set(duplicateIds).size).toBe(duplicateIds.length);
+    expect(duplicateIds.every((id) => !originalIds.includes(id))).toBe(true);
+    expect(original.groupedShapes?.[0].id).toBe("round-roof-child");
+    expect(duplicate.groupedShapes?.[0].kind).toBe("roundRoof");
+  });
+
   it("keeps shallow equality strict for shape payload references", () => {
     const importedMesh = { positions: [0, 0, 0], baseWidth: 1, baseDepth: 1, baseHeight: 1, triangleCount: 0, sourceFormat: "json" as const };
     const first = shape({ importedMesh });
@@ -160,6 +203,40 @@ describe("workplane shape helpers", () => {
     expect(mirroredAxisCount(shape({ mirrorX: true, mirrorY: true }))).toBe(2);
     expect(fallbackSolidColor(shape({ kind: "sphere" }))).toBe("#0098c7");
     expect(fallbackSolidColor(shape({ kind: "box" }))).toBe("#d41721");
+  });
+
+  it("applies an explicitly selected group color to every nested child", () => {
+    const grouped = shape({
+      kind: "mesh",
+      color: "#111111",
+      groupedShapes: [
+        shape({ id: "child-box", color: "#222222" }),
+        shape({
+          id: "child-group",
+          kind: "mesh",
+          color: "#333333",
+          groupedShapes: [shape({ id: "grandchild", kind: "sphere", color: "#444444" })],
+        }),
+      ],
+    });
+
+    const recolored = withHoleMode(grouped, false, "#12abef");
+
+    expect(recolored.color).toBe("#12abef");
+    expect(recolored.groupedShapes?.map((child) => child.color)).toEqual(["#12abef", "#12abef"]);
+    expect(recolored.groupedShapes?.[1].groupedShapes?.[0].color).toBe("#12abef");
+    expect(grouped.groupedShapes?.[0].color).toBe("#222222");
+  });
+
+  it("preserves the selected solid color while toggling hole mode", () => {
+    const colored = shape({ color: "#35a86b" });
+    const hole = withHoleMode(colored, true);
+    const solid = withHoleMode(hole, false);
+
+    expect(hole.hole).toBe(true);
+    expect(hole.color).toBe("#35a86b");
+    expect(solid.hole).toBe(false);
+    expect(solid.color).toBe("#35a86b");
   });
 
   it("can resize the body while preserving fillet and chamfer boundary distances", () => {
@@ -190,5 +267,26 @@ describe("workplane shape helpers", () => {
     ]);
     expect(resizedImportedMeshPositions({ ...modified, edgeResizeMode: "scale" })[3]).toBe(-18);
     expect(resizedImportedCoordinates(modified, [-9, 1, 0, 9, 19, 0])).toEqual([-19, 1, 0, 19, 39, 0]);
+  });
+
+  it("uses child edge features when preserving the size of grouped treatments", () => {
+    const grouped = shape({
+      kind: "mesh",
+      edgeResizeMode: "preserve",
+      importedMesh: {
+        positions: [-10, 0, 0, -8, 2, 0, 8, 18, 0, 10, 20, 0],
+        baseWidth: 20,
+        baseDepth: 20,
+        baseHeight: 20,
+        triangleCount: 1,
+        sourceFormat: "json",
+      },
+      groupedShapes: [shape({ edgeTreatments: [{ kind: "fillet", amount: 2, edgeCount: 1 }] })],
+      width: 40,
+      height: 40,
+    });
+
+    expect(preservesEdgeTreatmentSize(grouped)).toBe(true);
+    expect(resizedImportedMeshPositions(grouped)).toEqual([-20, 0, 0, -18, 2, 0, 18, 38, 0, 20, 40, 0]);
   });
 });

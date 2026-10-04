@@ -1,16 +1,9 @@
 import { canonicalizeShape, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { createLocalId } from "@/lib/localIds";
-import * as THREE from "three";
+import { DEFAULT_GEAR_CENTER_HOLE_SIZE, DEFAULT_GEAR_HELIX_ANGLE, DEFAULT_GEAR_HELIX_QUALITY, DEFAULT_GEAR_TEETH, DEFAULT_GEAR_TOOTH_SIZE, DEFAULT_GEAR_TYPE } from "@/lib/gearGeometry";
 import type { ShapeAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export type ToolbarShapeAsset = ShapeAsset & { menuIcon: string };
-export type SurfacePlacement = {
-  orientation: "ground" | "top" | "bottom" | "front" | "back" | "right" | "left" | "face";
-  x: number;
-  y: number;
-  z: number;
-  normal?: [number, number, number];
-};
 export type ShapeLibraryCategory = {
   id: "basic" | "connectors" | "architectural" | "printableParts" | "text";
   label: string;
@@ -119,6 +112,7 @@ export const toolbarShapeAssets: ToolbarShapeAsset[] = [
   { id: "half-sphere", name: "Half Sphere", src: "assets/sketchforge/half-sphere-pink.png", menuIcon: "assets/sketchforge/half-sphere-pink.png", kind: "halfSphere", color: "#c9009a" },
   { id: "torus", name: "Torus", src: "assets/sketchforge/torus-blue.png", menuIcon: "assets/sketchforge/torus-blue.png", kind: "torus", color: "#4f46e5" },
   { id: "tube", name: "Tube", src: "assets/sketchforge/tube-orange.png", menuIcon: "assets/sketchforge/tube-orange.png", kind: "tube", color: "#9a5b13" },
+  { id: "gear", name: "Gear", src: "assets/sketchforge/gear-types/spur.png", menuIcon: "assets/sketchforge/gear-types/spur.png", kind: "gear", color: "#6f7f8d" },
 ];
 
 export const connectorShapeAssets: ToolbarShapeAsset[] = [
@@ -175,62 +169,32 @@ export function sceneShape(shape: Partial<WorkplaneShape> & Pick<WorkplaneShape,
     segments: shape.segments,
     topRadius: shape.topRadius,
     baseRadius: shape.baseRadius,
+    teeth: shape.teeth,
+    toothSize: shape.toothSize,
+    toothWidth: shape.toothWidth,
+    centerHoleSize: shape.centerHoleSize,
+    gearType: shape.gearType,
+    helixAngle: shape.helixAngle,
+    helixQuality: shape.helixQuality,
     text: shape.text,
     font: shape.font,
     importedMesh: shape.importedMesh,
+    localFrame: shape.localFrame,
     imagePlate: shape.imagePlate,
+    sketchProfile: shape.sketchProfile,
+    sketchOperation: shape.sketchOperation,
+    sketchRevolve: shape.sketchRevolve,
     groupedShapes: shape.groupedShapes,
     groupedBaseWidth: shape.groupedBaseWidth,
     groupedBaseDepth: shape.groupedBaseDepth,
     groupedBaseHeight: shape.groupedBaseHeight,
+    groupOperation: shape.groupOperation,
     locked: shape.locked ?? false,
     hidden: shape.hidden ?? false,
   });
 }
 
-function applySurfacePlacement(shape: WorkplaneShape, point?: { surface?: SurfacePlacement; rotation?: number; rotationX?: number; rotationZ?: number }) {
-  if (!point?.surface) {
-    return shape;
-  }
-  const surface = point.surface;
-  const { orientation, x, y, z } = surface;
-  const height = shape.height;
-  const next = { ...shape, rotation: point.rotation ?? shape.rotation ?? 0, rotationX: point.rotationX ?? shape.rotationX ?? 0, rotationZ: point.rotationZ ?? shape.rotationZ ?? 0 };
-  if (orientation === "face" && surface.normal) {
-    const normal = new THREE.Vector3(...surface.normal).normalize();
-    const center = new THREE.Vector3(x, y, z).addScaledVector(normal, height / 2);
-    next.x = center.x;
-    next.z = center.z;
-    next.elevation = center.y - height / 2;
-  } else if (orientation === "ground" || orientation === "top") {
-    next.x = x;
-    next.z = z;
-    next.elevation = y;
-  } else if (orientation === "bottom") {
-    next.x = x;
-    next.z = z;
-    next.elevation = y - height;
-  } else if (orientation === "front") {
-    next.x = x;
-    next.z = z + height / 2;
-    next.elevation = y - height / 2;
-  } else if (orientation === "back") {
-    next.x = x;
-    next.z = z - height / 2;
-    next.elevation = y - height / 2;
-  } else if (orientation === "right") {
-    next.x = x + height / 2;
-    next.z = z;
-    next.elevation = y - height / 2;
-  } else {
-    next.x = x - height / 2;
-    next.z = z;
-    next.elevation = y - height / 2;
-  }
-  return next;
-}
-
-export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotation?: number; rotationX?: number; rotationZ?: number; surface?: SurfacePlacement }): WorkplaneShape {
+export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: number; elevation?: number }): WorkplaneShape {
   const isConnectorPeg = asset.id === "connector-peg";
   const isConnectorSocket = asset.id === "connector-socket";
   const isNameTag = asset.id === "printable-name-tag";
@@ -242,9 +206,9 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
   const isArchitecturalDoor = asset.id === "architectural-door";
   const isArchitecturalRoof = asset.id === "architectural-roof";
   const roundProfile = asset.kind === "sphere" || asset.kind === "torus" || asset.kind === "ring" || asset.kind === "halfSphere";
-  const flatProfile = asset.kind === "torus" || asset.kind === "ring" || asset.kind === "text";
-  const size = isConnectorPeg ? 8 : isConnectorSocket ? 10 : isCableGuide ? 18 : isSpacer ? 12 : isArchitecturalWall ? 80 : isArchitecturalWindow ? 50 : isArchitecturalDoor ? 50 : isArchitecturalRoof ? 80 : roundProfile ? 22 : 20;
-  const height = isConnectorPeg ? 16 : isConnectorSocket ? 12 : isNameTag ? 3 : isPhoneStand ? 45 : isCableGuide ? 8 : isSpacer ? 10 : isArchitecturalWall ? 40 : isArchitecturalWindow ? 44 : isArchitecturalDoor ? 64 : isArchitecturalRoof ? 20 : asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
+  const flatProfile = asset.kind === "torus" || asset.kind === "ring" || asset.kind === "text" || asset.kind === "gear";
+  const size = isConnectorPeg ? 8 : isConnectorSocket ? 10 : isCableGuide ? 18 : isSpacer ? 12 : isArchitecturalWall ? 80 : isArchitecturalWindow ? 50 : isArchitecturalDoor ? 50 : isArchitecturalRoof ? 80 : asset.kind === "gear" ? 30 : roundProfile ? 22 : 20;
+  const height = isConnectorPeg ? 16 : isConnectorSocket ? 12 : isNameTag ? 3 : isPhoneStand ? 45 : isCableGuide ? 8 : isSpacer ? 10 : isArchitecturalWall ? 40 : isArchitecturalWindow ? 44 : isArchitecturalDoor ? 64 : isArchitecturalRoof ? 20 : asset.kind === "gear" ? 6 : asset.kind === "text" ? 10 : asset.kind === "roundRoof" ? 10 : asset.kind === "halfSphere" ? 11 : flatProfile ? 5 : 20;
   const width = isNameTag || isPhoneStand ? 70 : isArchitecturalWall ? 80 : isArchitecturalWindow || isArchitecturalDoor ? 50 : isArchitecturalRoof ? 80 : asset.kind === "text" ? 86 : size;
   const depth = isNameTag ? 28 : isPhoneStand ? 60 : isArchitecturalWall ? 8 : isArchitecturalWindow ? 6 : isArchitecturalDoor ? 8 : isArchitecturalRoof ? 60 : asset.kind === "text" ? 28 : size;
 
@@ -255,10 +219,10 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
       size: Math.max(childWidth, childDepth), width: childWidth, depth: childDepth, height: childHeight,
       rotation: 0, rotationX: 0, rotationZ: 0, locked: false, hidden: false, ...overrides,
     });
-    return applySurfacePlacement({
+    return {
       id: createLocalId(asset.id), name: asset.name, kind: "box", color,
       x: point?.x ?? 0, z: point?.z ?? 0, elevation: point?.elevation ?? 0,
-      size: 70, width: 70, depth: 28, height: 5, rotation: 0, rotationX: point?.rotationX ?? 0, rotationZ: point?.rotationZ ?? 0,
+      size: 70, width: 70, depth: 28, height: 5, rotation: 0, rotationX: 0, rotationZ: 0,
       groupedBaseWidth: 70, groupedBaseDepth: 28, groupedBaseHeight: 5,
       groupedShapes: [
         child("name-tag-plaque", "Name tag plaque", "box", 0, 0, 0, 70, 28, 4, { radius: 4, steps: 10 }),
@@ -266,7 +230,7 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
         child("name-tag-label", "NAME label", "text", 5, 0, 4, 42, 14, 1, { color: "#ffffff", text: "NAME", font: "Sans" }),
       ],
       locked: false, hidden: false,
-    }, point);
+    };
   }
 
   if (isPhoneStand) {
@@ -289,7 +253,7 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
       locked: false,
       hidden: false,
     });
-    return applySurfacePlacement({
+    return {
       id: createLocalId(asset.id),
       name: asset.name,
       kind: "box",
@@ -302,8 +266,8 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
       depth: 70,
       height: 50,
       rotation: 0,
-      rotationX: point?.rotationX ?? 0,
-      rotationZ: point?.rotationZ ?? 0,
+      rotationX: 0,
+      rotationZ: 0,
       groupedBaseWidth: 70,
       groupedBaseDepth: 70,
       groupedBaseHeight: 50,
@@ -314,7 +278,7 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
       ],
       locked: false,
       hidden: false,
-    }, point);
+    };
   }
 
   if (isArchitecturalWindow || isArchitecturalDoor) {
@@ -325,7 +289,7 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
       rotation: 0, rotationX: 0, rotationZ: 0, locked: false, hidden: false,
     });
     const window = isArchitecturalWindow;
-    const baseWidth = window ? 50 : 50;
+    const baseWidth = 50;
     const baseDepth = window ? 6 : 8;
     const baseHeight = window ? 44 : 64;
     const children = window
@@ -343,17 +307,17 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
           child("architectural-door-header", "Door header", 50, 8, 4, 0, 0, 60),
           child("architectural-door-handle", "Door handle", 3, 3, 3, 14, -2, 28, "#e2bd52"),
         ];
-    return applySurfacePlacement({
+    return {
       id: createLocalId(asset.id), name: asset.name, kind: "box", color,
       x: point?.x ?? 0, z: point?.z ?? 0, elevation: point?.elevation ?? 0,
       size: baseWidth, width: baseWidth, depth: baseDepth, height: baseHeight,
-      rotation: 0, rotationX: point?.rotationX ?? 0, rotationZ: point?.rotationZ ?? 0,
+      rotation: 0, rotationX: 0, rotationZ: 0,
       groupedBaseWidth: baseWidth, groupedBaseDepth: baseDepth, groupedBaseHeight: baseHeight,
       groupedShapes: children, locked: false, hidden: false,
-    }, point);
+    };
   }
 
-  return applySurfacePlacement({
+  return {
     id: createLocalId(asset.id),
     name: asset.name,
     kind: asset.kind,
@@ -367,8 +331,8 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
     depth,
     height,
     rotation: 0,
-    rotationX: point?.rotationX ?? 0,
-    rotationZ: point?.rotationZ ?? 0,
+    rotationX: 0,
+    rotationZ: 0,
     radius: asset.kind === "box" ? (isNameTag ? 3 : 0) : undefined,
     text: asset.kind === "text" ? "TEXT" : undefined,
     font: asset.kind === "text" ? "Multilanguage" : undefined,
@@ -378,7 +342,13 @@ export function makeShapeFromAsset(asset: ShapeAsset, point?: { x: number; z: nu
     segments: asset.kind === "cylinder" ? 1 : undefined,
     topRadius: asset.kind === "cone" ? 0 : undefined,
     baseRadius: asset.kind === "cone" ? size / 2 : undefined,
+    teeth: asset.kind === "gear" ? DEFAULT_GEAR_TEETH : undefined,
+    toothSize: asset.kind === "gear" ? DEFAULT_GEAR_TOOTH_SIZE : undefined,
+    centerHoleSize: asset.kind === "gear" ? DEFAULT_GEAR_CENTER_HOLE_SIZE : undefined,
+    gearType: asset.kind === "gear" ? DEFAULT_GEAR_TYPE : undefined,
+    helixAngle: asset.kind === "gear" ? DEFAULT_GEAR_HELIX_ANGLE : undefined,
+    helixQuality: asset.kind === "gear" ? DEFAULT_GEAR_HELIX_QUALITY : undefined,
     locked: false,
     hidden: false,
-  }, point);
+  };
 }

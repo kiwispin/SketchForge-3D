@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorkplaneWorkspaceSettings } from "@/types/sketchforge";
-import { formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay, normalizeScaleForUnits, scaleOptionsForUnits } from "@/lib/measurementUnits";
-import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
+import { formatMeasurementNumber, lengthDisplayUnit, millimetersToDisplay, normalizeScaleForUnits, parseMeasurementInput, scaleOptionsForUnits } from "@/lib/measurementUnits";
+import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint, workspaceHydrationSyncDecision } from "@/lib/workplaneSettings";
 
 describe("workplane settings helpers", () => {
   it("accepts known snap grid values and falls back for unknown values", () => {
@@ -27,6 +27,7 @@ describe("workplane settings helpers", () => {
           sizePreset: "",
           gridBlockSize: 2.5,
           gridBlockPreset: "Custom",
+          gridColor: "#a34fd1",
           background: "#123456",
           showShadows: false,
           showGrid: false,
@@ -43,6 +44,7 @@ describe("workplane settings helpers", () => {
       width: 500,
       gridBlockSize: 2.5,
       gridBlockPreset: "Custom",
+      gridColor: "#a34fd1",
       background: "#123456",
       showShadows: false,
       showGrid: false,
@@ -53,6 +55,10 @@ describe("workplane settings helpers", () => {
     });
 
     expect(normalizeWorkspaceSettings({ accuracy: 9 }, fallback).accuracy).toBe(fallback.accuracy);
+    expect(normalizeWorkspaceSettings({ historyLimit: 73 }).historyLimit).toBe(73);
+    expect(normalizeWorkspaceSettings({ historyLimit: 9000 }).historyLimit).toBe(5000);
+    expect(normalizeWorkspaceSettings({ historyLimit: "invalid" }).historyLimit).toBe(100);
+    expect(normalizeWorkspaceSettings({ gridColor: "not-a-color" }).gridColor).toBe(DEFAULT_WORKPLANE_WORKSPACE.gridColor);
   });
 
   it("keeps scale options in the selected unit family", () => {
@@ -78,12 +84,35 @@ describe("workplane settings helpers", () => {
     expect(formatMeasurementNumber(0.0004, 1, 0.001)).toBe("0.0004");
   });
 
+  it("accepts dot and comma decimal measurement input", () => {
+    expect(parseMeasurementInput("12.5")).toBe(12.5);
+    expect(parseMeasurementInput("12,5")).toBe(12.5);
+    expect(parseMeasurementInput("1.234,5")).toBe(1234.5);
+    expect(parseMeasurementInput("1,234.5")).toBe(1234.5);
+    expect(parseMeasurementInput("not a measurement")).toBeNaN();
+  });
+
   it("fingerprints workspace and snap settings together", () => {
     const base = workplaneSettingsFingerprint(DEFAULT_WORKPLANE_WORKSPACE, "1.0 mm");
+    const equivalentNewReference = workplaneSettingsFingerprint({ ...DEFAULT_WORKPLANE_WORKSPACE }, "1.0 mm");
     const changedSnap = workplaneSettingsFingerprint(DEFAULT_WORKPLANE_WORKSPACE, "5.0 mm");
     const changedWorkspace = workplaneSettingsFingerprint({ ...DEFAULT_WORKPLANE_WORKSPACE, width: 300 }, "1.0 mm");
 
+    expect(equivalentNewReference).toBe(base);
     expect(changedSnap).not.toBe(base);
     expect(changedWorkspace).not.toBe(base);
+  });
+
+  it("blocks the previous project's workspace while a new project hydrates", () => {
+    const projectOne = workplaneSettingsFingerprint({ ...DEFAULT_WORKPLANE_WORKSPACE, width: 350, depth: 260 }, "5.0 mm");
+    const projectTwo = workplaneSettingsFingerprint(DEFAULT_WORKPLANE_WORKSPACE, "1.0 mm");
+
+    const staleCommit = workspaceHydrationSyncDecision(projectTwo, projectOne);
+    expect(staleCommit).toEqual({ shouldSync: false, pendingFingerprint: projectTwo });
+
+    const hydratedCommit = workspaceHydrationSyncDecision(staleCommit.pendingFingerprint, projectTwo);
+    expect(hydratedCommit).toEqual({ shouldSync: false, pendingFingerprint: null });
+
+    expect(workspaceHydrationSyncDecision(hydratedCommit.pendingFingerprint, projectTwo).shouldSync).toBe(true);
   });
 });

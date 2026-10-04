@@ -1,4 +1,5 @@
-import type { GridSize, WorkplaneShape } from "@/types/sketchforge";
+import { createLocalId } from "@/lib/localIds";
+import type { GridSize, ShapeLocalFrame, WorkplaneShape } from "@/types/sketchforge";
 
 export function normalizeDegrees(value: number) {
   return ((value % 360) + 360) % 360;
@@ -21,8 +22,17 @@ export function cleanNearZero(value: number, epsilon = 0.005) {
   return Math.abs(value) < epsilon ? 0 : value;
 }
 
+export function cloneWorkplaneShapeTreeWithFreshIds(shape: WorkplaneShape, suffix: string): WorkplaneShape {
+  return {
+    ...shape,
+    id: createLocalId(`${shape.id}-${suffix}`),
+    groupedShapes: shape.groupedShapes?.map((child) => cloneWorkplaneShapeTreeWithFreshIds(child, suffix)),
+  };
+}
+
 export const DUPLICATE_PLACEMENT_OFFSET = 2;
 
+/** Arrow-key nudge distance: one snap step (or 1 mm with snapping off); Shift moves ten steps (5 mm when off). */
 export function keyboardMoveStep(grid: GridSize, coarse: boolean) {
   const base = grid === "Off" ? 1 : grid === "Brick" ? 8 : Number.parseFloat(grid) || 1;
   return coarse ? (grid === "Off" ? 5 : base * 10) : base;
@@ -65,11 +75,34 @@ export function shapeDepth(shape: WorkplaneShape) {
   return shape.depth ?? shape.size;
 }
 
-export function preservesEdgeTreatmentSize(shape: WorkplaneShape) {
-  return shape.edgeResizeMode === "preserve" && Boolean(shape.importedMesh && shape.edgeTreatments?.length);
+export function meshYawDegrees(shape: WorkplaneShape) {
+  const isRoundPrimitive = !shape.importedMesh && (shape.kind === "cylinder" || shape.kind === "cone");
+  const isCircular = Math.abs(shapeWidth(shape) - shapeDepth(shape)) < 0.0005;
+  if (!isRoundPrimitive || !isCircular) {
+    return shape.rotation;
+  }
+
+  // A tessellated circular primitive is only invariant by one whole side step.
+  // Preserve the remaining yaw so low-sided cylinders (for example a triangular
+  // prism) are baked and used in booleans at the same angle shown in the viewport.
+  const sides = Math.max(3, Math.round(shape.sides ?? 96));
+  const sideStep = 360 / sides;
+  const normalized = normalizeDegrees(shape.rotation);
+  const equivalentYaw = normalized - Math.round(normalized / sideStep) * sideStep;
+  return Math.abs(equivalentYaw) < 1e-9 ? 0 : equivalentYaw;
 }
 
-function edgePreservedCoordinate(value: number, baseSize: number, targetSize: number, centered: boolean, requestedZone: number) {
+export function edgeTreatmentPreserveZone(shape: WorkplaneShape): number {
+  const own = Math.max(...(shape.edgeTreatments ?? []).map((feature) => feature.amount), 0);
+  const child = Math.max(...(shape.groupedShapes ?? []).map(edgeTreatmentPreserveZone), 0);
+  return Math.max(own, child);
+}
+
+export function preservesEdgeTreatmentSize(shape: WorkplaneShape) {
+  return shape.edgeResizeMode === "preserve" && Boolean(shape.importedMesh && edgeTreatmentPreserveZone(shape) > 0);
+}
+
+export function edgePreservedCoordinate(value: number, baseSize: number, targetSize: number, centered: boolean, requestedZone: number) {
   const oldMin = centered ? -baseSize / 2 : 0;
   const oldMax = oldMin + baseSize;
   const newMin = centered ? -targetSize / 2 : 0;
@@ -93,7 +126,7 @@ export function resizedImportedCoordinates(shape: WorkplaneShape, sourcePosition
   const depth = shapeDepth(shape);
   const height = shape.height;
   const preserve = preservesEdgeTreatmentSize(shape);
-  const zone = preserve ? Math.max(...(shape.edgeTreatments ?? []).map((feature) => feature.amount), 0) : 0;
+  const zone = preserve ? edgeTreatmentPreserveZone(shape) : 0;
   const positions = new Array<number>(sourcePositions.length);
   for (let index = 0; index + 2 < sourcePositions.length; index += 3) {
     if (preserve) {
@@ -149,11 +182,23 @@ export function proportionalResizeDimensions(
 }
 
 export function fallbackSolidColor(shape: WorkplaneShape) {
+  if (shape.sketchOperation === "revolve") return "#78b96b";
   if (shape.kind === "cylinder") return "#d97813";
   if (shape.kind === "sphere") return "#0098c7";
   if (shape.kind === "cone") return "#6e2786";
   if (shape.kind === "pyramid") return "#f2cf10";
+  if (shape.kind === "gear") return "#6f7f8d";
   return "#d41721";
+}
+
+export function withHoleMode(shape: WorkplaneShape, hole: boolean, parentColor?: string): WorkplaneShape {
+  const color = parentColor ?? shape.color;
+  return {
+    ...shape,
+    hole,
+    color,
+    groupedShapes: shape.groupedShapes?.map((child) => withHoleMode(child, hole, parentColor)),
+  };
 }
 
 export function mirrorSign(value?: boolean) {
@@ -164,9 +209,28 @@ export function mirroredAxisCount(shape: WorkplaneShape) {
   return [shape.mirrorX, shape.mirrorY, shape.mirrorZ].filter(Boolean).length;
 }
 
+/**
+ * A valid, non-identity orientation record, or undefined. The same object is
+ * returned when it is already valid so shape equality by reference holds.
+ */
+export function normalizeShapeLocalFrame(value: unknown): ShapeLocalFrame | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const quaternion = (value as { quaternion?: unknown }).quaternion;
+  if (!Array.isArray(quaternion) || quaternion.length !== 4 || !quaternion.every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
+    return undefined;
+  }
+  const [x, y, z, w] = quaternion as number[];
+  const length = Math.hypot(x, y, z, w);
+  if (length < 1e-9) return undefined;
+  // Identity (q or -q) means "never rotated": store nothing.
+  if (Math.abs(Math.abs(w) / length - 1) < 1e-12) return undefined;
+  return value as ShapeLocalFrame;
+}
+
 export function canonicalizeShape(shape: WorkplaneShape): WorkplaneShape {
   const next: WorkplaneShape = {
     ...shape,
+    localFrame: normalizeShapeLocalFrame(shape.localFrame),
     rotation: cleanRotationDegrees(shape.rotation ?? 0),
     rotationX: cleanRotationDegrees(shape.rotationX ?? 0),
     rotationZ: cleanRotationDegrees(shape.rotationZ ?? 0),
@@ -213,11 +277,20 @@ export function workplaneShapesEqual(a: WorkplaneShape, b: WorkplaneShape) {
     a.segments === b.segments &&
     a.topRadius === b.topRadius &&
     a.baseRadius === b.baseRadius &&
+    a.teeth === b.teeth &&
+    a.toothSize === b.toothSize &&
+    a.toothWidth === b.toothWidth &&
+    a.centerHoleSize === b.centerHoleSize &&
+    a.gearType === b.gearType &&
+    a.helixAngle === b.helixAngle &&
+    a.helixQuality === b.helixQuality &&
     a.text === b.text &&
     a.font === b.font &&
     a.importedMesh === b.importedMesh &&
     a.imagePlate === b.imagePlate &&
     a.sketchProfile === b.sketchProfile &&
+    a.sketchOperation === b.sketchOperation &&
+    a.sketchRevolve === b.sketchRevolve &&
     a.edgeTreatments === b.edgeTreatments &&
     a.edgeTreatmentHistory === b.edgeTreatmentHistory &&
     a.cadDisplayEdges === b.cadDisplayEdges &&
@@ -226,10 +299,12 @@ export function workplaneShapesEqual(a: WorkplaneShape, b: WorkplaneShape) {
     a.cadBrep === b.cadBrep &&
     a.cadBrepFrame === b.cadBrepFrame &&
     a.cadPrimitiveFrame === b.cadPrimitiveFrame &&
+    a.localFrame === b.localFrame &&
     a.groupedShapes === b.groupedShapes &&
     a.groupedBaseWidth === b.groupedBaseWidth &&
     a.groupedBaseDepth === b.groupedBaseDepth &&
     a.groupedBaseHeight === b.groupedBaseHeight &&
+    a.groupOperation === b.groupOperation &&
     a.locked === b.locked &&
     a.hidden === b.hidden
   );

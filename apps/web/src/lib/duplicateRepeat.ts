@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { cadTransformToMatrix } from "@/lib/cadBakeMetadata";
+import { resizeShapeInOwnFrame, shapeNeedsOwnFrameMeshResize, shapeOwnFrame } from "@/lib/shapeLocalFrame";
+import { normalizeShapeLocalFrame } from "@/lib/workplaneShapes";
 import type { WorkplaneShape } from "@/types/sketchforge";
 
 export type DuplicateRepeatPattern = {
@@ -37,6 +39,16 @@ export function displayedRotationDegrees(shape: WorkplaneShape): RotationDegrees
 }
 
 function bakedRotationDegrees(shape: WorkplaneShape): RotationDegrees {
+  const record = shape.importedMesh ? normalizeShapeLocalFrame(shape.localFrame) : undefined;
+  if (record) {
+    const [x, y, z, w] = record.quaternion;
+    const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(x, y, z, w).normalize(), "XYZ");
+    return {
+      rotationX: THREE.MathUtils.radToDeg(euler.x),
+      rotation: THREE.MathUtils.radToDeg(euler.y),
+      rotationZ: THREE.MathUtils.radToDeg(euler.z),
+    };
+  }
   const sourceTransform = shape.cadPrimitiveFrame?.frame?.sourceTransform;
   if (sourceTransform && sourceTransform.length === 12 && sourceTransform.every(Number.isFinite)) {
     const matrix = cadTransformToMatrix(sourceTransform);
@@ -60,7 +72,31 @@ function trueDimensions(shape: WorkplaneShape) {
   if (primitive && Number.isFinite(primitive.width) && Number.isFinite(primitive.depth) && Number.isFinite(primitive.height)) {
     return { width: primitive.width, depth: primitive.depth, height: primitive.height };
   }
+  // A baked rotated mesh stores world bounds; its true size is along its own axes.
+  const frame = shapeNeedsOwnFrameMeshResize(shape) ? shapeOwnFrame(shape) : null;
+  if (frame) {
+    return { width: frame.width, depth: frame.depth, height: frame.height };
+  }
   return { width: shape.width, depth: shape.depth, height: shape.height };
+}
+
+/**
+ * A rotated mesh repeats its scale along its own axes (scaling its world
+ * bounds would shear it). Returns the rescaled shape, or null when the usual
+ * world-size scaling applies.
+ */
+function scaledAlongOwnFrame(current: WorkplaneShape, widthRatio: number, depthRatio: number, heightRatio: number) {
+  if (!shapeNeedsOwnFrameMeshResize(current)) return null;
+  const frame = shapeOwnFrame(current);
+  if (!frame) return null;
+  if ([widthRatio, depthRatio, heightRatio].every((ratio) => Math.abs(ratio - 1) < 1e-9)) return current;
+  const patch = resizeShapeInOwnFrame(current, frame, {
+    center: frame.center,
+    width: Math.max(0.01, frame.width * widthRatio),
+    depth: Math.max(0.01, frame.depth * depthRatio),
+    height: Math.max(0.01, frame.height * heightRatio),
+  });
+  return patch ? { ...current, ...patch } as WorkplaneShape : null;
 }
 
 /**
@@ -77,6 +113,18 @@ export function repeatShapeTransform(current: WorkplaneShape, source: WorkplaneS
   const heightRatio = sourceDims.height > 0 ? currentDims.height / sourceDims.height : 1;
   const currentRotation = displayedRotationDegrees(current);
   const sourceRotation = displayedRotationDegrees(source);
+  const ownScaled = scaledAlongOwnFrame(current, widthRatio, depthRatio, heightRatio);
+  if (ownScaled) {
+    return {
+      ...ownScaled,
+      x: ownScaled.x + (current.x - source.x),
+      z: ownScaled.z + (current.z - source.z),
+      elevation: (ownScaled.elevation ?? 0) + ((current.elevation ?? 0) - (source.elevation ?? 0)),
+      rotation: cleanRotationDelta((ownScaled.rotation ?? 0) + (currentRotation.rotation - sourceRotation.rotation)),
+      rotationX: cleanRotationDelta((ownScaled.rotationX ?? 0) + (currentRotation.rotationX - sourceRotation.rotationX)),
+      rotationZ: cleanRotationDelta((ownScaled.rotationZ ?? 0) + (currentRotation.rotationZ - sourceRotation.rotationZ)),
+    };
+  }
   const width = Math.max(0.01, (shapeWidth(current) ?? current.width) * widthRatio);
   const depth = Math.max(0.01, (shapeDepth(current) ?? current.depth) * depthRatio);
   const height = Math.max(0.01, current.height * heightRatio);

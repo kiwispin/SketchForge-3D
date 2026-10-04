@@ -1,19 +1,31 @@
 "use client";
 
-import { Clock3, CloudDownload, EllipsisVertical, FileUp, GraduationCap, Grid3X3, HomeIcon, List, Pencil, Plus, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Clock3, CloudDownload, EllipsisVertical, FileUp, FolderKanban, GraduationCap, Grid3X3, HomeIcon, List, Pencil, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
+import { applyAppTheme, readStoredAppTheme, resolveAppTheme, storeAppTheme, type AppThemePreference, type ResolvedAppTheme } from "@/lib/appTheme";
+import { APP_ROOT_PATH, ASSET_BASE_PATH } from "@/lib/basePath";
+import { hydrateEditorHistoryState, type EditorHistoryEntry } from "@/lib/editorHistory";
 import { tutorials } from "@/lib/tutorials";
+import { DriveError, downloadProjectFromDrive, isDriveConfigured, listProjectsFromDrive, preloadGoogleIdentity, type DriveProjectFileInfo } from "@/lib/googleDrive";
 import { createLocalId } from "@/lib/localIds";
-import { isProjectFileName, parseProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
-import { DriveError, downloadProjectFromDrive, isDriveConfigured, listProjectsFromDrive, type DriveProjectFileInfo } from "@/lib/googleDrive";
+import { isProjectFileName, looksLikeProjectFile, restoredProjectFromLegacyFile } from "@/lib/projectFile";
+import {
+  horizontalPlacementWorkplane,
+  normalizePlacementWorkplane,
+  placementWorkplaneFingerprint,
+  type PlacementWorkplane,
+} from "@/lib/placementWorkplane";
+import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceFormatForFileName } from "@/lib/projectAssets";
+import { hydrateProjectShapeState, type ImportedMeshResource } from "@/lib/projectShapePersistence";
+import { exportSkfProject, importSkfProject, SKF_CREATED_WITH_VERSION, type SkfRestoredProject } from "@/lib/skfProject";
 import { importExtensionSupported } from "@/lib/stlImport";
-import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
-import type { GridSize, ProjectDriveFile, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
+import type { GridSize, ProjectAsset, ProjectDriveFile, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 type AppView = "dashboard" | "editor";
 type ViewMode = "grid" | "list";
-type DashboardSection = "home" | "challenges" | "learn";
+type DashboardSection = "home" | "shared" | "challenges" | "learn";
 type DownloadMode = "browser" | "folder";
 
 type DashboardProject = {
@@ -28,7 +40,24 @@ type DashboardProject = {
   revision?: number;
   workspace?: WorkplaneWorkspaceSettings;
   snapGrid?: GridSize;
+  placementElevation?: number;
+  placementWorkplane?: PlacementWorkplane;
+  sketchPlacementWorkplane?: PlacementWorkplane;
+  sharedProject?: { fileName: string; revision: string };
   drive?: ProjectDriveFile | null;
+};
+
+type DriveOpenDialogState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; files: DriveProjectFileInfo[]; openingFileId?: string; message?: string };
+
+type SharedProject = {
+  fileName: string;
+  name: string;
+  updatedAt: number;
+  size: number;
+  revision: string;
 };
 
 type StoredDashboardProject = Partial<DashboardProject> & {
@@ -38,26 +67,60 @@ type StoredDashboardProject = Partial<DashboardProject> & {
 type ProjectShapeCacheEntry = {
   revision: number;
   shapes: WorkplaneShape[];
+  history: EditorHistoryEntry[];
+  historyIndex: number;
+  assets: ProjectAsset[];
 };
 
-type DriveOpenDialogState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; files: DriveProjectFileInfo[]; openingFileId?: string; message?: string };
-
-type ProjectShapeRecord = ProjectShapeCacheEntry & {
+type ProjectShapeRecord = {
   id: string;
+  revision: number;
+  skfPackage?: Uint8Array;
+  shapes?: WorkplaneShape[];
+  history?: EditorHistoryEntry[];
+  historyIndex?: number;
+  assets?: ProjectAsset[];
+  meshResourceIds?: string[];
+  assetResourceIds?: string[];
   updatedAt: number;
 };
+
+type ProjectShapeSaveContext = {
+  projectName: string;
+  createdAt: number;
+  workspace: WorkplaneWorkspaceSettings;
+  snapGrid: GridSize;
+  placementElevation: number;
+  placementWorkplane: PlacementWorkplane;
+  sketchPlacementWorkplane: PlacementWorkplane;
+};
+
+type ProjectShapeResourceRecord =
+  | {
+      id: string;
+      projectId: string;
+      resourceId: string;
+      kind: "mesh";
+      mesh: ImportedMeshResource;
+    }
+  | {
+      id: string;
+      projectId: string;
+      resourceId: string;
+      kind: "asset";
+      asset: ProjectAsset;
+    };
 
 const PROJECTS_STORAGE_KEY = "sketchForge.projects";
 const PROJECT_SHAPES_DB_NAME = "sketchForge.projectShapes";
 const PROJECT_SHAPES_STORE_NAME = "projectShapes";
+const PROJECT_SHAPE_RESOURCES_STORE_NAME = "projectShapeResources";
 const DOWNLOAD_MODE_STORAGE_KEY = "sketchForge.downloadMode";
 const DOWNLOAD_FOLDER_STORAGE_KEY = "sketchForge.downloadFolder";
 const PROJECT_ACCENTS: DashboardProject["accent"][] = ["cyan", "green", "gold", "red"];
 const STATIC_EXPORT_BUILD = process.env.NEXT_PUBLIC_STATIC_EXPORT === "true";
-const APP_ROOT_PATH = process.env.NEXT_PUBLIC_BASE_PATH ? `${process.env.NEXT_PUBLIC_BASE_PATH}/` : "/";
+const EDITOR_SKELETON_MIN_DURATION_MS = 320;
+const knownProjectResourceKeys = new Map<string, Set<string>>();
 
 function formatUpdated(timestamp: number) {
   const age = Date.now() - timestamp;
@@ -67,6 +130,61 @@ function formatUpdated(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(timestamp));
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function projectShapeCacheEntry(
+  revision: number,
+  shapes: WorkplaneShape[],
+  history?: EditorHistoryEntry[],
+  historyIndex?: number,
+  assets: ProjectAsset[] = [],
+): ProjectShapeCacheEntry {
+  const hydrated = hydrateEditorHistoryState(shapes, history, historyIndex);
+  return {
+    revision,
+    shapes: hydrated.entries[hydrated.index]?.shapes ?? shapes,
+    history: hydrated.entries,
+    historyIndex: hydrated.index,
+    assets: dedupeProjectAssets(assets),
+  };
+}
+
+function projectShapeCacheEntryFromEditor(
+  revision: number,
+  shapes: WorkplaneShape[],
+  history: EditorHistoryEntry[],
+  historyIndex: number,
+  assets: ProjectAsset[],
+): ProjectShapeCacheEntry {
+  if (history.length === 0) {
+    return projectShapeCacheEntry(revision, shapes, history, historyIndex, assets);
+  }
+  return {
+    revision,
+    shapes,
+    history,
+    historyIndex: Math.min(Math.max(0, historyIndex), history.length - 1),
+    assets: dedupeProjectAssets(assets),
+  };
+}
+
+function projectShapeSaveContext(project: Pick<DashboardProject, "name" | "createdAt" | "workspace" | "snapGrid" | "placementElevation" | "placementWorkplane" | "sketchPlacementWorkplane">): ProjectShapeSaveContext {
+  const placementElevation = Number.isFinite(project.placementElevation) ? project.placementElevation ?? 0 : 0;
+  return {
+    projectName: project.name,
+    createdAt: project.createdAt,
+    workspace: normalizeWorkspaceSettings(project.workspace),
+    snapGrid: normalizeSnapGrid(project.snapGrid),
+    placementElevation,
+    placementWorkplane: normalizePlacementWorkplane(project.placementWorkplane, placementElevation),
+    sketchPlacementWorkplane: normalizePlacementWorkplane(project.sketchPlacementWorkplane),
+  };
+}
+
 function openProjectShapesDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof window === "undefined" || !window.indexedDB) {
@@ -74,11 +192,14 @@ function openProjectShapesDb() {
       return;
     }
 
-    const request = window.indexedDB.open(PROJECT_SHAPES_DB_NAME, 1);
+    const request = window.indexedDB.open(PROJECT_SHAPES_DB_NAME, 3);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(PROJECT_SHAPES_STORE_NAME)) {
         database.createObjectStore(PROJECT_SHAPES_STORE_NAME, { keyPath: "id" });
+      }
+      if (!database.objectStoreNames.contains(PROJECT_SHAPE_RESOURCES_STORE_NAME)) {
+        database.createObjectStore(PROJECT_SHAPE_RESOURCES_STORE_NAME, { keyPath: "id" });
       }
     };
     request.onerror = () => reject(request.error ?? new Error("Could not open project shape storage"));
@@ -86,22 +207,110 @@ function openProjectShapesDb() {
   });
 }
 
+function projectResourceKey(kind: ProjectShapeResourceRecord["kind"], resourceId: string) {
+  return `${kind}:${resourceId}`;
+}
+
+function projectResourceRecordId(projectId: string, kind: ProjectShapeResourceRecord["kind"], resourceId: string) {
+  return `${projectId}:${projectResourceKey(kind, resourceId)}`;
+}
+
 async function loadProjectShapes(projectId: string) {
   const database = await openProjectShapesDb();
-  return new Promise<ProjectShapeRecord | null>((resolve, reject) => {
+  const record = await new Promise<ProjectShapeRecord | null>((resolve, reject) => {
     const transaction = database.transaction(PROJECT_SHAPES_STORE_NAME, "readonly");
     const request = transaction.objectStore(PROJECT_SHAPES_STORE_NAME).get(projectId);
     request.onerror = () => reject(request.error ?? new Error("Could not load project shapes"));
     request.onsuccess = () => resolve((request.result as ProjectShapeRecord | undefined) ?? null);
-    transaction.oncomplete = () => database.close();
-    transaction.onerror = () => {
-      database.close();
-      reject(transaction.error ?? new Error("Could not load project shapes"));
-    };
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not load project shapes"));
   });
+  if (!record) {
+    database.close();
+    return null;
+  }
+  if (record.skfPackage) {
+    database.close();
+    const restored = await importSkfProject(record.skfPackage);
+    return {
+      ...record,
+      shapes: restored.shapes,
+      history: restored.history,
+      historyIndex: restored.historyIndex,
+      assets: restored.assets,
+    };
+  }
+
+  const meshResourceIds = record.meshResourceIds ?? [];
+  const assetResourceIds = record.assetResourceIds ?? [];
+  if (meshResourceIds.length === 0 && assetResourceIds.length === 0) {
+    database.close();
+    return {
+      ...record,
+      shapes: record.shapes ?? [],
+    };
+  }
+
+  const resourceRecords = await new Promise<ProjectShapeResourceRecord[]>((resolve, reject) => {
+    const transaction = database.transaction(PROJECT_SHAPE_RESOURCES_STORE_NAME, "readonly");
+    const store = transaction.objectStore(PROJECT_SHAPE_RESOURCES_STORE_NAME);
+    const records: ProjectShapeResourceRecord[] = [];
+    const requests = [
+      ...meshResourceIds.map((resourceId) => store.get(projectResourceRecordId(projectId, "mesh", resourceId))),
+      ...assetResourceIds.map((resourceId) => store.get(projectResourceRecordId(projectId, "asset", resourceId))),
+    ];
+    requests.forEach((request) => {
+      request.onsuccess = () => {
+        if (request.result) records.push(request.result as ProjectShapeResourceRecord);
+      };
+      request.onerror = () => {
+        transaction.abort();
+      };
+    });
+    transaction.oncomplete = () => resolve(records);
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not load project shape resources"));
+    transaction.onabort = () => reject(transaction.error ?? new Error("Could not load project shape resources"));
+  });
+  database.close();
+
+  const meshResources = new Map<string, ImportedMeshResource>();
+  const assets: ProjectAsset[] = [];
+  resourceRecords.forEach((resource) => {
+    if (resource.kind === "mesh") meshResources.set(resource.resourceId, resource.mesh);
+    else assets.push(resource.asset);
+  });
+  if (meshResources.size !== meshResourceIds.length || assets.length !== assetResourceIds.length) {
+    throw new Error("Project shape resources are incomplete");
+  }
+  knownProjectResourceKeys.set(projectId, new Set([
+    ...meshResourceIds.map((resourceId) => projectResourceKey("mesh", resourceId)),
+    ...assetResourceIds.map((resourceId) => projectResourceKey("asset", resourceId)),
+  ]));
+  const hydrated = hydrateProjectShapeState(record.shapes ?? [], record.history, meshResources);
+  return {
+    ...record,
+    shapes: hydrated.shapes,
+    history: hydrated.history,
+    assets,
+  };
 }
 
-async function saveProjectShapes(projectId: string, shapes: WorkplaneShape[], revision: number) {
+async function saveProjectShapes(projectId: string, entry: ProjectShapeCacheEntry, context: ProjectShapeSaveContext) {
+  const skfPackage = await exportSkfProject({
+    projectId,
+    projectName: context.projectName,
+    createdAt: context.createdAt,
+    modifiedAt: entry.revision,
+    shapes: entry.shapes,
+    history: entry.history,
+    historyIndex: entry.historyIndex,
+    assets: entry.assets,
+    workspace: context.workspace,
+    snapGrid: context.snapGrid,
+    placementElevation: context.placementElevation,
+    placementWorkplane: context.placementWorkplane,
+    sketchPlacementWorkplane: context.sketchPlacementWorkplane,
+    compressionLevel: 1,
+  });
   const database = await openProjectShapesDb();
   return new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(PROJECT_SHAPES_STORE_NAME, "readwrite");
@@ -112,10 +321,15 @@ async function saveProjectShapes(projectId: string, shapes: WorkplaneShape[], re
     };
     existingRequest.onsuccess = () => {
       const existing = existingRequest.result as ProjectShapeRecord | undefined;
-      if (existing && existing.revision > revision) {
+      if (existing && existing.revision > entry.revision) {
         return;
       }
-      store.put({ id: projectId, revision, shapes, updatedAt: Date.now() } satisfies ProjectShapeRecord);
+      store.put({
+        id: projectId,
+        revision: entry.revision,
+        skfPackage,
+        updatedAt: Date.now(),
+      } satisfies ProjectShapeRecord);
     };
     transaction.oncomplete = () => {
       database.close();
@@ -129,6 +343,23 @@ async function saveProjectShapes(projectId: string, shapes: WorkplaneShape[], re
       database.close();
       reject(transaction.error ?? new Error("Could not save project shapes"));
     };
+  });
+}
+
+function saveProjectShapesWhenIdle(projectId: string, entry: ProjectShapeCacheEntry, context: ProjectShapeSaveContext) {
+  return new Promise<void>((resolve, reject) => {
+    const save = () => {
+      void saveProjectShapes(projectId, entry, context).then(resolve, reject);
+    };
+    if (typeof window === "undefined") {
+      save();
+      return;
+    }
+    if ("requestIdleCallback" in window) {
+      window.requestIdleCallback(save, { timeout: 1200 });
+      return;
+    }
+    globalThis.setTimeout(save, 32);
   });
 }
 
@@ -161,7 +392,7 @@ function readStoredProjects() {
         const revision = typeof project.revision === "number" ? project.revision : updatedAt;
         const designShapes = Array.isArray(project.designShapes) ? (project.designShapes as WorkplaneShape[]) : null;
         if (designShapes) {
-          legacyShapes[id] = { revision, shapes: designShapes };
+          legacyShapes[id] = projectShapeCacheEntry(revision, designShapes);
         }
         return {
           id,
@@ -175,6 +406,12 @@ function readStoredProjects() {
           revision,
           workspace: normalizeWorkspaceSettings(project.workspace),
           snapGrid: normalizeSnapGrid(project.snapGrid),
+          placementElevation: typeof project.placementElevation === "number" && Number.isFinite(project.placementElevation) ? project.placementElevation : 0,
+          placementWorkplane: normalizePlacementWorkplane(project.placementWorkplane, project.placementElevation),
+          sketchPlacementWorkplane: normalizePlacementWorkplane(project.sketchPlacementWorkplane),
+          sharedProject: typeof project.sharedProject?.fileName === "string" && typeof project.sharedProject.revision === "string"
+            ? { fileName: project.sharedProject.fileName, revision: project.sharedProject.revision }
+            : undefined,
           drive: parseProjectDriveFile(project.drive),
         };
       });
@@ -204,8 +441,12 @@ function mergeProjectForStorage(project: DashboardProject, storedProject?: Dashb
     thumbnailUrl: project.thumbnailUrl ?? storedProject.thumbnailUrl,
     thumbnailVersion: project.thumbnailVersion ?? storedProject.thumbnailVersion,
     updatedAt: Math.max(project.updatedAt, storedProject.updatedAt),
-    workspace: project.workspace ?? storedProject.workspace,
-    snapGrid: project.snapGrid ?? storedProject.snapGrid,
+    workspace: storedProject.workspace ?? project.workspace,
+    snapGrid: storedProject.snapGrid ?? project.snapGrid,
+    placementElevation: storedProject.placementElevation ?? project.placementElevation,
+    placementWorkplane: storedProject.placementWorkplane ?? project.placementWorkplane,
+    sketchPlacementWorkplane: storedProject.sketchPlacementWorkplane ?? project.sketchPlacementWorkplane,
+    sharedProject: project.sharedProject ?? storedProject.sharedProject,
     drive: project.drive ?? storedProject.drive,
   };
 }
@@ -223,6 +464,10 @@ function projectForStorage(project: DashboardProject): DashboardProject {
     revision: project.revision,
     workspace: normalizeWorkspaceSettings(project.workspace),
     snapGrid: normalizeSnapGrid(project.snapGrid),
+    placementElevation: typeof project.placementElevation === "number" && Number.isFinite(project.placementElevation) ? project.placementElevation : 0,
+    placementWorkplane: normalizePlacementWorkplane(project.placementWorkplane, project.placementElevation),
+    sketchPlacementWorkplane: normalizePlacementWorkplane(project.sketchPlacementWorkplane),
+    sharedProject: project.sharedProject,
     drive: project.drive ?? null,
   };
 }
@@ -256,6 +501,9 @@ function newProject(name: string, index: number, shapeCount = 0): DashboardProje
     revision: now,
     workspace: DEFAULT_WORKPLANE_WORKSPACE,
     snapGrid: DEFAULT_SNAP_GRID,
+    placementElevation: 0,
+    placementWorkplane: horizontalPlacementWorkplane(),
+    sketchPlacementWorkplane: horizontalPlacementWorkplane(),
   };
 }
 
@@ -263,14 +511,43 @@ function projectNameFromFileName(fileName: string) {
   return fileName.replace(/\.[^.]+$/, "").trim() || "Imported design";
 }
 
+// The name a project file has in Drive or on disk, without its extension.
 function projectFileNameStem(fileName: string) {
-  return fileName.replace(/\.sketchforge(\.json)?$/i, "").trim();
+  return fileName.replace(/\.(skf|sketchforge(\.json)?)$/i, "").trim();
+}
+
+// Files the open-project paths accept: packaged .skf projects and legacy
+// .sketchforge(.json) files from earlier builds.
+function isOpenableProjectFileName(fileName: string) {
+  return /\.skf$/i.test(fileName) || isProjectFileName(fileName);
+}
+
+type OpenedProjectFile = { restored: SkfRestoredProject; legacy: boolean; droppedShapeCount: number };
+
+async function restoreProjectFromBytes(fileName: string, bytes: ArrayBuffer): Promise<OpenedProjectFile> {
+  if (isProjectFileName(fileName) || looksLikeProjectFile(bytes)) {
+    // Read-only path for the fork's JSON format; the result is saved as .skf.
+    const { droppedShapeCount, ...restored } = restoredProjectFromLegacyFile(new TextDecoder().decode(bytes), fileName);
+    return { restored, legacy: true, droppedShapeCount };
+  }
+  return { restored: await importSkfProject(bytes), legacy: false, droppedShapeCount: 0 };
+}
+
+function droppedShapesNote(opened: OpenedProjectFile) {
+  return opened.droppedShapeCount > 0
+    ? ` (skipped ${opened.droppedShapeCount} unreadable shape${opened.droppedShapeCount === 1 ? "" : "s"})`
+    : "";
+}
+
+function legacyOpenNote(opened: OpenedProjectFile) {
+  return opened.legacy ? `${droppedShapesNote(opened)}; it saves as .skf from now on` : "";
 }
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<AppView>("dashboard");
   const [editorStarted, setEditorStarted] = useState(false);
+  const [editorLoading, setEditorLoading] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [projects, setProjects] = useState<DashboardProject[]>([]);
   const [dashboardSection, setDashboardSection] = useState<DashboardSection>("home");
@@ -278,26 +555,61 @@ export default function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [sortMode, setSortMode] = useState("recent");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [themePreference, setThemePreference] = useState<AppThemePreference>("system");
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedAppTheme>("light");
   const [downloadMode, setDownloadMode] = useState<DownloadMode>("browser");
   const [downloadFolder, setDownloadFolder] = useState("");
   const [dashboardNotice, setDashboardNotice] = useState("");
+  const [sharedProjects, setSharedProjects] = useState<SharedProject[]>([]);
+  const [sharedProjectsEnabled, setSharedProjectsEnabled] = useState(false);
+  const [sharedProjectsLoading, setSharedProjectsLoading] = useState(false);
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
+  const [driveDialog, setDriveDialog] = useState<DriveOpenDialogState | null>(null);
   const [projectSaveStatus, setProjectSaveStatus] = useState<ProjectSaveStatus>("idle");
   const [launchTutorial, setLaunchTutorial] = useState<{ projectId: string; tutorialId: string } | null>(null);
-  const [driveDialog, setDriveDialog] = useState<DriveOpenDialogState | null>(null);
+  const pendingProjectSavesRef = useRef(0);
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
   const nextProjectRevisionRef = useRef(0);
   const projectShapeSaveQueuesRef = useRef<Record<string, Promise<void>>>({});
-  const pendingProjectSavesRef = useRef(0);
+  const editorLoadingStartedAtRef = useRef(0);
+
+  const startEditorTransition = useCallback(() => {
+    editorLoadingStartedAtRef.current = Date.now();
+    setEditorLoading(true);
+  }, []);
+
+  const refreshSharedProjects = useCallback(async () => {
+    if (STATIC_EXPORT_BUILD) return;
+    setSharedProjectsLoading(true);
+    try {
+      const response = await fetch("/api/shared-projects", { cache: "no-store" });
+      const payload = await response.json() as { enabled?: boolean; projects?: SharedProject[]; error?: string };
+      setSharedProjectsEnabled(Boolean(payload.enabled));
+      setSharedProjects(Array.isArray(payload.projects) ? payload.projects : []);
+      if (!response.ok && payload.enabled) setDashboardNotice(payload.error ?? "Could not load shared projects");
+    } catch {
+      setSharedProjectsEnabled(false);
+      setSharedProjects([]);
+    } finally {
+      setSharedProjectsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
+    const storedTheme = readStoredAppTheme(window.localStorage);
+    setThemePreference(storedTheme);
+    const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    setResolvedTheme(resolveAppTheme(storedTheme, systemPrefersDark));
+    applyAppTheme(storedTheme, systemPrefersDark);
     const { projects: storedProjects, legacyShapes } = readStoredProjects();
     setProjects(storedProjects);
     if (Object.keys(legacyShapes).length > 0) {
       setProjectShapesById(legacyShapes);
       Object.entries(legacyShapes).forEach(([projectId, entry]) => {
-        void saveProjectShapes(projectId, entry.shapes, entry.revision).catch(() => {
+        const project = storedProjects.find((candidate) => candidate.id === projectId);
+        if (!project) return;
+        void saveProjectShapes(projectId, entry, projectShapeSaveContext(project)).catch(() => {
           setDashboardNotice("Could not migrate project shapes to larger storage");
         });
       });
@@ -311,11 +623,31 @@ export default function Home() {
       if (requestedProjectId && storedProjects.some((project) => project.id === requestedProjectId)) {
         setActiveProjectId(requestedProjectId);
       }
+      startEditorTransition();
       setEditorStarted(true);
       setView("editor");
     }
     setMounted(true);
-  }, []);
+  }, [startEditorTransition]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyCurrentTheme = () => {
+      setResolvedTheme(resolveAppTheme(themePreference, media.matches));
+      applyAppTheme(themePreference, media.matches);
+    };
+    storeAppTheme(window.localStorage, themePreference);
+    applyCurrentTheme();
+    if (themePreference !== "system") return;
+    media.addEventListener("change", applyCurrentTheme);
+    return () => media.removeEventListener("change", applyCurrentTheme);
+  }, [mounted, themePreference]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    void refreshSharedProjects();
+  }, [mounted, refreshSharedProjects]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -366,30 +698,30 @@ export default function Home() {
     const activeProject = projects.find((project) => project.id === activeProjectId);
     if (!activeProject) return;
     const cached = projectShapesById[activeProjectId];
-    if (cached && cached.revision === activeProject.revision) return;
+    if (cached && cached.revision >= (activeProject.revision ?? 0)) return;
 
     let canceled = false;
     void loadProjectShapes(activeProjectId)
       .then((record) => {
         if (canceled) return;
         const revision = activeProject.revision ?? record?.revision ?? Date.now();
+        const entry = projectShapeCacheEntry(revision, record?.shapes ?? [], record?.history, record?.historyIndex, record?.assets);
         setProjectShapesById((current) => ({
           ...current,
-          [activeProjectId]: {
-            revision,
-            shapes: record?.shapes ?? [],
-          },
+          [activeProjectId]: entry,
         }));
+        if (record && !record.skfPackage) {
+          void saveProjectShapesWhenIdle(activeProjectId, entry, projectShapeSaveContext(activeProject)).catch(() => {
+            // The legacy record remains readable and migration can retry on the next load.
+          });
+        }
       })
       .catch((error) => {
         if (!canceled) {
           setDashboardNotice(error instanceof Error ? error.message : "Could not load project shapes");
           setProjectShapesById((current) => ({
             ...current,
-            [activeProjectId]: {
-              revision: activeProject.revision ?? Date.now(),
-              shapes: [],
-            },
+            [activeProjectId]: projectShapeCacheEntry(activeProject.revision ?? Date.now(), []),
           }));
         }
       });
@@ -397,6 +729,22 @@ export default function Home() {
       canceled = true;
     };
   }, [activeProjectId, mounted, projectShapesById, projects]);
+
+  useEffect(() => {
+    if (!editorLoading || view !== "editor") return;
+    if (activeProjectId) {
+      const activeProject = projects.find((project) => project.id === activeProjectId);
+      const activeEntry = projectShapesById[activeProjectId];
+      if (!activeProject || !activeEntry) return;
+    }
+
+    const elapsed = Date.now() - editorLoadingStartedAtRef.current;
+    const remaining = Math.max(0, EDITOR_SKELETON_MIN_DURATION_MS - elapsed);
+    const timer = window.setTimeout(() => {
+      window.requestAnimationFrame(() => setEditorLoading(false));
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [activeProjectId, editorLoading, projectShapesById, projects, view]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -409,6 +757,12 @@ export default function Home() {
     const filtered = normalizedQuery ? projects.filter((project) => project.name.toLowerCase().includes(normalizedQuery)) : projects;
     return sortMode === "name" ? [...filtered].sort((a, b) => a.name.localeCompare(b.name)) : [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
   }, [projects, query, sortMode]);
+
+  const visibleSharedProjects = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const filtered = normalizedQuery ? sharedProjects.filter((project) => project.name.toLowerCase().includes(normalizedQuery)) : sharedProjects;
+    return sortMode === "name" ? [...filtered].sort((a, b) => a.name.localeCompare(b.name)) : [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [query, sharedProjects, sortMode]);
 
   const openEditor = (projectId: string | null, options: { allowMissingFromStorage?: boolean } = {}) => {
     if (projectId && typeof window !== "undefined" && !options.allowMissingFromStorage) {
@@ -425,6 +779,7 @@ export default function Home() {
     } else if (projectId) {
       setProjects((current) => current.map((project) => (project.id === projectId ? { ...project, updatedAt: Date.now() } : project)));
     }
+    startEditorTransition();
     setActiveProjectId(projectId);
     setEditorStarted(true);
     setView("editor");
@@ -474,9 +829,23 @@ export default function Home() {
       });
   }, []);
 
-  const updateProjectShapes = useCallback((snapshot: { projectId: string; shapes: WorkplaneShape[] }) => {
+  const updateProjectShapes = useCallback((snapshot: {
+    projectId: string;
+    shapes: WorkplaneShape[];
+    history: EditorHistoryEntry[];
+    historyIndex: number;
+    assets: ProjectAsset[];
+    projectName: string;
+    projectCreatedAt: number;
+    workspace: WorkplaneWorkspaceSettings;
+    snapGrid: GridSize;
+    placementElevation: number;
+    placementWorkplane: PlacementWorkplane;
+    sketchPlacementWorkplane: PlacementWorkplane;
+  }) => {
     const revision = Math.max(Date.now(), nextProjectRevisionRef.current + 1);
     nextProjectRevisionRef.current = revision;
+    const entry = projectShapeCacheEntryFromEditor(revision, snapshot.shapes, snapshot.history, snapshot.historyIndex, snapshot.assets);
     setProjectShapesById((current) => {
       const existing = current[snapshot.projectId];
       if (existing && existing.revision > revision) {
@@ -484,15 +853,24 @@ export default function Home() {
       }
       return {
         ...current,
-        [snapshot.projectId]: { revision, shapes: snapshot.shapes },
+        [snapshot.projectId]: entry,
       };
     });
 
+    const previousSave = projectShapeSaveQueuesRef.current[snapshot.projectId] ?? Promise.resolve();
+    const saveContext: ProjectShapeSaveContext = {
+      projectName: snapshot.projectName,
+      createdAt: snapshot.projectCreatedAt,
+      workspace: normalizeWorkspaceSettings(snapshot.workspace),
+      snapGrid: normalizeSnapGrid(snapshot.snapGrid),
+      placementElevation: Number.isFinite(snapshot.placementElevation) ? snapshot.placementElevation : 0,
+      placementWorkplane: normalizePlacementWorkplane(snapshot.placementWorkplane, snapshot.placementElevation),
+      sketchPlacementWorkplane: normalizePlacementWorkplane(snapshot.sketchPlacementWorkplane),
+    };
+    const queuedSave = previousSave.catch(() => undefined).then(() => saveProjectShapesWhenIdle(snapshot.projectId, entry, saveContext));
+    projectShapeSaveQueuesRef.current[snapshot.projectId] = queuedSave;
     pendingProjectSavesRef.current += 1;
     setProjectSaveStatus("saving");
-    const previousSave = projectShapeSaveQueuesRef.current[snapshot.projectId] ?? Promise.resolve();
-    const queuedSave = previousSave.catch(() => undefined).then(() => saveProjectShapes(snapshot.projectId, snapshot.shapes, revision));
-    projectShapeSaveQueuesRef.current[snapshot.projectId] = queuedSave;
 
     void queuedSave
       .then(() => {
@@ -522,52 +900,125 @@ export default function Home() {
       });
   }, []);
 
-  const updateProjectWorkspace = useCallback((snapshot: { projectId: string; workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => {
-    const version = Date.now();
+  const updateProjectWorkspace = useCallback((snapshot: {
+    projectId: string;
+    workspace: WorkplaneWorkspaceSettings;
+    snap: GridSize;
+    placementElevation?: number;
+    placementWorkplane?: PlacementWorkplane;
+    sketchPlacementWorkplane?: PlacementWorkplane;
+  }) => {
+    const version = Math.max(Date.now(), nextProjectRevisionRef.current + 1);
+    nextProjectRevisionRef.current = version;
     const workspace = normalizeWorkspaceSettings(snapshot.workspace);
     const snapGrid = normalizeSnapGrid(snapshot.snap);
-    setProjects((current) =>
-      current.map((project) =>
-        project.id === snapshot.projectId
-          ? {
-              ...project,
-              workspace,
-              snapGrid,
-              updatedAt: version,
-            }
-          : project,
-      ),
-    );
+    const placementElevation = typeof snapshot.placementElevation === "number" && Number.isFinite(snapshot.placementElevation)
+      ? snapshot.placementElevation
+      : 0;
+    const placementWorkplane = normalizePlacementWorkplane(snapshot.placementWorkplane, placementElevation);
+    const sketchPlacementWorkplane = normalizePlacementWorkplane(snapshot.sketchPlacementWorkplane);
+    const nextFingerprint = `${workplaneSettingsFingerprint(workspace, snapGrid)}:${placementElevation}:${placementWorkplaneFingerprint(placementWorkplane)}:${placementWorkplaneFingerprint(sketchPlacementWorkplane)}`;
+    setProjects((current) => {
+      let changed = false;
+      const next = current.map((project) => {
+        if (project.id !== snapshot.projectId) return project;
+        const currentFingerprint = `${workplaneSettingsFingerprint(
+          normalizeWorkspaceSettings(project.workspace),
+          normalizeSnapGrid(project.snapGrid),
+        )}:${project.placementElevation ?? 0}:${placementWorkplaneFingerprint(normalizePlacementWorkplane(project.placementWorkplane, project.placementElevation))}:${placementWorkplaneFingerprint(normalizePlacementWorkplane(project.sketchPlacementWorkplane))}`;
+        if (currentFingerprint === nextFingerprint) return project;
+        changed = true;
+        return {
+          ...project,
+          workspace,
+          snapGrid,
+          placementElevation,
+          placementWorkplane,
+          sketchPlacementWorkplane,
+          updatedAt: version,
+          revision: version,
+        };
+      });
+      if (!changed) return current;
+      try {
+        const storageProjects = mergeProjectsForStorage(next);
+        const serialized = JSON.stringify(storageProjects);
+        window.localStorage.setItem(PROJECTS_STORAGE_KEY, serialized);
+        projectsJsonRef.current = serialized;
+        return next;
+      } catch {
+        return next;
+      }
+    });
   }, []);
 
-  const createAndOpenProject = (name?: string) => {
+  const createAndOpenProject = (name?: string, tutorialId?: string) => {
     const project = newProject(name ?? `Untitled design ${projects.length + 1}`, projects.length);
     setProjectShapesById((current) => ({
       ...current,
-      [project.id]: { revision: project.revision ?? project.updatedAt, shapes: [] },
+      [project.id]: projectShapeCacheEntry(project.revision ?? project.updatedAt, []),
     }));
-    void saveProjectShapes(project.id, [], project.revision ?? project.updatedAt).catch(() => {
+    void saveProjectShapes(
+      project.id,
+      projectShapeCacheEntry(project.revision ?? project.updatedAt, []),
+      projectShapeSaveContext(project),
+    ).catch(() => {
       setDashboardNotice("Could not prepare project shape storage");
     });
     setProjects((current) => [project, ...current]);
+    setLaunchTutorial(tutorialId ? { projectId: project.id, tutorialId } : null);
     openEditor(project.id, { allowMissingFromStorage: true });
   };
 
+  // Each tutorial runs in a fresh project named after it, so the student's
+  // work is saved like any other design.
   const startTutorial = (tutorialId: string) => {
     const tutorial = tutorials.find((entry) => entry.id === tutorialId);
     if (!tutorial) return;
-    const project = newProject(tutorial.title, projects.length);
-    setProjectShapesById((current) => ({
-      ...current,
-      [project.id]: { revision: project.revision ?? project.updatedAt, shapes: [] },
-    }));
-    void saveProjectShapes(project.id, [], project.revision ?? project.updatedAt).catch(() => {
-      setDashboardNotice("Could not prepare project shape storage");
-    });
-    setProjects((current) => [project, ...current]);
-    setLaunchTutorial({ projectId: project.id, tutorialId });
-    openEditor(project.id, { allowMissingFromStorage: true });
+    createAndOpenProject(tutorial.title, tutorial.id);
   };
+
+  const addRestoredProject = useCallback(async (
+    restored: SkfRestoredProject,
+    options: { name?: string; sharedProject?: SharedProject; drive?: ProjectDriveFile | null } = {},
+  ) => {
+    const now = Date.now();
+    const project: DashboardProject = {
+      ...newProject(options.name || restored.projectName, projects.length, restored.shapes.length),
+      createdAt: restored.createdAt,
+      updatedAt: now,
+      revision: now,
+      workspace: restored.workspace,
+      snapGrid: restored.snapGrid,
+      placementElevation: restored.placementElevation,
+      placementWorkplane: restored.placementWorkplane,
+      sketchPlacementWorkplane: restored.sketchPlacementWorkplane,
+      sharedProject: options.sharedProject ? { fileName: options.sharedProject.fileName, revision: options.sharedProject.revision } : undefined,
+      // Same timestamp as the revision, so the project starts in sync with Drive.
+      drive: options.drive ? { ...options.drive, savedAt: now } : null,
+    };
+    const entry = projectShapeCacheEntry(now, restored.shapes, restored.history, restored.historyIndex, restored.assets);
+    await saveProjectShapes(project.id, entry, projectShapeSaveContext(project));
+    setProjectShapesById((current) => ({ ...current, [project.id]: entry }));
+    setProjects((current) => [project, ...current]);
+    return project;
+  }, [projects.length]);
+
+  const openSkfProjectFromFile = useCallback(async (file: File, sharedProject?: SharedProject) => {
+    setDashboardNotice(`Validating ${file.name} before opening it as a new project`);
+    try {
+      const opened = await restoreProjectFromBytes(file.name, await file.arrayBuffer());
+      const project = await addRestoredProject(opened.restored, { sharedProject });
+      const openedMessage = `Opened ${file.name} as a new editable local project${legacyOpenNote(opened)}`;
+      setDashboardNotice(sharedProject ? `Opened shared project ${sharedProject.name}; edits autosave locally until you save back to shared` : openedMessage);
+      openEditor(project.id, { allowMissingFromStorage: true });
+      return { ok: true, message: sharedProject ? `Opened shared project ${sharedProject.name}` : openedMessage };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not open SketchForge project";
+      setDashboardNotice(message);
+      return { ok: false, message };
+    }
+  }, [addRestoredProject]);
 
   const updateProjectDriveFile = useCallback((snapshot: { projectId: string; drive: ProjectDriveFile }) => {
     setProjects((current) =>
@@ -590,128 +1041,188 @@ export default function Home() {
       });
   }, []);
 
-  const importProjectFilePayload = useCallback(
-    (payload: ParsedProjectFile, sourceName?: string, driveLink?: ProjectDriveFile) => {
-      // The file's own name is what the student sees in Drive or their folder,
-      // so it wins over the (possibly stale) name embedded in the payload.
-      const baseName = (sourceName && isProjectFileName(sourceName) ? projectFileNameStem(sourceName) : "") || payload.name;
-      const takenNames = new Set(projects.map((project) => project.name));
-      let name = baseName;
-      for (let suffix = 2; takenNames.has(name); suffix += 1) {
-        name = `${baseName} (${suffix})`;
-      }
-      const project = newProject(name, projects.length, payload.shapes.length);
-      project.workspace = payload.workspace;
-      project.snapGrid = payload.snapGrid;
-      project.drive = driveLink ?? null;
-      const revision = project.revision ?? project.updatedAt;
-      setProjectShapesById((current) => ({
-        ...current,
-        [project.id]: { revision, shapes: payload.shapes },
-      }));
-      void saveProjectShapes(project.id, payload.shapes, revision).catch(() => {
-        setDashboardNotice("Could not prepare project shape storage");
-      });
-      const droppedNote =
-        payload.droppedShapeCount > 0
-          ? ` (skipped ${payload.droppedShapeCount} unreadable shape${payload.droppedShapeCount === 1 ? "" : "s"})`
-          : "";
-      setDashboardNotice(`Imported ${sourceName ?? name}${droppedNote}`);
-      setProjects((current) => [project, ...current]);
-      openEditor(project.id, { allowMissingFromStorage: true });
-    },
-    [projects],
-  );
-
   const openDriveFile = useCallback(
-    (file: DriveProjectFileInfo) => {
+    async (file: DriveProjectFileInfo) => {
       setDriveDialog((current) => (current?.status === "ready" ? { ...current, openingFileId: file.fileId, message: undefined } : current));
-      downloadProjectFromDrive(file.fileId)
-        .then((text) => {
-          const payload = parseProjectFile(text);
-          const drive: ProjectDriveFile = { fileId: file.fileId, fileName: file.fileName, savedAt: Date.now() };
-          const linked = projects.find((project) => project.drive?.fileId === file.fileId);
-          if (linked) {
-            // This Drive file already has a project on this device — refresh it
-            // with the Drive content instead of piling up duplicates.
-            const revision = Math.max(Date.now(), (linked.revision ?? 0) + 1);
-            const name = projectFileNameStem(file.fileName) || linked.name;
-            setProjectShapesById((current) => ({
-              ...current,
-              [linked.id]: { revision, shapes: payload.shapes },
-            }));
-            void saveProjectShapes(linked.id, payload.shapes, revision).catch(() => {
-              setDashboardNotice("Could not update project shape storage");
-            });
-            setProjects((current) =>
-              current.map((project) =>
-                project.id === linked.id
-                  ? {
-                      ...project,
-                      name,
-                      shapes: payload.shapes.length,
-                      revision,
-                      updatedAt: revision,
-                      workspace: payload.workspace,
-                      snapGrid: payload.snapGrid,
-                      drive,
-                    }
-                  : project,
-              ),
-            );
-            setDashboardNotice(`Opened ${file.fileName} from Google Drive`);
-            openEditor(linked.id, { allowMissingFromStorage: true });
+      try {
+        const bytes = await downloadProjectFromDrive(file.fileId);
+        const opened = await restoreProjectFromBytes(file.fileName, bytes);
+        const { restored } = opened;
+        const packaged = !opened.legacy;
+        // Only packaged .skf files are linked: SketchForge never overwrites a
+        // legacy .sketchforge file, so the first Drive save of a legacy project
+        // creates a new .skf file beside it.
+        const drive: ProjectDriveFile | null = packaged ? { fileId: file.fileId, fileName: file.fileName, savedAt: Date.now() } : null;
+        // The file's own name is what the student sees in Drive, so it wins over
+        // the (possibly stale) name stored inside the project.
+        const name = projectFileNameStem(file.fileName) || restored.projectName;
+        const linked = packaged ? projects.find((project) => project.drive?.fileId === file.fileId) : undefined;
+        const project = await addRestoredProject(restored, { name, drive });
+        let notice = packaged
+          ? `Opened ${file.fileName} from Google Drive`
+          : `Opened ${file.fileName} from Google Drive${droppedShapesNote(opened)}; Save to Drive creates a new .skf file beside it`;
+        if (linked) {
+          const linkedHasUnsyncedEdits = (linked.revision ?? 0) > (linked.drive?.savedAt ?? 0);
+          if (linkedHasUnsyncedEdits) {
+            // Keep the local copy's newer edits as its own, unlinked project.
+            setProjects((current) => current.map((candidate) => (candidate.id === linked.id ? { ...candidate, drive: null } : candidate)));
+            notice = `Opened ${file.fileName} from Google Drive; your local copy had changes not saved to Drive and was kept as "${linked.name}"`;
           } else {
-            importProjectFilePayload(payload, file.fileName, drive);
+            // Replace the older local copy instead of piling up duplicates.
+            setProjects((current) => current.filter((candidate) => candidate.id !== linked.id));
+            setProjectShapesById((current) => {
+              const next = { ...current };
+              delete next[linked.id];
+              return next;
+            });
+            void deleteProjectShapes(linked.id).catch(() => undefined);
+            if (!STATIC_EXPORT_BUILD) {
+              void fetch(`/api/project-thumbnail?projectId=${encodeURIComponent(linked.id)}`, { method: "DELETE" });
+            }
           }
-          setDriveDialog(null);
-        })
-        .catch((error: unknown) => {
-          const message =
-            error instanceof DriveError || error instanceof Error ? error.message : `Could not open ${file.fileName}`;
-          setDriveDialog((current) =>
-            current?.status === "ready" ? { ...current, openingFileId: undefined, message } : current,
-          );
-        });
+        }
+        setDashboardNotice(notice);
+        setDriveDialog(null);
+        openEditor(project.id, { allowMissingFromStorage: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : `Could not open ${file.fileName}`;
+        setDriveDialog((current) => (current?.status === "ready" ? { ...current, openingFileId: undefined, message } : current));
+      }
     },
-    [importProjectFilePayload, projects],
+    [addRestoredProject, projects],
   );
 
-  const importFileFromDashboard = useCallback(
-    async (file: File) => {
-      if (isProjectFileName(file.name)) {
-        try {
-          importProjectFilePayload(parseProjectFile(await file.text()), file.name);
-        } catch (error) {
-          setDashboardNotice(error instanceof Error ? error.message : `Could not open ${file.name}`);
+  useEffect(() => {
+    if (view === "dashboard" && isDriveConfigured()) {
+      // Warm up the Google sign-in script so the pop-up opens from the click.
+      void preloadGoogleIdentity().catch(() => undefined);
+    }
+  }, [view]);
+
+  const openSharedProject = useCallback(async (sharedProject: SharedProject) => {
+    setDashboardNotice(`Opening shared project ${sharedProject.name}`);
+    try {
+      const response = await fetch(`/api/shared-projects?fileName=${encodeURIComponent(sharedProject.fileName)}`, { cache: "no-store" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error ?? "Could not download shared project");
+      }
+      const revision = response.headers.get("etag")?.replace(/^W\//, "").replace(/^"|"$/g, "") || sharedProject.revision;
+      const file = new File([await response.blob()], sharedProject.fileName, { type: "application/vnd.sketchforge.project+zip" });
+      await openSkfProjectFromFile(file, { ...sharedProject, revision });
+    } catch (error) {
+      setDashboardNotice(error instanceof Error ? error.message : "Could not open shared project");
+    }
+  }, [openSkfProjectFromFile]);
+
+  const saveActiveProjectToShared = useCallback(async ({ exportName, bytes }: { exportName: string; bytes: Uint8Array }) => {
+    const activeProject = projects.find((project) => project.id === activeProjectId);
+    if (!activeProject) throw new Error("Open a local project before saving it to the shared space");
+    const normalizedExportName = exportName.trim() || activeProject.name;
+    const saveBackToSource = Boolean(activeProject.sharedProject && normalizedExportName === activeProject.name);
+    const fileName = saveBackToSource && activeProject.sharedProject
+      ? activeProject.sharedProject.fileName
+      : `${normalizedExportName.replace(/\.skf$/i, "")}.skf`;
+    const headers: Record<string, string> = { "Content-Type": "application/vnd.sketchforge.project+zip" };
+    if (saveBackToSource && activeProject.sharedProject) headers["If-Match"] = `"${activeProject.sharedProject.revision}"`;
+    else headers["If-None-Match"] = "*";
+    const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const response = await fetch(`/api/shared-projects?fileName=${encodeURIComponent(fileName)}`, { method: "POST", headers, body });
+    const payload = await response.json().catch(() => ({})) as { error?: string; project?: SharedProject };
+    if (!response.ok || !payload.project) throw new Error(payload.error ?? "Could not save the shared project");
+    const savedProject = payload.project;
+    setProjects((current) => current.map((project) => project.id === activeProject.id
+      ? { ...project, sharedProject: { fileName: savedProject.fileName, revision: savedProject.revision } }
+      : project));
+    await refreshSharedProjects();
+    return `Saved ${savedProject.name} to the Docker shared project space`;
+  }, [activeProjectId, projects, refreshSharedProjects]);
+
+  const importFilesFromDashboard = useCallback(
+    async (files: File[]) => {
+      if (!files.length) return;
+      const projectFiles = files.filter((file) => isOpenableProjectFileName(file.name));
+      if (projectFiles.length) {
+        if (files.length !== 1) {
+          setDashboardNotice("Open one project file at a time; import STL, STEP, and SVG geometry separately");
+          return;
         }
+        await openSkfProjectFromFile(projectFiles[0]);
         return;
       }
-      const isSvg = /\.svg$/i.test(file.name) || file.type === "image/svg+xml";
-      if (!isSvg && !importExtensionSupported(file.name)) {
-        setDashboardNotice("Unsupported file type. Use STL or SVG.");
+      const importedShapes: WorkplaneShape[] = [];
+      const importedAssets: ProjectAsset[] = [];
+      const importedFileNames: string[] = [];
+      const failures: Array<{ fileName: string; reason: string }> = [];
+
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const sourceFormat = sourceFormatForFileName(file.name) ?? (file.type === "image/svg+xml" ? "svg" : null);
+        const isSvg = sourceFormat === "svg";
+        const isStep = sourceFormat === "step";
+        if (!sourceFormat || sourceFormat === "obj" || (!isSvg && !isStep && !importExtensionSupported(file.name))) {
+          failures.push({ fileName: file.name, reason: "Unsupported file type" });
+          continue;
+        }
+
+        setDashboardNotice(`Importing ${index + 1} of ${files.length}: ${file.name}`);
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+          const parsedShape = isStep
+            ? await import("@/lib/stepImport").then(({ importedShapeFromStep }) => importedShapeFromStep(file.name, buffer))
+            : isSvg
+              ? importedShapeFromSvg(file.name, new TextDecoder().decode(bytes))
+              : importedShapeFromStl(file.name, buffer);
+          const asset = await projectAssetFromBytes(file.name, sourceFormat, bytes, file.type);
+          importedShapes.push(attachProjectAsset(parsedShape, asset.id));
+          importedAssets.push(asset);
+          importedFileNames.push(file.name);
+        } catch (error) {
+          failures.push({
+            fileName: file.name,
+            reason: error instanceof Error ? error.message : "Could not read file",
+          });
+        }
+      }
+
+      const failureDetails = failures
+        .slice(0, 3)
+        .map((failure) => `${failure.fileName}: ${failure.reason}`)
+        .join("; ");
+      const remainingFailureCount = Math.max(0, failures.length - 3);
+      const failureSummary = failures.length
+        ? ` Failed: ${failureDetails}${remainingFailureCount ? `; plus ${remainingFailureCount} more` : ""}`
+        : "";
+
+      if (!importedShapes.length) {
+        setDashboardNotice(files.length === 1 && failures[0] ? failures[0].reason : `Could not import any of the ${files.length} selected files.${failureSummary}`);
         return;
       }
 
       try {
-        const shape = isSvg
-          ? importedShapeFromSvg(file.name, await file.text())
-          : importedShapeFromStl(file.name, await file.arrayBuffer());
-        const project = newProject(projectNameFromFileName(file.name), projects.length, 1);
+        const projectName = importedShapes.length === 1
+          ? projectNameFromFileName(importedFileNames[0])
+          : `Imported design (${importedShapes.length} files)`;
+        const project = newProject(projectName, projects.length, importedShapes.length);
         const revision = project.revision ?? project.updatedAt;
-        await saveProjectShapes(project.id, [shape], revision);
+        const entry = projectShapeCacheEntry(revision, importedShapes, undefined, undefined, dedupeProjectAssets(importedAssets));
+        await saveProjectShapes(project.id, entry, projectShapeSaveContext(project));
         setProjectShapesById((current) => ({
           ...current,
-          [project.id]: { revision, shapes: [shape] },
+          [project.id]: entry,
         }));
-        setDashboardNotice(`Imported ${file.name}`);
+        const successSummary = importedShapes.length === 1 && files.length === 1
+          ? `Imported ${files[0].name}`
+          : `Imported ${importedShapes.length} of ${files.length} files`;
+        setDashboardNotice(`${successSummary}.${failureSummary}`.trim());
         setProjects((current) => [project, ...current]);
         openEditor(project.id, { allowMissingFromStorage: true });
       } catch (error) {
-        setDashboardNotice(error instanceof Error ? error.message : `Could not import ${file.name}`);
+        setDashboardNotice(error instanceof Error ? error.message : "Could not create a project for the imported files");
       }
     },
-    [importProjectFilePayload, projects.length],
+    [openSkfProjectFromFile, projects.length],
   );
 
   const openLatestProject = () => {
@@ -728,6 +1239,7 @@ export default function Home() {
       setProjects((current) => current.map((project) => (project.id === activeProjectId ? { ...project, updatedAt: Date.now() } : project)));
     }
     setDashboardSection("home");
+    setEditorLoading(false);
     setView("dashboard");
     setLaunchTutorial(null);
     if (typeof window !== "undefined") {
@@ -787,11 +1299,12 @@ export default function Home() {
         ref={dashboardImportInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".stl,.svg,image/svg+xml,.sketchforge,.sketchforge.json"
+        multiple
+        accept=".skf,.sketchforge,.sketchforge.json,.stl,.step,.stp,.svg,image/svg+xml"
         onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
-          if (file) {
-            void importFileFromDashboard(file);
+          const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+          if (files.length) {
+            void importFilesFromDashboard(files);
           }
           event.currentTarget.value = "";
         }}
@@ -821,12 +1334,12 @@ export default function Home() {
                   <p>No SketchForge projects in this Google Drive yet. Save a design to Drive first, then it will show up here.</p>
                 ) : (
                   <>
-                    <p>Opening a file creates a new project linked to it — saves go back to the same Drive file.</p>
+                    <p>Opening a .skf file creates a project linked to it — saves go back to the same Drive file.</p>
                     {driveDialog.message ? <p className="drive-open-error">{driveDialog.message}</p> : null}
                     <ul className="drive-open-list">
                       {driveDialog.files.map((file) => (
                         <li key={file.fileId}>
-                          <button type="button" onClick={() => openDriveFile(file)} disabled={Boolean(driveDialog.openingFileId)}>
+                          <button type="button" onClick={() => void openDriveFile(file)} disabled={Boolean(driveDialog.openingFileId)}>
                             <span className="drive-open-name">{file.fileName}</span>
                             <span className="drive-open-date">
                               {driveDialog.openingFileId === file.fileId ? "Opening…" : formatUpdated(file.modifiedAt)}
@@ -851,6 +1364,9 @@ export default function Home() {
           projects={visibleProjects}
           query={query}
           settingsOpen={settingsOpen}
+          sharedProjects={visibleSharedProjects}
+          sharedProjectsEnabled={sharedProjectsEnabled}
+          sharedProjectsLoading={sharedProjectsLoading}
           staticExportBuild={STATIC_EXPORT_BUILD}
           sortMode={sortMode}
           viewMode={viewMode}
@@ -871,10 +1387,17 @@ export default function Home() {
           }}
           onStartTutorial={startTutorial}
           onDashboardHome={() => setDashboardSection("home")}
+          onOpenSharedProject={(project) => void openSharedProject(project)}
           onOpenProject={openEditor}
           onOpenSettings={() => setSettingsOpen(true)}
           onQueryChange={setQuery}
           onRenameProject={renameProject}
+          onRefreshSharedProjects={() => void refreshSharedProjects()}
+          onSharedProjects={() => {
+            setDashboardSection("shared");
+            setDashboardNotice("");
+            void refreshSharedProjects();
+          }}
           onSortModeChange={setSortMode}
           onViewModeChange={setViewMode}
           onWorkspace={openLatestProject}
@@ -883,27 +1406,109 @@ export default function Home() {
       {editorStarted && canRenderEditor ? (
         <div className={view === "editor" ? "editor-stage active" : "editor-stage"} aria-hidden={view !== "editor"}>
           <SketchForgeEditor
+            initialAssets={activeProjectShapeEntry?.assets ?? []}
             initialShapes={activeProjectShapeEntry?.shapes ?? []}
+            initialHistory={activeProjectShapeEntry?.history}
+            initialHistoryIndex={activeProjectShapeEntry?.historyIndex}
             initialSnap={activeProject?.snapGrid ?? DEFAULT_SNAP_GRID}
             initialWorkspace={activeProject?.workspace ?? DEFAULT_WORKPLANE_WORKSPACE}
+            initialPlacementElevation={activeProject?.placementElevation ?? 0}
+            initialPlacementWorkplane={activeProject?.placementWorkplane}
             onHome={openDashboard}
+            onOpenSkfProjectFile={openSkfProjectFromFile}
+            onSaveSharedProject={saveActiveProjectToShared}
             onProjectShapesChange={updateProjectShapes}
             onProjectSnapshot={updateProjectSnapshot}
             onProjectWorkspaceChange={updateProjectWorkspace}
-            onProjectFileImport={importProjectFilePayload}
             onProjectDriveFileChange={updateProjectDriveFile}
             onProjectRename={(snapshot) => renameProject(snapshot.projectId, snapshot.name)}
-            onOpenFromDrive={openDriveDialog}
+            onOpenFromDrive={isDriveConfigured() ? openDriveDialog : undefined}
             driveFile={activeProject?.drive ?? null}
-            projectId={activeProjectId}
-            projectName={activeProject?.name}
-            projectRevision={activeProjectShapeEntry?.revision ?? activeProject?.revision ?? 0}
             saveStatus={activeProjectId ? projectSaveStatus : null}
             initialTutorialId={launchTutorial && activeProjectId === launchTutorial.projectId ? launchTutorial.tutorialId : null}
+            projectId={activeProjectId}
+            projectName={activeProject?.name}
+            projectCreatedAt={activeProject?.createdAt}
+            projectModifiedAt={activeProject?.updatedAt}
+            projectRevision={activeProjectShapeEntry?.revision ?? activeProject?.revision ?? 0}
+            sharedProjectsEnabled={sharedProjectsEnabled}
+            themePreference={themePreference}
+            resolvedTheme={resolvedTheme}
+            onThemePreferenceChange={setThemePreference}
           />
         </div>
       ) : null}
+      {view === "editor" && (editorLoading || !canRenderEditor) ? <EditorLoadingSkeleton /> : null}
     </>
+  );
+}
+
+function EditorLoadingSkeleton() {
+  const leftToolbarSections = [
+    { className: "home", controls: 1 },
+    { className: "clipboard", controls: 4 },
+    { className: "history", controls: 2 },
+    { className: "shapes", controls: 1 },
+  ];
+  const rightToolbarSections = [
+    { className: "visibility", controls: 2 },
+    { className: "combine", controls: 3 },
+    { className: "modify", controls: 5 },
+    { className: "arrange", controls: 2 },
+    { className: "manage", controls: 3 },
+  ];
+
+  const renderToolbarSection = ({ className, controls }: { className: string; controls: number }) => (
+    <div className={`editor-loading-tool-section ${className}`} key={className}>
+      <span className="editor-loading-section-label editor-skeleton-shimmer" />
+      <div className="editor-loading-section-controls">
+        {Array.from({ length: controls }, (_, index) => (
+          <span className="editor-loading-tool editor-skeleton-shimmer" key={index} />
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="editor-loading-screen" role="status" aria-label="Loading editor" aria-live="polite">
+      <div className="editor-loading-toolbar">
+        <div className="editor-loading-tabs">
+          <span className="editor-skeleton-shimmer" />
+          <span className="editor-skeleton-shimmer" />
+        </div>
+        <div className="editor-loading-tool-groups">
+          <div className="editor-loading-tool-cluster">
+            {leftToolbarSections.map(renderToolbarSection)}
+          </div>
+          <span className="editor-loading-toolbar-spacer" />
+          <div className="editor-loading-tool-cluster">
+            {rightToolbarSections.map(renderToolbarSection)}
+          </div>
+        </div>
+      </div>
+
+      <div className="editor-loading-body">
+        <div className="editor-loading-viewport">
+          <div className="editor-loading-view-cube">
+            <span className="editor-loading-cube-top editor-skeleton-shimmer" />
+            <span className="editor-loading-cube-left editor-skeleton-shimmer" />
+            <span className="editor-loading-cube-right editor-skeleton-shimmer" />
+          </div>
+          <div className="editor-loading-model" aria-hidden="true">
+            <span className="editor-loading-model-top editor-skeleton-shimmer" />
+            <span className="editor-loading-model-front editor-skeleton-shimmer" />
+            <span className="editor-loading-model-side editor-skeleton-shimmer" />
+          </div>
+          <div className="editor-loading-viewport-controls">
+            {Array.from({ length: 5 }, (_, index) => (
+              <span className="editor-skeleton-shimmer" key={index} />
+            ))}
+          </div>
+          <span className="editor-loading-status editor-skeleton-shimmer" />
+          <span className="editor-loading-snap editor-skeleton-shimmer" />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -915,6 +1520,9 @@ function Dashboard({
   projects,
   query,
   settingsOpen,
+  sharedProjects,
+  sharedProjectsEnabled,
+  sharedProjectsLoading,
   staticExportBuild,
   sortMode,
   viewMode,
@@ -929,10 +1537,13 @@ function Dashboard({
   onLearn,
   onStartTutorial,
   onDashboardHome,
+  onOpenSharedProject,
   onOpenProject,
   onOpenSettings,
   onQueryChange,
   onRenameProject,
+  onRefreshSharedProjects,
+  onSharedProjects,
   onSortModeChange,
   onViewModeChange,
   onWorkspace,
@@ -944,6 +1555,9 @@ function Dashboard({
   projects: DashboardProject[];
   query: string;
   settingsOpen: boolean;
+  sharedProjects: SharedProject[];
+  sharedProjectsEnabled: boolean;
+  sharedProjectsLoading: boolean;
   staticExportBuild: boolean;
   sortMode: string;
   viewMode: ViewMode;
@@ -958,10 +1572,13 @@ function Dashboard({
   onLearn: () => void;
   onStartTutorial: (tutorialId: string) => void;
   onDashboardHome: () => void;
+  onOpenSharedProject: (project: SharedProject) => void;
   onOpenProject: (projectId: string) => void;
   onOpenSettings: () => void;
   onQueryChange: (value: string) => void;
   onRenameProject: (projectId: string, name: string) => void;
+  onRefreshSharedProjects: () => void;
+  onSharedProjects: () => void;
   onSortModeChange: (value: string) => void;
   onViewModeChange: (value: ViewMode) => void;
   onWorkspace: () => void;
@@ -1005,10 +1622,10 @@ function Dashboard({
   return (
     <main className="dashboard-shell">
       <header className="dashboard-topbar">
-        <button className="dashboard-brand" type="button" aria-label="Home">
-          <img src="assets/sketchforge/sketchforge-logo.png" alt="" />
+        <a className="dashboard-brand" href="./" aria-label="SketchForge home">
+          <img src={`${ASSET_BASE_PATH}/assets/sketchforge/sketchforge-logo-white.png`} alt="" />
           <span>SketchForge</span>
-        </button>
+        </a>
         <div className="dashboard-search">
           <Search size={18} strokeWidth={2.4} />
           <input value={query} onChange={(event) => onQueryChange(event.currentTarget.value)} placeholder="Search projects" aria-label="Search projects" />
@@ -1026,6 +1643,12 @@ function Dashboard({
               <HomeIcon size={20} />
               <span>Home</span>
             </button>
+            {sharedProjectsEnabled ? (
+              <button className={`dashboard-nav-item ${dashboardSection === "shared" ? "active" : ""}`} type="button" aria-label="Shared projects" title="Shared projects" onClick={onSharedProjects}>
+                <FolderKanban size={20} />
+                <span>Shared</span>
+              </button>
+            ) : null}
             <button className={`dashboard-nav-item ${dashboardSection === "challenges" ? "active" : ""}`} type="button" aria-label="Challenges" title="Challenges" onClick={onChallenges}>
               <SlidersHorizontal size={20} />
               <span>Challenges</span>
@@ -1035,13 +1658,16 @@ function Dashboard({
               <span>Learn</span>
             </button>
           </div>
-          <button className="dashboard-nav-item dashboard-settings-button" type="button" aria-label="Download settings" title="Download settings" onClick={onOpenSettings}>
+          <button className="dashboard-nav-item dashboard-settings-button" type="button" aria-label="Settings" title="Settings" onClick={onOpenSettings}>
             <Settings size={20} />
             <span>Settings</span>
           </button>
         </aside>
 
-        <section className="dashboard-main" aria-label={dashboardSection === "challenges" ? "Challenges" : dashboardSection === "learn" ? "Learn" : "Dashboard"}>
+        <section
+          className="dashboard-main"
+          aria-label={dashboardSection === "challenges" ? "Challenges" : dashboardSection === "learn" ? "Learn" : dashboardSection === "shared" ? "Shared projects" : "Dashboard"}
+        >
           {dashboardSection === "challenges" ? (
             <div className="dashboard-coming-soon" role="status">
               <strong>Coming soon</strong>
@@ -1072,6 +1698,39 @@ function Dashboard({
                 ))}
               </div>
             </>
+          ) : dashboardSection === "shared" ? (
+            <>
+              {dashboardNotice ? <div className="dashboard-import-notice" role="status">{dashboardNotice}</div> : null}
+              <div className="dashboard-section-header shared-projects-header">
+                <div>
+                  <h1>Shared projects</h1>
+                  <span>{sharedProjects.length} available from Docker storage</span>
+                </div>
+                <button className="shared-projects-refresh" type="button" onClick={onRefreshSharedProjects} disabled={sharedProjectsLoading}>
+                  <RefreshCw size={16} className={sharedProjectsLoading ? "spinning" : undefined} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+              {sharedProjects.length > 0 ? (
+                <div className={viewMode === "grid" ? "project-grid" : "project-list"}>
+                  {sharedProjects.map((project, index) => (
+                    <article className="project-card shared-project-card" key={project.fileName}>
+                      <button className="project-card-open" type="button" onClick={() => onOpenSharedProject(project)}>
+                        <ProjectPreview accent={PROJECT_ACCENTS[index % PROJECT_ACCENTS.length]} />
+                        <span className="project-card-title">{project.name}</span>
+                        <span className="project-card-meta">{formatUpdated(project.updatedAt)} - {formatFileSize(project.size)}</span>
+                      </button>
+                      <span className="shared-project-badge">Shared</span>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="project-empty">
+                  <strong>{sharedProjectsLoading ? "Loading shared projects" : "No shared projects yet"}</strong>
+                  <span>Save an SKF project to the shared space from the Export window.</span>
+                </div>
+              )}
+            </>
           ) : (
             <>
               <div className="dashboard-actions-band">
@@ -1085,7 +1744,7 @@ function Dashboard({
                   <span className="dashboard-action-icon">
                     <FileUp size={24} strokeWidth={2.4} />
                   </span>
-                  <span>Import file</span>
+                  <span>Open SKF or import geometry</span>
                 </button>
                 {onOpenFromDrive ? (
                   <button className="dashboard-action-tile" type="button" onClick={onOpenFromDrive}>
@@ -1249,10 +1908,10 @@ function Dashboard({
       ) : null}
 
       {settingsOpen ? (
-        <section className="dashboard-settings-panel" role="dialog" aria-modal="true" aria-label="Download settings">
+        <section className="dashboard-settings-panel" role="dialog" aria-modal="true" aria-label="Settings">
           <header>
-            <strong>Download settings</strong>
-            <button type="button" aria-label="Close download settings" onClick={onCloseSettings}>
+            <strong>Settings</strong>
+            <button type="button" aria-label="Close settings" onClick={onCloseSettings}>
               <X size={18} />
             </button>
           </header>
@@ -1272,9 +1931,13 @@ function Dashboard({
               disabled={staticExportBuild || downloadMode !== "folder"}
               value={downloadFolder}
               onChange={(event) => onDownloadFolderChange(event.currentTarget.value)}
-              placeholder="C:\\Users\\spiro\\Downloads"
+              placeholder="C:\\Users\\username\\Downloads"
             />
           </label>
+          <div className="dashboard-version-row">
+            <span>SketchForge version</span>
+            <strong>{SKF_CREATED_WITH_VERSION}</strong>
+          </div>
         </section>
       ) : null}
     </main>

@@ -5,7 +5,8 @@ import { NextResponse } from "next/server";
 export const revalidate = false;
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
-const MAX_LOCAL_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_TEXT_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_BINARY_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 
 function safeFileName(filename: string) {
   const base = path.basename(filename).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim();
@@ -40,28 +41,51 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Local folder downloads are only available from this localhost app" }, { status: 403 });
     }
 
-    const body = (await request.json()) as { content?: unknown; filename?: unknown; folder?: unknown };
-    if (typeof body.content !== "string" || typeof body.filename !== "string" || typeof body.folder !== "string") {
-      return NextResponse.json({ error: "Invalid download request" }, { status: 400 });
+    const contentType = request.headers.get("content-type") ?? "";
+    let filename: string;
+    let folder: string;
+    let content: string | Buffer;
+    if (contentType.toLowerCase().startsWith("multipart/form-data")) {
+      const formData = await request.formData();
+      const file = formData.get("file");
+      const requestedName = formData.get("filename");
+      const requestedFolder = formData.get("folder");
+      if (!(file instanceof Blob) || typeof requestedName !== "string" || typeof requestedFolder !== "string") {
+        return NextResponse.json({ error: "Invalid binary download request" }, { status: 400 });
+      }
+      if (file.size > MAX_BINARY_DOWNLOAD_BYTES) {
+        return NextResponse.json({ error: "File is too large for local folder download" }, { status: 413 });
+      }
+      filename = requestedName;
+      folder = requestedFolder;
+      content = Buffer.from(await file.arrayBuffer());
+    } else {
+      const body = (await request.json()) as { content?: unknown; filename?: unknown; folder?: unknown };
+      if (typeof body.content !== "string" || typeof body.filename !== "string" || typeof body.folder !== "string") {
+        return NextResponse.json({ error: "Invalid download request" }, { status: 400 });
+      }
+      if (Buffer.byteLength(body.content, "utf8") > MAX_TEXT_DOWNLOAD_BYTES) {
+        return NextResponse.json({ error: "File is too large for local folder download" }, { status: 413 });
+      }
+      filename = body.filename;
+      folder = body.folder;
+      content = body.content;
     }
 
-    if (Buffer.byteLength(body.content, "utf8") > MAX_LOCAL_DOWNLOAD_BYTES) {
-      return NextResponse.json({ error: "File is too large for local folder download" }, { status: 413 });
-    }
-
-    const trimmedFolder = body.folder.trim();
+    const trimmedFolder = folder.trim();
     if (!trimmedFolder) {
       return NextResponse.json({ error: "Choose a folder first" }, { status: 400 });
     }
 
     const targetDirectory = path.resolve(path.isAbsolute(trimmedFolder) ? trimmedFolder : path.join(process.cwd(), trimmedFolder));
     await fs.mkdir(targetDirectory, { recursive: true });
-    const targetPath = path.resolve(targetDirectory, safeFileName(body.filename));
+    const targetPath = path.resolve(targetDirectory, safeFileName(filename));
     const relativeTarget = path.relative(targetDirectory, targetPath);
     if (relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
       return NextResponse.json({ error: "Invalid file path" }, { status: 400 });
     }
-    await fs.writeFile(targetPath, body.content, "utf8");
+    if (typeof content === "string") await fs.writeFile(targetPath, content, "utf8");
+    else await fs.writeFile(targetPath, content);
 
     return NextResponse.json({ path: targetPath });
   } catch (error) {

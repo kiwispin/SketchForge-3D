@@ -16,14 +16,14 @@
 
   <p>
     <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-16a34a"></a>
-    <a href="https://github.com/Formsmith746/SketchForge-3D/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/Formsmith746/SketchForge-3D?style=social"></a>
-    <a href="https://github.com/sponsors/Formsmith746"><img alt="GitHub Sponsors" src="https://img.shields.io/github/sponsors/Formsmith746?label=sponsor&logo=githubsponsors&color=bf3989"></a>
+    <a href="https://github.com/Formsmith746/SketchForge-3D/stargazers"><img alt="Star SketchForge on GitHub" src="docs/media/badges/github-star.svg"></a>
+    <a href="https://github.com/sponsors/Formsmith746"><img alt="Sponsor SketchForge on GitHub" src="docs/media/badges/github-sponsor.svg"></a>
     <img alt="Local first" src="https://img.shields.io/badge/local--first-no%20account-0ea5e9">
-    <img alt="Version 0.5.0" src="https://img.shields.io/badge/version-0.5.0-2563eb">
+    <img alt="Version v0.9.0" src="https://img.shields.io/badge/version-v0.9.0-2563eb">
   </p>
 </div>
 
-![SketchForge editor showing a selected box on the workplane](docs/media/sketchforge-editor-v0.5.png)
+![SketchForge editor showing a selected box on the workplane](docs/media/sketchforge-editor-v0.8.0.png)
 
 ## Why SketchForge
 
@@ -46,6 +46,10 @@ No login. No server project storage. No heavyweight CAD install just to make a u
 - **STL import** - bring outside models into the same workspace as primitives.
 - **STL, OBJ, and STEP workflows** - export selected objects or the whole scene, and round-trip exact STEP/B-Rep geometry.
 - **Fast browser stack** - Next.js, React, TypeScript, Three.js, and Manifold/CSG geometry tooling.
+
+### Camera projection shortcut
+
+Press **O** in the editor to switch between perspective and orthographic projection. The current view direction and framing are preserved when switching.
 
 ## Demo
 
@@ -83,7 +87,7 @@ On Windows, you can open PowerShell in the folder by opening the folder, clickin
 
 ## Docker / FabLab Server (Recommended)
 
-Docker is the easiest way to run SketchForge for a classroom, workshop, or FabLab. It packages the build tools, static website, Nginx server, health check, and restart behavior together.
+Docker is the easiest way to run SketchForge for a classroom, workshop, or FabLab. It packages the build tools, Next.js server, health check, persistent shared-project storage, and restart behavior together.
 
 ### What You Need
 
@@ -116,7 +120,11 @@ docker compose -f deploy/docker/compose-ghcr.yaml up -d
 #### Standalone (Prebuilt)
 
 ```bash
-docker run -d --name sketchforge --restart unless-stopped -p 3000:80 ghcr.io/formsmith746/sketchforge-3d:latest
+docker run -d --name sketchforge --restart unless-stopped \
+  -p 3000:3000 \
+  -e SKETCHFORGE_SHARED_PROJECTS_DIR=/data/projects \
+  -v sketchforge-shared-projects:/data/projects \
+  ghcr.io/formsmith746/sketchforge-3d:latest
 ```
 
 After running, open this on the same computer:
@@ -126,6 +134,29 @@ http://127.0.0.1:3000/
 ```
 
 If that works, SketchForge is running.
+
+The container listens on port `3000`. It also accepts connections on port `80` for backward compatibility with older UnRAID templates and forwards them to the same server. New Docker and UnRAID configurations should use container port `3000`.
+
+### Shared Docker Projects
+
+Docker deployments include a shared `.skf` project library. Private projects still autosave in each user's browser. The **Shared** dashboard section lists files stored in `/data/projects`, and **Export → SKF → Save to shared** writes the current project there.
+
+Compose uses the persistent `sketchforge-shared-projects` volume by default. To use a directory on the Docker host instead, set `SKETCHFORGE_SHARED_PROJECTS_VOLUME` before starting Compose:
+
+Windows PowerShell:
+
+```powershell
+$env:SKETCHFORGE_SHARED_PROJECTS_VOLUME = "C:/SketchForge/shared-projects"
+docker compose -f deploy/docker/compose.yaml up --build -d
+```
+
+Linux or macOS:
+
+```bash
+SKETCHFORGE_SHARED_PROJECTS_VOLUME=/srv/sketchforge-projects docker compose -f deploy/docker/compose.yaml up --build -d
+```
+
+Opening a shared file creates a private local working copy. Saving back checks the server revision first; if another user has changed the file, SketchForge refuses to overwrite it and asks the user to reload or save with another name. This is shared file storage, not simultaneous live editing.
 
 ### Let Other Computers Join
 
@@ -279,18 +310,33 @@ npm run export
 
 ## Install as an app (PWA)
 
-SketchForge can run as an installable Progressive Web App. Build the static app,
-serve the generated `apps/web/out/` folder from an HTTPS web server, then open it in a
-modern browser and choose **Install SketchForge** from the browser menu.
+SketchForge can run as an installable Progressive Web App. Production builds
+register a service worker (`apps/web/public/sw.js`) and a web app manifest, so
+the static export can be served from any HTTPS web server, opened in a modern
+browser and installed with **Install SketchForge** from the browser menu.
+
+On macOS or Linux the static export is:
 
 ```bash
-npm run pwa:build
-npx serve apps/web/out
+STATIC_EXPORT=true npm run build
+npm run verify:static-worker-assets
+npx serve apps/web/.next-export
 ```
 
-For local testing, open the URL printed by `serve`; localhost is treated as a
-secure origin by browsers. The app caches its editor shell after the first
-successful load and stores projects locally in the browser on that device.
+(`npm run export` does the same on Windows.) Localhost counts as a secure
+origin, so the URL printed by `serve` is enough for local testing. The app
+caches its editor shell after the first successful load and stores projects
+locally in the browser on that device. Each build gets its own cache, so a
+redeploy is picked up on the next online visit.
+
+### GitHub Pages
+
+`.github/workflows/deploy-pages.yml` builds the static export with
+`GITHUB_PAGES=true` and publishes it on every push to `main` (enable Pages with
+"GitHub Actions" as the source). The app is served from `/<repository>/`; set
+`PAGES_BASE_PATH` to build for another sub-path. To show Google Drive saving,
+add the OAuth client ID as the `GOOGLE_OAUTH_CLIENT_ID` repository variable
+(see [docs/google-drive-setup.md](docs/google-drive-setup.md)).
 
 ## Contributing
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CloudDownload, CloudUpload, Download, X } from "lucide-react";
+import { Check, CloudDownload, CloudUpload, Download, Eye, FolderOpen, X } from "lucide-react";
 import type manifoldModule from "manifold-3d";
 import type { ManifoldToplevel } from "manifold-3d";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -9,15 +9,18 @@ import * as THREE from "three";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { FontLoader, type Font, type FontData } from "three/examples/jsm/loaders/FontLoader.js";
-import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 import droidMonoFontJson from "three/examples/fonts/droid/droid_sans_mono_regular.typeface.json";
 import droidSansBoldFontJson from "three/examples/fonts/droid/droid_sans_bold.typeface.json";
 import droidSerifBoldFontJson from "three/examples/fonts/droid/droid_serif_bold.typeface.json";
 import gentilisBoldFontJson from "three/examples/fonts/gentilis_bold.typeface.json";
 import helvetikerBoldFontJson from "three/examples/fonts/helvetiker_bold.typeface.json";
 import optimerBoldFontJson from "three/examples/fonts/optimer_bold.typeface.json";
+import type { AppThemePreference, ResolvedAppTheme } from "@/lib/appTheme";
 import { manifoldModuleSource } from "@/generated/manifoldModuleSource";
 import { manifoldWasmBase64 } from "@/generated/manifoldWasmBase64";
+import { sphereTessellation } from "@/lib/sphereTessellation";
+import { createGearGeometry } from "@/lib/gearGeometry";
+import { regularPolygonFootprintScale } from "@/lib/regularPolygonFootprint";
 import {
   ToolbarAlignIcon,
   ToolbarChamferIcon,
@@ -42,17 +45,19 @@ import {
   ToolbarUngroupIcon,
   ToolbarUndoIcon,
   ToolbarVectorExportIcon,
-  ToolbarWorkplaneIcon,
 } from "./icons";
 import { WorkplaneViewport } from "./WorkplaneViewport";
 import { SketchWorkspace, type SketchMeasurement, type SketchSelection, type SketchTool } from "./SketchWorkspace";
 import { EdgeModifierPanel } from "./workplane/EdgeModifierPanel";
 import {
   canonicalizeShape,
+  cloneWorkplaneShapeTreeWithFreshIds,
   cleanNearZero,
   cleanRotationDegrees,
   duplicateAxisOffset,
   fallbackSolidColor,
+  keyboardMoveStep,
+  meshYawDegrees,
   mirroredAxisCount,
   mirrorSign,
   normalizeDegrees,
@@ -61,21 +66,54 @@ import {
   serializeShapesForSync,
   shapeDepth,
   shapeWidth,
-  keyboardMoveStep,
+  withHoleMode,
   workplaneShapesEqual,
 } from "@/lib/workplaneShapes";
 import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
+import { bakeWorldMeshIntoShape, orientationRecordForBake, shapeOwnFrame } from "@/lib/shapeLocalFrame";
+import { hasOneToOneCadComponentMapping } from "@/lib/cadModifierGroups";
+import {
+  CAD_MODIFIER_MAX_SHARP_ANGLE,
+  CAD_MODIFIER_REQUEST_TIMEOUT_MS,
+  cadModifierPrepareTimeoutMs,
+  cadModifierTimeoutMessage,
+  cadModifierWorkerFailureMessage,
+  defaultCadModifierTangentChain,
+  selectableCadModifierEdge,
+  type CadModifierRequestPhase,
+} from "@/lib/cadModifierRuntime";
+import { cloneWorkplaneShapeSnapshot, compactEdgeTreatmentHistory, edgeTreatmentAppliedFrame, restoreShapeBeforeEdgeTreatment } from "@/lib/edgeTreatmentHistory";
+import { appendEditorHistorySnapshot, boundedEditorHistoryState, editorHistoryEntry, editorHistoryForExport, hydrateEditorHistoryState, projectShapesFingerprint, type EditorHistoryEntry, type EditorHistoryExportLimit, type EditorHistoryState } from "@/lib/editorHistory";
+import { snapShapeFootprintToVisibleGrid, visibleGridStep } from "@/lib/gridSnap";
+import { ASSET_BASE_PATH } from "@/lib/basePath";
 import { createLocalId } from "@/lib/localIds";
 import { projectExportFileName } from "@/lib/exportNames";
-import { isProjectFileName, parseProjectFile, projectFileName, serializeProjectFile, type ParsedProjectFile } from "@/lib/projectFile";
-import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
+import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceFormatForFileName } from "@/lib/projectAssets";
+import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
+import { buildSketchRevolveMesh, DEFAULT_SKETCH_REVOLVE_SETTINGS, normalizeSketchRevolveSettings, type SketchRevolveMesh } from "@/lib/sketchRevolve";
+import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
+import { isProjectFileName } from "@/lib/projectFile";
+import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, requestDriveAccessToken, uploadProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
-import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
-import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
+import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { stlHoleCount, stlSolidCount, stlSourceShapes, type StlExportScope } from "@/lib/stlExport";
-import { normalizeSnapGrid, normalizeWorkspaceSettings } from "@/lib/workplaneSettings";
+import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
+import { importedShapeFromSvg, invalidSvgMeshReason } from "@/lib/svgImport";
+import { toSvgProjection, type SvgProjectionLayer } from "@/lib/svgExport";
+import { normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
+import {
+  normalizePlacementWorkplane,
+  placementPatchForNewShape,
+  placementWorkplaneCoordinates,
+  placementWorkplaneFromSurface,
+  placementWorkplaneIsBase,
+  translationToWorkplane,
+  type PlacementPoint,
+  type PlacementWorkplane,
+} from "@/lib/placementWorkplane";
+import { placeSketchExtrusion } from "@/lib/sketchPlacement";
 import {
   SKETCHFORGE_MCP_POLL_MS,
   SKETCHFORGE_MCP_ROUTE,
@@ -85,12 +123,15 @@ import {
   type SketchForgeMcpViewFace,
 } from "@/lib/sketchforgeMcpProtocol";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectDriveFile, ProjectSaveStatus, ShapeAsset, SketchImage, SketchPoint, SketchProfile, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ProjectDriveFile, ProjectSaveStatus, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export { importedShapeFromStl, importedShapeFromSvg };
 
-type TopPanel = "import" | "export" | "tips" | "profile" | "settings" | "repeat" | null;
-type ExportFormat = "stl" | "obj";
+type TopPanel = "import" | "export" | "profile" | "settings" | "repeat" | null;
+type ExportFormat = "stl" | "obj" | "step" | "svg" | "skf";
+type DirectExportFormat = Exclude<ExportFormat, "step" | "skf">;
+type SkfHistoryLimit = EditorHistoryExportLimit;
+type SkfExportTarget = "download" | "shared" | "drive" | "drive-copy";
 type ToolbarMode = "geometry" | "sketch";
 type Vec3 = [number, number, number];
 type MeshData = { name: string; vertices: Vec3[]; faces: [number, number, number][] };
@@ -167,13 +208,13 @@ const DOWNLOAD_FOLDER_STORAGE_KEY = "sketchForge.downloadFolder";
 const SHARED_CLIPBOARD_STORAGE_KEY = "sketchForge.clipboard";
 const SYSTEM_CLIPBOARD_PREFIX = "SKETCHFORGE3D/1\n";
 const STATIC_EXPORT_BUILD = process.env.NEXT_PUBLIC_STATIC_EXPORT === "true";
-const ASSET_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 declare global {
   interface Window {
     __sketchforgeBooleanTest?: BooleanAutomationResult;
     __sketchforgeBooleanTestImage?: string;
     sketchforgeCaptureCanvas?: () => string;
+    sketchforgeCaptureCanvasAsync?: () => Promise<string>;
     sketchforgeCaptureView?: (face?: SketchForgeMcpViewFace) => Promise<string> | string;
   }
 }
@@ -181,15 +222,14 @@ declare global {
 const CUTTER_PADDING = 0.05;
 const POINT_TOLERANCE = 0.0001;
 const CUTTER_RESIDUAL_INSET = CUTTER_PADDING * 0.4;
-
 const MIN_SHAPE_DIMENSION = 0.01;
+const MAX_SKETCH_HISTORY_ENTRIES = 100;
 const MODEL_DIMENSION_PRECISION = 3;
 const IMPORTED_EXACT_BOOLEAN_TRIANGLE_LIMIT = 150000;
 const COPLANAR_BOOLEAN_RESCUE_DEGREES = 0.02;
 const NORMAL_SELECTION_CAD_EDGE_MIN_ANGLE = 60;
 const MIN_EDGE_MODIFIER_AMOUNT = 0.001;
 const SEPARATE_PARTS_VERTEX_TOLERANCE = 0.0005;
-const svgLoader = new SVGLoader();
 const booleanFontLoader = new FontLoader();
 const booleanTextFonts: Record<string, Font> = {
   Multilanguage: booleanFontLoader.parse(helvetikerBoldFontJson as FontData),
@@ -303,7 +343,90 @@ function pointInSketchPolygon(point: THREE.Vector2, polygon: THREE.Vector2[]) {
   return inside;
 }
 
-function shapeFromSketchProfile(profile: SketchProfile, height: number, existing?: WorkplaneShape | null) {
+async function shapeFromResolvedSketchProfile(
+  profile: SketchProfile,
+  polygons: Array<Array<[number, number]>>,
+  height: number,
+  centerX: number,
+  centerZ: number,
+  existing?: WorkplaneShape | null,
+) {
+  const runtime = await getManifoldRuntime();
+  const disposable: unknown[] = [];
+  try {
+    const section = new runtime.CrossSection(polygons, "EvenOdd");
+    disposable.push(section);
+    const coordinateScale = polygons.reduce(
+      (largest, polygon) => polygon.reduce((polygonLargest, point) => Math.max(polygonLargest, Math.abs(point[0]), Math.abs(point[1])), largest),
+      1,
+    );
+    const simplified = section.simplify(Math.max(1e-7, coordinateScale * 1e-8));
+    disposable.push(simplified);
+    if (simplified.toPolygons().length === 0) throw new Error("The sketch has no filled area after resolving its crossings");
+
+    const solid = simplified.extrude(height);
+    disposable.push(solid);
+    if (solid.status() !== "NoError" || solid.numTri() < 1) {
+      throw new Error("The crossing sketch could not be converted into a valid solid");
+    }
+
+    const manifoldPositions = manifoldMeshToPositions(solid.getMesh());
+    const positions = new Array<number>(manifoldPositions.length);
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minZ = Number.POSITIVE_INFINITY;
+    let maxZ = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index + 2 < manifoldPositions.length; index += 3) {
+      const x = manifoldPositions[index];
+      const y = manifoldPositions[index + 2];
+      const z = -manifoldPositions[index + 1];
+      positions[index] = x;
+      positions[index + 1] = y;
+      positions[index + 2] = z;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+    const localCenterX = (minX + maxX) / 2;
+    const localCenterZ = (minZ + maxZ) / 2;
+    for (let index = 0; index + 2 < positions.length; index += 3) {
+      positions[index] -= localCenterX;
+      positions[index + 2] -= localCenterZ;
+    }
+    const meshWidth = Math.max(0.01, maxX - minX);
+    const meshDepth = Math.max(0.01, maxZ - minZ);
+    return canonicalizeShape({
+      id: existing?.id ?? createLocalId("sketch-extrusion"),
+      name: existing?.name ?? "Sketch extrusion",
+      kind: "mesh",
+      color: existing?.color ?? "#d41721",
+      hole: existing?.hole,
+      x: centerX + localCenterX,
+      z: centerZ + localCenterZ,
+      elevation: 0,
+      size: Math.max(meshWidth, meshDepth),
+      width: meshWidth,
+      depth: meshDepth,
+      height,
+      rotation: 0,
+      importedMesh: {
+        positions,
+        baseWidth: meshWidth,
+        baseDepth: meshDepth,
+        baseHeight: height,
+        triangleCount: Math.floor(positions.length / 9),
+        sourceFormat: "json",
+      },
+      sketchProfile: cloneSketchProfile(profile),
+      sketchOperation: "extrude",
+    } satisfies WorkplaneShape);
+  } finally {
+    [...new Set(disposable)].reverse().forEach(disposeManifold);
+  }
+}
+
+async function shapeFromSketchProfile(profile: SketchProfile, height: number, existing?: WorkplaneShape | null) {
   const closedPaths = orderedSketchPaths(profile).filter((path) => path.closed);
   if (closedPaths.length === 0) return null;
   const profilePoints = closedPaths.flatMap((path) => path.points);
@@ -341,6 +464,25 @@ function shapeFromSketchProfile(profile: SketchProfile, height: number, existing
     const polygon = outline.extractPoints(16).shape;
     return { outline, polygon, area: Math.abs(THREE.ShapeUtils.area(polygon)) };
   });
+  const hasCurves = profile.segments.some((segment) => segment.kind === "bezier" || segment.kind === "smooth");
+  const longestHandle = profile.points.reduce((longest, point) => Math.max(
+    longest,
+    point.handleIn ? Math.hypot(point.handleIn.x - point.x, point.handleIn.z - point.z) : 0,
+    point.handleOut ? Math.hypot(point.handleOut.x - point.x, point.handleOut.z - point.z) : 0,
+  ), 0);
+  const curveScale = Math.max(width, depth, longestHandle * 2);
+  const curveSegments = hasCurves ? Math.min(256, Math.max(32, Math.ceil(curveScale * 1.25))) : 1;
+  const sampledPolygons = outlineRecords.map((record) => record.outline.extractPoints(curveSegments).shape);
+  if (findSketchOutlineIntersection(sampledPolygons)) {
+    return shapeFromResolvedSketchProfile(
+      profile,
+      sampledPolygons.map((polygon) => polygon.map((point) => [point.x, point.y] as [number, number])),
+      safeHeight,
+      centerX,
+      centerZ,
+      existing,
+    );
+  }
   const sortedOutlines = [...outlineRecords].sort((a, b) => b.area - a.area);
   const outlines: THREE.Shape[] = [];
   sortedOutlines.forEach((record) => {
@@ -353,14 +495,6 @@ function shapeFromSketchProfile(profile: SketchProfile, height: number, existing
     if (parent) parent.outline.holes.push(record.outline);
     else outlines.push(record.outline);
   });
-  const hasCurves = profile.segments.some((segment) => segment.kind === "bezier" || segment.kind === "smooth");
-  const longestHandle = profile.points.reduce((longest, point) => Math.max(
-    longest,
-    point.handleIn ? Math.hypot(point.handleIn.x - point.x, point.handleIn.z - point.z) : 0,
-    point.handleOut ? Math.hypot(point.handleOut.x - point.x, point.handleOut.z - point.z) : 0,
-  ), 0);
-  const curveScale = Math.max(width, depth, longestHandle * 2);
-  const curveSegments = hasCurves ? Math.min(256, Math.max(32, Math.ceil(curveScale * 1.25))) : 1;
   const geometry = new THREE.ExtrudeGeometry(outlines, { depth: safeHeight, bevelEnabled: false, steps: 1, curveSegments });
   geometry.rotateX(-Math.PI / 2);
   geometry.computeVertexNormals();
@@ -401,19 +535,55 @@ function shapeFromSketchProfile(profile: SketchProfile, height: number, existing
       sourceFormat: "json",
     },
     sketchProfile: cloneSketchProfile(profile),
+    sketchOperation: "extrude",
+  } satisfies WorkplaneShape);
+}
+
+async function shapeFromRevolvedSketchProfile(
+  profile: SketchProfile,
+  settings: Partial<SketchRevolveSettings>,
+  existing?: WorkplaneShape | null,
+) {
+  const runtime = await getManifoldRuntime();
+  const normalizedSettings = normalizeSketchRevolveSettings(settings);
+  const mesh = buildSketchRevolveMesh(runtime, profile, normalizedSettings);
+  return canonicalizeShape({
+    id: existing?.id ?? createLocalId("sketch-revolve"),
+    name: existing?.name ?? "Sketch revolve",
+    kind: "mesh",
+    color: existing?.color ?? "#78b96b",
+    hole: existing?.hole,
+    x: existing?.x ?? 0,
+    z: existing?.z ?? 0,
+    elevation: existing?.elevation ?? 0,
+    size: Math.max(mesh.width, mesh.depth),
+    width: mesh.width,
+    depth: mesh.depth,
+    height: mesh.height,
+    rotation: existing?.rotation ?? 0,
+    rotationX: existing?.rotationX ?? 0,
+    rotationZ: existing?.rotationZ ?? 0,
+    mirrorX: existing?.mirrorX,
+    mirrorY: existing?.mirrorY,
+    mirrorZ: existing?.mirrorZ,
+    importedMesh: {
+      positions: mesh.positions,
+      baseWidth: mesh.width,
+      baseDepth: mesh.depth,
+      baseHeight: mesh.height,
+      triangleCount: mesh.triangleCount,
+      sourceFormat: "json",
+    },
+    sketchProfile: cloneSketchProfile(profile),
+    sketchOperation: "revolve",
+    sketchRevolve: normalizedSettings,
+    locked: existing?.locked ?? false,
+    hidden: existing?.hidden ?? false,
   } satisfies WorkplaneShape);
 }
 
 function cleanModelDimension(value: number) {
   return Math.max(MIN_SHAPE_DIMENSION, Number(value.toFixed(MODEL_DIMENSION_PRECISION)));
-}
-
-function meshYawDegrees(shape: WorkplaneShape) {
-  const isRoundPrimitive = !shape.importedMesh && (shape.kind === "cylinder" || shape.kind === "cone");
-  const isCircular = Math.abs(shapeWidth(shape) - shapeDepth(shape)) < 0.0005;
-  // A circular cylinder/cone is invariant around Y. Ignoring that purely visual
-  // yaw keeps its tessellated export at the requested diameter after grouping.
-  return isRoundPrimitive && isCircular ? 0 : shape.rotation;
 }
 
 function parseClipboardShapes(serialized: string) {
@@ -1084,16 +1254,6 @@ function makeBlockPerfScene(count = 500): WorkplaneShape[] {
   });
 }
 
-function withHoleMode(shape: WorkplaneShape, hole: boolean, parentColor?: string): WorkplaneShape {
-  const color = hole ? "#b8c2cc" : (parentColor ?? fallbackSolidColor(shape));
-  return {
-    ...shape,
-    hole,
-    color,
-    groupedShapes: shape.groupedShapes?.map((child) => withHoleMode(child, hole)),
-  };
-}
-
 function sanitizeName(name: string) {
   return name.replace(/[^a-z0-9_-]+/gi, "_") || "shape";
 }
@@ -1181,6 +1341,8 @@ function shapeFromCadMesh(
       height,
     },
     cadPrimitiveFrame: undefined,
+    // The CAD result is in world space; it keeps the source's orientation.
+    localFrame: orientationRecordForBake(source),
   });
 }
 
@@ -1205,7 +1367,26 @@ function tangentCadEdgeChain(edges: CadModifierEdge[], startId: number, allowedI
   const edgeById = new Map(edges.map((edge) => [edge.id, edge]));
   const selected = new Set<number>([startId]);
   const queue = [startId];
-  const tolerance = 0.025;
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  edges.forEach((edge) => {
+    for (let index = 0; index + 2 < edge.points.length; index += 3) {
+      minX = Math.min(minX, edge.points[index]);
+      minY = Math.min(minY, edge.points[index + 1]);
+      minZ = Math.min(minZ, edge.points[index + 2]);
+      maxX = Math.max(maxX, edge.points[index]);
+      maxY = Math.max(maxY, edge.points[index + 1]);
+      maxZ = Math.max(maxZ, edge.points[index + 2]);
+    }
+  });
+  const diagonal = [minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite)
+    ? Math.hypot(maxX - minX, maxY - minY, maxZ - minZ)
+    : 1;
+  const tolerance = Math.max(1e-6, Math.min(0.01, diagonal * 1e-5));
   while (queue.length > 0) {
     const id = queue.shift() as number;
     const edge = edgeById.get(id);
@@ -1226,10 +1407,6 @@ function tangentCadEdgeChain(edges: CadModifierEdge[], startId: number, allowedI
     });
   }
   return [...selected];
-}
-
-function selectableCadModifierEdge(edge: CadModifierEdge, sharpAngle: number) {
-  return edge.selectable && edge.manifold && !edge.boundary && edge.angle + 1e-3 >= sharpAngle;
 }
 
 function cadDisplayEdgesAfterTreatment(shape: WorkplaneShape, session: EdgeModifierSession) {
@@ -1285,10 +1462,6 @@ function cadModifierComponentPreviews(sourceParts: WorkplaneShape[], components:
   return previews;
 }
 
-function cloneWorkplaneShapeSnapshot(shape: WorkplaneShape): WorkplaneShape {
-  return JSON.parse(JSON.stringify(canonicalizeShape(shape))) as WorkplaneShape;
-}
-
 function edgeTreatmentLabel(feature: NonNullable<WorkplaneShape["edgeTreatments"]>[number]) {
   const size = `${Number(feature.amount.toFixed(2))} mm`;
   return `${feature.kind === "fillet" ? "fillet" : "chamfer"} (${size}, ${feature.edgeCount} edge${feature.edgeCount === 1 ? "" : "s"})`;
@@ -1311,14 +1484,26 @@ function shapeWithEdgeTreatmentRecord(
       },
     ],
     edgeTreatmentHistory: [
-      ...(before.edgeTreatmentHistory ?? []),
+      ...compactEdgeTreatmentHistory(before.edgeTreatmentHistory),
       {
         id: createLocalId("edge-history"),
         createdAt,
         feature,
         before: cloneWorkplaneShapeSnapshot(before),
+        appliedFrame: edgeTreatmentAppliedFrame(shape),
       },
     ],
+  });
+}
+
+function bakedEdgeTreatmentPreview(shape: WorkplaneShape, base: WorkplaneShape) {
+  if (!base.groupedShapes?.length) return shape;
+  return canonicalizeShape({
+    ...shape,
+    groupedShapes: undefined,
+    groupedBaseWidth: undefined,
+    groupedBaseDepth: undefined,
+    groupedBaseHeight: undefined,
   });
 }
 
@@ -1367,7 +1552,10 @@ function groupedShapeWithComponentEdgeTreatment(
   feature: NonNullable<WorkplaneShape["edgeTreatments"]>[number],
   createdAt: number,
 ) {
-  if (!base.groupedShapes?.length || sourceParts.length < 2 || session.componentPreviews.length === 0) {
+  if (
+    !base.groupedShapes?.length ||
+    !hasOneToOneCadComponentMapping(sourceParts.length, session.componentPreviews.map((component) => component.owner))
+  ) {
     return null;
   }
 
@@ -1383,6 +1571,9 @@ function groupedShapeWithComponentEdgeTreatment(
   }
 
   const ownerToSourceIndex = matchCadComponentsToSources(sourceParts, session.componentPreviews);
+  if (ownerToSourceIndex.size !== sourceParts.length) {
+    return null;
+  }
   const componentByOwner = new Map(session.componentPreviews.map((component) => [component.owner, component]));
   const updatedSources = [...sourceParts];
   let changed = false;
@@ -1419,7 +1610,7 @@ function groupedShapeWithComponentEdgeTreatment(
     ...preview,
     edgeResizeMode: session.preserveEdgeSize ? "preserve" : "scale",
     edgeTreatments: base.edgeTreatments,
-    edgeTreatmentHistory: base.edgeTreatmentHistory,
+    edgeTreatmentHistory: base.edgeTreatmentHistory?.length ? compactEdgeTreatmentHistory(base.edgeTreatmentHistory) : undefined,
     groupedBaseWidth: shapeWidth(preview),
     groupedBaseDepth: shapeDepth(preview),
     groupedBaseHeight: preview.height,
@@ -1453,29 +1644,7 @@ function edgeTreatmentHistoryOptions(shape: WorkplaneShape, path: number[] = [],
 }
 
 function restoreOwnLastEdgeTreatment(shape: WorkplaneShape, entry: NonNullable<WorkplaneShape["edgeTreatmentHistory"]>[number]) {
-  const before = cloneWorkplaneShapeSnapshot(entry.before);
-  return canonicalizeShape({
-    ...before,
-    id: shape.id,
-    name: shape.name,
-    color: shape.color,
-    hole: shape.hole || undefined,
-    x: shape.x,
-    z: shape.z,
-    elevation: shape.elevation,
-    width: shapeWidth(shape),
-    depth: shapeDepth(shape),
-    height: shape.height,
-    size: shape.size,
-    rotation: shape.rotation,
-    rotationX: shape.rotationX,
-    rotationZ: shape.rotationZ,
-    mirrorX: shape.mirrorX,
-    mirrorY: shape.mirrorY,
-    mirrorZ: shape.mirrorZ,
-    locked: shape.locked,
-    hidden: shape.hidden,
-  });
+  return restoreShapeBeforeEdgeTreatment(shape, entry);
 }
 
 async function restoreEdgeTreatmentInShape(shape: WorkplaneShape, path: number[], entryId: string): Promise<{ shape: WorkplaneShape; label: string } | null> {
@@ -1510,9 +1679,14 @@ async function restoreEdgeTreatmentInShape(shape: WorkplaneShape, path: number[]
       ...rebuilt.group,
       id: shape.id,
       name: shape.name,
+      color: shape.color,
       hole: shape.hole || rebuilt.group.hole,
       locked: shape.locked,
       hidden: shape.hidden,
+      edgeResizeMode: shape.edgeResizeMode,
+      groupOperation: shape.groupOperation,
+      edgeTreatments: shape.edgeTreatments,
+      edgeTreatmentHistory: shape.edgeTreatmentHistory?.length ? compactEdgeTreatmentHistory(shape.edgeTreatmentHistory) : undefined,
     }),
     label: restoredChild.label,
   };
@@ -1606,8 +1780,7 @@ function cylinderMesh(shape: WorkplaneShape, sides = 96, topRadiusScale = 1): Me
 }
 
 function sphereMesh(shape: WorkplaneShape): MeshData {
-  const lat = 12;
-  const lon = 32;
+  const { widthSegments: lon, heightSegments: lat } = sphereTessellation(shape.steps);
   const width = shapeWidth(shape);
   const depth = shapeDepth(shape);
   const height = shape.height;
@@ -1709,9 +1882,10 @@ function createBooleanWedgeGeometry(width: number, height: number, depth: number
 function createBooleanPyramidGeometry(width: number, height: number, depth: number, sides = 4) {
   const count = Math.max(3, Math.round(sides));
   if (count !== 4) {
-    const radius = Math.min(width, depth) / 2;
-    const geometry = new THREE.ConeGeometry(radius, height, count);
-    geometry.translate(0, height / 2, 0);
+    const footprintScale = regularPolygonFootprintScale(width, depth, count);
+    const geometry = new THREE.ConeGeometry(1, height, count);
+    geometry.scale(footprintScale.x, 1, footprintScale.z);
+    geometry.translate(footprintScale.offsetX, height / 2, footprintScale.offsetZ);
     return geometry;
   }
 
@@ -1900,7 +2074,7 @@ function geometryMeshForShape(shape: WorkplaneShape): MeshData | null {
       geometry.scale(width / 2, 1, depth / 2);
       break;
     case "sphere":
-      geometry = new THREE.SphereGeometry(1, Math.max(8, (shape.steps ?? 24) * 2), Math.max(6, shape.steps ?? 24));
+      geometry = new THREE.SphereGeometry(1, sphereTessellation(shape.steps).widthSegments, sphereTessellation(shape.steps).heightSegments);
       geometry.scale(width / 2, height / 2, depth / 2);
       break;
     case "cone": {
@@ -1927,6 +2101,20 @@ function geometryMeshForShape(shape: WorkplaneShape): MeshData | null {
     case "ring":
     case "tube":
       geometry = createBooleanHollowCylinderGeometry(width, height, depth, shape.bevel ?? 4, 144);
+      break;
+    case "gear":
+      geometry = createGearGeometry({
+        width,
+        depth,
+        height,
+        teeth: shape.teeth,
+        toothSize: shape.toothSize,
+        toothWidth: shape.toothWidth,
+        centerHoleSize: shape.centerHoleSize,
+        gearType: shape.gearType,
+        helixAngle: shape.helixAngle,
+        helixQuality: shape.helixQuality,
+      });
       break;
     case "wedge":
       geometry = createBooleanWedgeGeometry(width, height, depth);
@@ -1984,6 +2172,64 @@ function meshForShape(shape: WorkplaneShape): MeshData {
   return transformMesh(raw, shape);
 }
 
+function sketchReferenceShapeOnWorkplane(shape: WorkplaneShape, workplane: PlacementWorkplane): WorkplaneShape {
+  const mesh = meshForShape(shape);
+  const projectedVertices = mesh.vertices.map(([x, y, z]) => {
+    const local = placementWorkplaneCoordinates(workplane, { x, y, z });
+    return { x: local.x, y: -local.y, z: local.z };
+  });
+  const minX = Math.min(...projectedVertices.map((vertex) => vertex.x));
+  const maxX = Math.max(...projectedVertices.map((vertex) => vertex.x));
+  const minY = Math.min(...projectedVertices.map((vertex) => vertex.y));
+  const maxY = Math.max(...projectedVertices.map((vertex) => vertex.y));
+  const minZ = Math.min(...projectedVertices.map((vertex) => vertex.z));
+  const maxZ = Math.max(...projectedVertices.map((vertex) => vertex.z));
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const centerZ = (minZ + maxZ) / 2;
+  const positions = mesh.faces.flatMap(([a, b, c]) => [a, b, c].flatMap((index) => {
+    const vertex = projectedVertices[index];
+    return [vertex.x - centerX, vertex.y - centerY, vertex.z - centerZ];
+  }));
+  const width = Math.max(0.01, maxX - minX);
+  const depth = Math.max(0.01, maxZ - minZ);
+  const height = Math.max(0.01, maxY - minY);
+
+  return canonicalizeShape({
+    ...shape,
+    kind: "mesh",
+    x: centerX,
+    z: centerZ,
+    elevation: 0,
+    size: Math.max(width, depth),
+    width,
+    depth,
+    height,
+    rotation: 0,
+    rotationX: 0,
+    rotationZ: 0,
+    mirrorX: undefined,
+    mirrorY: undefined,
+    mirrorZ: undefined,
+    importedMesh: {
+      positions,
+      baseWidth: width,
+      baseDepth: depth,
+      baseHeight: height,
+      triangleCount: mesh.faces.length,
+      sourceFormat: "json",
+    },
+    groupedShapes: undefined,
+    edgeTreatments: undefined,
+    edgeTreatmentHistory: undefined,
+    cadDisplayEdges: undefined,
+    cadBrep: undefined,
+    cadBrepFrame: undefined,
+    cadPrimitiveFrame: undefined,
+    localFrame: undefined,
+  });
+}
+
 function appendMeshData(vertices: Vec3[], faces: [number, number, number][], mesh: MeshData) {
   const offset = vertices.length;
   for (let i = 0; i < mesh.vertices.length; i += 1) {
@@ -2034,171 +2280,12 @@ function bakeShapeTransformIntoMesh(shape: WorkplaneShape): WorkplaneShape {
     return shape;
   }
 
-  const mesh = meshForShape(shape);
-  if (mesh.vertices.length < 3 || mesh.faces.length < 1) {
-    return shape;
-  }
-
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let minZ = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  let maxZ = Number.NEGATIVE_INFINITY;
-
-  mesh.vertices.forEach(([x, y, z]) => {
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    minZ = Math.min(minZ, z);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-    maxZ = Math.max(maxZ, z);
+  return bakeWorldMeshIntoShape(shape, meshForShape(shape), {
+    cleanDimension: cleanModelDimension,
+    minDimension: MIN_SHAPE_DIMENSION,
+    bakeCadMetadata: ({ centerX, minY, centerZ, width, depth, height }) =>
+      bakeCadMetadataForShapeTransform(shape, { centerX, minY, centerZ, width, depth, height, yawDegrees: meshYawDegrees(shape) }),
   });
-
-  if (![minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite)) {
-    return shape;
-  }
-
-  const centerX = (minX + maxX) / 2;
-  const centerZ = (minZ + maxZ) / 2;
-  const rawWidth = Math.max(MIN_SHAPE_DIMENSION, maxX - minX);
-  const rawHeight = Math.max(MIN_SHAPE_DIMENSION, maxY - minY);
-  const rawDepth = Math.max(MIN_SHAPE_DIMENSION, maxZ - minZ);
-  const width = cleanModelDimension(rawWidth);
-  const height = cleanModelDimension(rawHeight);
-  const depth = cleanModelDimension(rawDepth);
-  const positions: number[] = [];
-  const bakedCadMetadata = bakeCadMetadataForShapeTransform(shape, { centerX, minY, centerZ, width, depth, height, yawDegrees: meshYawDegrees(shape) });
-
-  mesh.faces.forEach(([ai, bi, ci]) => {
-    [mesh.vertices[ai], mesh.vertices[bi], mesh.vertices[ci]].forEach(([x, y, z]) => {
-      positions.push(x - centerX, y - minY, z - centerZ);
-    });
-  });
-
-  return {
-    ...shape,
-    kind: "mesh",
-    x: cleanNearZero(centerX, 0.0005),
-    z: cleanNearZero(centerZ, 0.0005),
-    elevation: cleanNearZero(minY, 0.0005),
-    width,
-    depth,
-    height,
-    size: Math.max(width, depth),
-    rotation: 0,
-    rotationX: 0,
-    rotationZ: 0,
-    mirrorX: undefined,
-    mirrorY: undefined,
-    mirrorZ: undefined,
-    importedMesh: {
-      positions,
-      baseWidth: rawWidth,
-      baseDepth: rawDepth,
-      baseHeight: rawHeight,
-      triangleCount: mesh.faces.length,
-      sourceFormat: "json",
-    },
-    ...bakedCadMetadata,
-    imagePlate: undefined,
-    groupedShapes: undefined,
-    groupedBaseWidth: undefined,
-    groupedBaseDepth: undefined,
-    groupedBaseHeight: undefined,
-  };
-}
-
-function importedShapeFromSvg(fileName: string, source: string): WorkplaneShape {
-  const parsed = svgLoader.parse(source);
-  const rawPositions: number[] = [];
-  const rawNormals: number[] = [];
-
-  parsed.paths.forEach((path) => {
-    SVGLoader.createShapes(path).forEach((svgShape) => {
-      const rawGeometry = new THREE.ExtrudeGeometry(svgShape, {
-        depth: 4,
-        bevelEnabled: false,
-        curveSegments: 16,
-        steps: 1,
-      });
-      rawGeometry.rotateX(-Math.PI / 2);
-      const geometry = rawGeometry.index ? rawGeometry.toNonIndexed() : rawGeometry;
-      geometry.computeVertexNormals();
-      const position = geometry.getAttribute("position");
-      const normal = geometry.getAttribute("normal");
-      for (let i = 0; i < position.count; i += 1) {
-        rawPositions.push(position.getX(i), position.getY(i), position.getZ(i));
-        if (normal) {
-          rawNormals.push(normal.getX(i), normal.getY(i), normal.getZ(i));
-        }
-      }
-      if (geometry !== rawGeometry) geometry.dispose();
-      rawGeometry.dispose();
-    });
-  });
-
-  if (rawPositions.length < 9) {
-    throw new Error("SVG has no readable filled paths");
-  }
-
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let minZ = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  let maxZ = Number.NEGATIVE_INFINITY;
-
-  for (let i = 0; i < rawPositions.length; i += 3) {
-    minX = Math.min(minX, rawPositions[i]);
-    minY = Math.min(minY, rawPositions[i + 1]);
-    minZ = Math.min(minZ, rawPositions[i + 2]);
-    maxX = Math.max(maxX, rawPositions[i]);
-    maxY = Math.max(maxY, rawPositions[i + 1]);
-    maxZ = Math.max(maxZ, rawPositions[i + 2]);
-  }
-
-  const centerX = (minX + maxX) / 2;
-  const centerZ = (minZ + maxZ) / 2;
-  const width = Math.max(1, maxX - minX);
-  const height = Math.max(1, maxY - minY);
-  const depth = Math.max(1, maxZ - minZ);
-  const positions: number[] = [];
-  const normals: number[] = [];
-
-  for (let i = 0; i < rawPositions.length; i += 3) {
-    positions.push(rawPositions[i] - centerX, rawPositions[i + 1] - minY, rawPositions[i + 2] - centerZ);
-    if (rawNormals.length === rawPositions.length) {
-      normals.push(rawNormals[i], rawNormals[i + 1], rawNormals[i + 2]);
-    }
-  }
-
-  return {
-    id: createLocalId("uploaded-svg"),
-    name: fileName.replace(/\.[^.]+$/, "") || "Imported SVG",
-    kind: "mesh",
-    color: "#0098c7",
-    x: 10,
-    z: -10,
-    size: Math.max(width, depth),
-    width,
-    depth,
-    height,
-    rotation: 0,
-    rotationX: 0,
-    rotationZ: 0,
-    importedMesh: {
-      positions,
-      normals: normals.length ? normals : undefined,
-      baseWidth: width,
-      baseDepth: depth,
-      baseHeight: height,
-      triangleCount: Math.floor(positions.length / 9),
-      sourceFormat: "svg",
-    },
-    locked: false,
-    hidden: false,
-  };
 }
 
 function readFileAsDataUrl(file: File) {
@@ -2379,6 +2466,36 @@ function toObj(meshes: MeshData[]) {
   return lines.join("\n");
 }
 
+async function toSvg(shapes: WorkplaneShape[], title: string) {
+  const runtime = await getManifoldRuntime();
+  const layers: SvgProjectionLayer[] = [];
+
+  for (const shape of shapes) {
+    const created: ManifoldSolid[] = [];
+    const projectedObjects: unknown[] = [];
+    try {
+      const solid = shapeToManifoldSolid(runtime, shape, created);
+      if (!solid || solid.status() !== "NoError" || solid.numTri() < 1) {
+        throw new Error(`Could not convert ${shape.name} into a watertight SVG outline`);
+      }
+
+      const topView = solid.rotate([90, 0, 0]);
+      if (topView !== solid) created.push(topView);
+      const projection = topView.project();
+      projectedObjects.push(projection);
+      const simplified = projection.simplify(0.00001);
+      if (simplified !== projection) projectedObjects.push(simplified);
+      const polygons = simplified.toPolygons();
+      if (!polygons.length) throw new Error(`Top view of ${shape.name} has no exportable area`);
+      layers.push({ name: shape.name, color: shape.color, polygons });
+    } finally {
+      [...new Set([...projectedObjects, ...created])].reverse().forEach(disposeManifold);
+    }
+  }
+
+  return toSvgProjection(layers, title);
+}
+
 function triggerBrowserDownload(filename: string, content: string, type: string) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -2409,6 +2526,31 @@ async function downloadTextFile(filename: string, content: string, type: string)
   }
 
   triggerBrowserDownload(filename, content, type);
+  return { mode: "browser" };
+}
+
+async function downloadBlobFile(filename: string, blob: Blob): Promise<DownloadResult> {
+  const mode = window.localStorage.getItem(DOWNLOAD_MODE_STORAGE_KEY);
+  const folder = window.localStorage.getItem(DOWNLOAD_FOLDER_STORAGE_KEY)?.trim() ?? "";
+  if (!STATIC_EXPORT_BUILD && mode === "folder" && folder) {
+    const formData = new FormData();
+    formData.set("file", blob, filename);
+    formData.set("filename", filename);
+    formData.set("folder", folder);
+    const response = await fetch("/api/local-download", { method: "POST", body: formData });
+    const payload = (await response.json().catch(() => null)) as { error?: string; path?: string } | null;
+    if (!response.ok || !payload?.path) throw new Error(payload?.error ?? "Could not save export");
+    return { mode: "folder", path: payload.path };
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   return { mode: "browser" };
 }
 
@@ -3883,9 +4025,10 @@ function primitiveManifoldForShape(runtime: ManifoldToplevel, shape: WorkplaneSh
   }
 
   if (shape.kind === "sphere") {
+    const { widthSegments } = sphereTessellation(shape.steps);
     return transformedPrimitiveManifold(
       runtime,
-      runtime.Manifold.sphere(1, shape.sides ?? 32),
+      runtime.Manifold.sphere(1, widthSegments),
       primitiveTransformMatrix(shape, new THREE.Vector3(width / 2, height / 2, depth / 2)),
       created,
     );
@@ -4936,6 +5079,20 @@ async function buildGroupedShapeFromSelection(groupable: WorkplaneShape[]): Prom
   };
 }
 
+function debugOwnFrameSummary(shape: WorkplaneShape) {
+  const frame = shapeOwnFrame(shape);
+  if (!frame) return null;
+  const round = (value: number) => Number(value.toFixed(4));
+  return {
+    width: round(frame.width),
+    depth: round(frame.depth),
+    height: round(frame.height),
+    xAxis: frame.xAxis.toArray().map(round),
+    yAxis: frame.yAxis.toArray().map(round),
+    zAxis: frame.zAxis.toArray().map(round),
+  };
+}
+
 function debugShapeSummary(shape: WorkplaneShape): Record<string, unknown> {
   return {
     id: shape.id,
@@ -4962,6 +5119,8 @@ function debugShapeSummary(shape: WorkplaneShape): Record<string, unknown> {
     edgeResizeMode: shape.edgeResizeMode ?? "scale",
     cadBrepLength: shape.cadBrep?.length ?? 0,
     cadPrimitiveKind: shape.cadPrimitiveFrame?.kind ?? null,
+    localFrame: shape.localFrame?.quaternion ?? null,
+    ownFrame: debugOwnFrameSummary(shape),
     groupedCount: shape.groupedShapes?.length ?? 0,
     children: shape.groupedShapes?.map(debugShapeSummary) ?? [],
   };
@@ -5096,112 +5255,123 @@ function readMcpEditorIdentity() {
   return identity;
 }
 
-function projectShapesFingerprint(shapes: WorkplaneShape[]) {
-  return shapes
-    .map((shape, index) =>
-      [
-        compactShapeSummary(shape, index),
-        `id${shape.id}`,
-        `n${shape.name}`,
-        `clr${shape.color}`,
-        `txt${shape.text ?? ""}`,
-        `mesh${shape.importedMesh?.positions.length ?? 0}:${shape.importedMesh?.normals?.length ?? 0}`,
-        `cadFrame${shape.cadBrepFrame ? JSON.stringify({
-          x: Number(shape.cadBrepFrame.x.toFixed(6)),
-          z: Number(shape.cadBrepFrame.z.toFixed(6)),
-          elevation: Number(shape.cadBrepFrame.elevation.toFixed(6)),
-          width: Number(shape.cadBrepFrame.width.toFixed(6)),
-          depth: Number(shape.cadBrepFrame.depth.toFixed(6)),
-          height: Number(shape.cadBrepFrame.height.toFixed(6)),
-          sourceTransform: shape.cadBrepFrame.sourceTransform?.map((value) => Number(value.toFixed(9))) ?? null,
-        }) : ""}`,
-        `primitiveFrame${shape.cadPrimitiveFrame ? JSON.stringify({
-          kind: shape.cadPrimitiveFrame.kind,
-          width: Number(shape.cadPrimitiveFrame.width.toFixed(6)),
-          depth: Number(shape.cadPrimitiveFrame.depth.toFixed(6)),
-          height: Number(shape.cadPrimitiveFrame.height.toFixed(6)),
-          frame: {
-            x: Number(shape.cadPrimitiveFrame.frame.x.toFixed(6)),
-            z: Number(shape.cadPrimitiveFrame.frame.z.toFixed(6)),
-            elevation: Number(shape.cadPrimitiveFrame.frame.elevation.toFixed(6)),
-            width: Number(shape.cadPrimitiveFrame.frame.width.toFixed(6)),
-            depth: Number(shape.cadPrimitiveFrame.frame.depth.toFixed(6)),
-            height: Number(shape.cadPrimitiveFrame.frame.height.toFixed(6)),
-            sourceTransform: shape.cadPrimitiveFrame.frame.sourceTransform?.map((value) => Number(value.toFixed(9))) ?? null,
-          },
-        }) : ""}`,
-        `sketch${shape.sketchProfile ? JSON.stringify({
-          points: shape.sketchProfile.points,
-          segments: shape.sketchProfile.segments,
-          images: (shape.sketchProfile.images ?? []).map((image) => ({
-            id: image.id,
-            name: image.name,
-            x: image.x,
-            z: image.z,
-            width: image.width,
-            depth: image.depth,
-            opacity: image.opacity,
-            lockAspect: image.lockAspect,
-            sourceLength: image.dataUrl.length,
-          })),
-        }) : ""}`,
-      ].join(","),
-    )
-    .join(";");
-}
-
 export function SketchForgeEditor({
+  initialAssets = [],
   initialShapes = [],
+  initialHistory,
+  initialHistoryIndex,
   initialSnap,
   initialWorkspace,
+  initialPlacementElevation = 0,
+  initialPlacementWorkplane,
   onHome,
+  onOpenSkfProjectFile,
+  onSaveSharedProject,
   onProjectShapesChange,
   onProjectSnapshot,
   onProjectWorkspaceChange,
-  onProjectFileImport,
   onProjectDriveFileChange,
   onProjectRename,
   onOpenFromDrive,
   driveFile = null,
   saveStatus = null,
+  initialTutorialId = null,
   projectId,
   projectName = "SketchForge design",
+  projectCreatedAt = Date.now(),
+  projectModifiedAt = Date.now(),
   projectRevision = 0,
-  initialTutorialId = null,
+  sharedProjectsEnabled = false,
+  themePreference = "system",
+  resolvedTheme = "light",
+  onThemePreferenceChange,
 }: {
+  initialAssets?: ProjectAsset[];
   initialShapes?: WorkplaneShape[];
+  initialHistory?: EditorHistoryEntry[];
+  initialHistoryIndex?: number;
   initialSnap?: GridSize;
   initialWorkspace?: WorkplaneWorkspaceSettings;
+  initialPlacementElevation?: number;
+  initialPlacementWorkplane?: PlacementWorkplane;
   onHome?: () => void;
-  onProjectShapesChange?: (snapshot: { projectId: string; shapes: WorkplaneShape[] }) => void;
+  onOpenSkfProjectFile?: (file: File) => Promise<{ ok: boolean; message: string } | void> | { ok: boolean; message: string } | void;
+  onSaveSharedProject?: (request: { exportName: string; bytes: Uint8Array }) => Promise<string>;
+  onProjectShapesChange?: (snapshot: {
+    projectId: string;
+    shapes: WorkplaneShape[];
+    history: EditorHistoryEntry[];
+    historyIndex: number;
+    assets: ProjectAsset[];
+    projectName: string;
+    projectCreatedAt: number;
+    workspace: WorkplaneWorkspaceSettings;
+    snapGrid: GridSize;
+    placementElevation: number;
+    placementWorkplane: PlacementWorkplane;
+    sketchPlacementWorkplane: PlacementWorkplane;
+  }) => void;
   onProjectSnapshot?: (snapshot: { image: string; projectId: string; shapes: number }) => void;
-  onProjectWorkspaceChange?: (snapshot: { projectId: string; workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => void;
-  onProjectFileImport?: (payload: ParsedProjectFile, sourceName?: string) => void;
+  onProjectWorkspaceChange?: (snapshot: {
+    projectId: string;
+    workspace: WorkplaneWorkspaceSettings;
+    snap: GridSize;
+    placementElevation?: number;
+    placementWorkplane?: PlacementWorkplane;
+    sketchPlacementWorkplane?: PlacementWorkplane;
+  }) => void;
   onProjectDriveFileChange?: (snapshot: { projectId: string; drive: ProjectDriveFile }) => void;
   onProjectRename?: (snapshot: { projectId: string; name: string }) => void;
   onOpenFromDrive?: () => void;
   driveFile?: ProjectDriveFile | null;
   saveStatus?: ProjectSaveStatus | null;
+  initialTutorialId?: string | null;
   projectId?: string | null;
   projectName?: string;
+  projectCreatedAt?: number;
+  projectModifiedAt?: number;
   projectRevision?: number;
-  initialTutorialId?: string | null;
+  sharedProjectsEnabled?: boolean;
+  themePreference?: AppThemePreference;
+  resolvedTheme?: ResolvedAppTheme;
+  onThemePreferenceChange?: (preference: AppThemePreference) => void;
 } = {}) {
-  const [shapes, setShapes] = useState<WorkplaneShape[]>(() => initialShapes.map(canonicalizeShape));
+  const initialSceneRef = useRef<WorkplaneShape[] | null>(null);
+  if (initialSceneRef.current === null) {
+    initialSceneRef.current = initialShapes.map(canonicalizeShape);
+  }
+  const initialHistoryStateRef = useRef<EditorHistoryState | null>(null);
+  if (initialHistoryStateRef.current === null) {
+    initialHistoryStateRef.current = hydrateEditorHistoryState(
+      initialSceneRef.current,
+      initialHistory,
+      initialHistoryIndex,
+      normalizeWorkspaceSettings(initialWorkspace).historyLimit,
+    );
+  }
+  const [shapes, setShapes] = useState<WorkplaneShape[]>(() => initialSceneRef.current as WorkplaneShape[]);
+  const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>(() => dedupeProjectAssets(initialAssets));
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [clipboard, setClipboard] = useState<WorkplaneShape[]>([]);
   const [systemClipboardSupported, setSystemClipboardSupported] = useState(false);
-  const [history, setHistory] = useState<WorkplaneShape[][]>([[]]);
-  const [historyIndex, setHistoryIndex] = useState(0);
+  const [history, setHistory] = useState<EditorHistoryEntry[]>(() => (initialHistoryStateRef.current as EditorHistoryState).entries);
+  const [historyIndex, setHistoryIndex] = useState(() => (initialHistoryStateRef.current as EditorHistoryState).index);
+  const [placementElevation, setPlacementElevation] = useState(() => Number.isFinite(initialPlacementElevation) ? initialPlacementElevation : 0);
+  const [placementWorkplane, setPlacementWorkplane] = useState<PlacementWorkplane>(
+    () => normalizePlacementWorkplane(initialPlacementWorkplane, initialPlacementElevation),
+  );
   const [rulerCanUndo, setRulerCanUndo] = useState(false);
-  const [placementElevation, setPlacementElevation] = useState(0);
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkplaneWorkspaceSettings>(() => normalizeWorkspaceSettings(initialWorkspace));
+  const [snapGrid, setSnapGrid] = useState<GridSize>(() => normalizeSnapGrid(initialSnap));
   const [workplaneMode, setWorkplaneMode] = useState(false);
-  const [repeatDefaults, setRepeatDefaults] = useState({ count: 3, offsetX: 20, offsetY: 0, offsetZ: 0 });
   const [menuOpen, setMenuOpen] = useState(false);
   const [topPanel, setTopPanel] = useState<TopPanel>(null);
+  const [repeatDefaults, setRepeatDefaults] = useState({ count: 3, offsetX: 20, offsetY: 0, offsetZ: 0 });
   const [stlExporting, setStlExporting] = useState(false);
   const [stepExporting, setStepExporting] = useState(false);
+  const [skfExporting, setSkfExporting] = useState(false);
+  const [driveSaving, setDriveSaving] = useState(false);
+  const [driveFileLink, setDriveFileLink] = useState<ProjectDriveFile | null>(driveFile);
   const [alignMode, setAlignMode] = useState(false);
   const [alignAnchorId, setAlignAnchorId] = useState<string | null>(null);
   const [alignPreview, setAlignPreview] = useState<{ axis: AlignAxis; target: AlignTarget } | null>(null);
@@ -5209,9 +5379,8 @@ export function SketchForgeEditor({
   const [mirrorPreviewAxis, setMirrorPreviewAxis] = useState<AlignAxis | null>(null);
   const [activeMode, setActiveMode] = useState("3D Design");
   const [notice, setNotice] = useState("Ready");
-  const [driveSaving, setDriveSaving] = useState(false);
-  const [driveFileLink, setDriveFileLink] = useState<ProjectDriveFile | null>(driveFile);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const projectFileInputRef = useRef<HTMLInputElement | null>(null);
   const sketchImageInputRef = useRef<HTMLInputElement | null>(null);
   const booleanAutomationRunRef = useRef<string | null>(null);
   const projectHydratingRef = useRef(false);
@@ -5224,12 +5393,17 @@ export function SketchForgeEditor({
   const lastProjectIdRef = useRef<string | null>(null);
   const projectSnapshotRunRef = useRef(0);
   const shapesRef = useRef(shapes);
+  const projectAssetsRef = useRef(projectAssets);
   const selectedIdsRef = useRef(selectedIds);
   const workspaceSettingsRef = useRef(workspaceSettings);
-  const currentSnapRef = useRef<GridSize>(normalizeSnapGrid(initialSnap));
+  const snapGridRef = useRef(snapGrid);
+  const placementElevationRef = useRef(placementElevation);
+  const placementWorkplaneRef = useRef(placementWorkplane);
   const noticeRef = useRef(notice);
-  const projectInfoRef = useRef({ projectId: projectId ?? null, projectName });
+  const projectInfoRef = useRef({ projectId: projectId ?? null, projectName, projectCreatedAt });
   const historyIndexRef = useRef(historyIndex);
+  const historyRef = useRef(history);
+  const historyLimitRef = useRef(workspaceSettings.historyLimit);
   const interactionHistoryStartRef = useRef("");
   const interactionHistoryChangedRef = useRef(false);
   const lastDuplicateOffsetRef = useRef<{ x: number; z: number } | null>(null);
@@ -5242,10 +5416,21 @@ export function SketchForgeEditor({
   const tutorialBaselineRef = useRef<TutorialSignals | null>(null);
   const [toolbarMode, setToolbarMode] = useState<ToolbarMode>("geometry");
   const [sketchActive, setSketchActive] = useState(false);
+  const [activeSketchWorkplane, setActiveSketchWorkplane] = useState<PlacementWorkplane>(
+    () => normalizePlacementWorkplane(initialPlacementWorkplane, initialPlacementElevation),
+  );
+  const [sketchOperation, setSketchOperation] = useState<SketchOperation>("extrude");
+  const [sketchRevolveSettings, setSketchRevolveSettings] = useState<SketchRevolveSettings>(() => ({ ...DEFAULT_SKETCH_REVOLVE_SETTINGS }));
+  const [sketchRevolvePreview, setSketchRevolvePreview] = useState<SketchRevolveMesh | null>(null);
+  const sketchRevolvePreviewRequestRef = useRef(0);
+  const sketchRevolveUpdateRequestRef = useRef(new Map<string, number>());
+  const sketchRevolveUpdateTimerRef = useRef(new Map<string, number>());
   const [sketchTool, setSketchTool] = useState<SketchTool>("line");
   const [sketchProfile, setSketchProfile] = useState<SketchProfile>(() => emptySketchProfile());
   const [sketchHistory, setSketchHistory] = useState<SketchProfile[]>([emptySketchProfile()]);
   const [sketchHistoryIndex, setSketchHistoryIndex] = useState(0);
+  const sketchHistoryRef = useRef(sketchHistory);
+  const sketchHistoryIndexRef = useRef(sketchHistoryIndex);
   const [sketchActivePointId, setSketchActivePointId] = useState<string | null>(null);
   const [sketchSelection, setSketchSelection] = useState<SketchSelection>(null);
   const [sketchMeasureStart, setSketchMeasureStart] = useState<SketchPoint | null>(null);
@@ -5265,14 +5450,86 @@ export function SketchForgeEditor({
   const cadModifierBaseShapeRef = useRef<WorkplaneShape | null>(null);
   const cadModifierBaseFingerprintRef = useRef("");
   const cadModifierSourcePartsRef = useRef<WorkplaneShape[]>([]);
+  const cadModifierWatchdogRef = useRef<{ requestId: number; phase: CadModifierRequestPhase; timer: number } | null>(null);
+  const cadModifierWorkerRestartRef = useRef<() => Worker | null>(() => null);
   const lastMcpErrorRef = useRef<string | null>(null);
   const executeMcpCommandRef = useRef<((command: SketchForgeMcpCommand) => Promise<unknown>) | null>(null);
 
+  const clearCadModifierWatchdog = useCallback((requestId?: number) => {
+    const active = cadModifierWatchdogRef.current;
+    if (!active || (requestId !== undefined && active.requestId !== requestId)) return;
+    window.clearTimeout(active.timer);
+    cadModifierWatchdogRef.current = null;
+  }, []);
+
+  const armCadModifierWatchdog = useCallback((requestId: number, phase: CadModifierRequestPhase, timeoutMs = CAD_MODIFIER_REQUEST_TIMEOUT_MS) => {
+    clearCadModifierWatchdog();
+    const timer = window.setTimeout(() => {
+      const active = cadModifierWatchdogRef.current;
+      if (!active || active.requestId !== requestId) return;
+      cadModifierWatchdogRef.current = null;
+      cadModifierWorkerRef.current?.terminate();
+      cadModifierWorkerRef.current = null;
+      cadModifierWorkerRestartRef.current();
+      const message = cadModifierTimeoutMessage(phase);
+      setEdgeModifier((current) => current ? {
+        ...current,
+        busy: false,
+        prepared: false,
+        preview: null,
+        error: message,
+      } : current);
+      setNotice(message);
+    }, timeoutMs);
+    cadModifierWatchdogRef.current = { requestId, phase, timer };
+  }, [clearCadModifierWatchdog]);
+
   useEffect(() => {
-    const worker = new Worker(new URL("../workers/cadModifier.worker.ts", import.meta.url), { type: "module" });
-    cadModifierWorkerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<CadModifierWorkerResponse>) => {
+    let disposed = false;
+    const rejectPendingRequests = (message: string) => {
+      cadModifierPendingRef.current.forEach((pending) => {
+        window.clearTimeout(pending.timer);
+        pending.reject(new Error(message));
+      });
+      cadModifierPendingRef.current.clear();
+    };
+    const reportWorkerFailure = (worker: Worker | null) => {
+      if (worker && cadModifierWorkerRef.current !== worker) return;
+      clearCadModifierWatchdog();
+      worker?.terminate();
+      cadModifierWorkerRef.current = null;
+      rejectPendingRequests("The CAD worker could not start");
+      const requestId = cadModifierRequestRef.current + 1;
+      cadModifierRequestRef.current = requestId;
+      cadModifierPrepareRef.current = requestId;
+      cadModifierLatestPreviewRef.current = requestId;
+      if (cadModifierBaseShapeRef.current) {
+        const message = cadModifierWorkerFailureMessage();
+        setEdgeModifier((current) => current ? { ...current, busy: false, prepared: false, preview: null, error: message } : current);
+        setNotice(message);
+      }
+    };
+    const createWorker = () => {
+      if (disposed) return null;
+      cadModifierWorkerRef.current?.terminate();
+      try {
+        const worker = new Worker(new URL("../workers/cadModifier.worker.ts", import.meta.url), { type: "module" });
+        cadModifierWorkerRef.current = worker;
+        worker.onmessage = handleWorkerMessage;
+        worker.onerror = (event) => {
+          event.preventDefault();
+          reportWorkerFailure(worker);
+        };
+        worker.onmessageerror = () => reportWorkerFailure(worker);
+        return worker;
+      } catch {
+        reportWorkerFailure(null);
+        return null;
+      }
+    };
+    function handleWorkerMessage(event: MessageEvent<CadModifierWorkerResponse>) {
       const message = event.data;
+      clearCadModifierWatchdog(message.requestId);
       const pending = cadModifierPendingRef.current.get(message.requestId);
       if (pending) {
         window.clearTimeout(pending.timer);
@@ -5292,6 +5549,8 @@ export function SketchForgeEditor({
           selectedEdgeIds: [],
           busy: false,
           prepared: true,
+          preview: null,
+          componentPreviews: [],
           error: message.selectableEdgeIds.length ? null : "No sharp manifold edges were found at this threshold",
         } : current);
         if (message.selectableEdgeIds.length) setNotice("Select highlighted edges, then adjust the preview");
@@ -5335,35 +5594,41 @@ export function SketchForgeEditor({
         setEdgeModifier((current) => current ? { ...current, busy: false, preview: null, error: message.message } : current);
         setNotice("Edge treatment needs adjustment");
       }
-    };
-    worker.onerror = () => {
-      setEdgeModifier((current) => current ? { ...current, busy: false, preview: null, error: "The CAD worker could not start" } : current);
-    };
+    }
+    cadModifierWorkerRestartRef.current = createWorker;
+    createWorker();
     return () => {
-      cadModifierPendingRef.current.forEach((pending) => {
-        window.clearTimeout(pending.timer);
-        pending.reject(new Error("The CAD worker was closed"));
-      });
-      cadModifierPendingRef.current.clear();
-      worker.terminate();
+      disposed = true;
+      clearCadModifierWatchdog();
+      cadModifierWorkerRestartRef.current = () => null;
+      rejectPendingRequests("The CAD worker was closed");
+      cadModifierWorkerRef.current?.terminate();
       cadModifierWorkerRef.current = null;
     };
-  }, []);
+  }, [clearCadModifierWatchdog]);
 
   const invalidateCadModifierSession = useCallback(() => {
     const wasActive = cadModifierBaseShapeRef.current !== null;
     if (!wasActive) return false;
+    const hadInFlightRequest = cadModifierWatchdogRef.current !== null;
+    clearCadModifierWatchdog();
     const requestId = cadModifierRequestRef.current + 1;
     cadModifierRequestRef.current = requestId;
     cadModifierLatestPreviewRef.current = requestId;
     cadModifierPrepareRef.current = requestId;
-    cadModifierWorkerRef.current?.postMessage({ type: "dispose", requestId } satisfies CadModifierWorkerRequest);
+    if (hadInFlightRequest) {
+      cadModifierWorkerRef.current?.terminate();
+      cadModifierWorkerRef.current = null;
+      cadModifierWorkerRestartRef.current();
+    } else {
+      cadModifierWorkerRef.current?.postMessage({ type: "dispose", requestId } satisfies CadModifierWorkerRequest);
+    }
     cadModifierBaseShapeRef.current = null;
     cadModifierBaseFingerprintRef.current = "";
     cadModifierSourcePartsRef.current = [];
     setEdgeModifier(null);
     return true;
-  }, []);
+  }, [clearCadModifierWatchdog]);
 
   useEffect(() => {
     const warmBooleanRuntime = () => {
@@ -5416,7 +5681,19 @@ export function SketchForgeEditor({
   }, [shapes]);
 
   useEffect(() => {
+    projectAssetsRef.current = projectAssets;
+  }, [projectAssets]);
+
+  useEffect(() => {
     selectedIdsRef.current = selectedIds;
+    const currentHistory = historyRef.current;
+    const currentIndex = Math.min(historyIndexRef.current, Math.max(0, currentHistory.length - 1));
+    const currentEntry = currentHistory[currentIndex];
+    if (currentEntry && currentEntry.selectedIds.join("\0") !== selectedIds.join("\0")) {
+      const updated = currentHistory.map((entry, index) => index === currentIndex ? { ...entry, selectedIds: [...selectedIds] } : entry);
+      historyRef.current = updated;
+      setHistory(updated);
+    }
   }, [selectedIds]);
 
   useEffect(() => {
@@ -5424,19 +5701,31 @@ export function SketchForgeEditor({
   }, [workspaceSettings]);
 
   useEffect(() => {
+    snapGridRef.current = snapGrid;
+  }, [snapGrid]);
+
+  useEffect(() => {
+    placementElevationRef.current = placementElevation;
+  }, [placementElevation]);
+
+  useEffect(() => {
+    placementWorkplaneRef.current = placementWorkplane;
+  }, [placementWorkplane]);
+
+  useEffect(() => {
     noticeRef.current = notice;
   }, [notice]);
 
   useEffect(() => {
-    projectInfoRef.current = { projectId: projectId ?? null, projectName };
-  }, [projectId, projectName]);
+    projectInfoRef.current = { projectId: projectId ?? null, projectName, projectCreatedAt };
+  }, [projectCreatedAt, projectId, projectName]);
 
   useEffect(() => {
     setDriveFileLink(driveFile ?? null);
   }, [driveFile, projectId]);
 
   useEffect(() => {
-    if (topPanel === "export" && isDriveConfigured()) {
+    if ((topPanel === "export" || topPanel === "import") && isDriveConfigured()) {
       // Warm up the Google sign-in script so the pop-up opens from the click.
       void preloadGoogleIdentity().catch(() => undefined);
     }
@@ -5447,12 +5736,56 @@ export function SketchForgeEditor({
   }, [historyIndex]);
 
   useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    sketchHistoryRef.current = sketchHistory;
+  }, [sketchHistory]);
+
+  useEffect(() => {
+    sketchHistoryIndexRef.current = sketchHistoryIndex;
+  }, [sketchHistoryIndex]);
+
+  useEffect(() => {
     edgeModifierRef.current = edgeModifier;
   }, [edgeModifier]);
 
   useEffect(() => {
-    setWorkspaceSettings(normalizeWorkspaceSettings(initialWorkspace));
+    const requestId = sketchRevolvePreviewRequestRef.current + 1;
+    sketchRevolvePreviewRequestRef.current = requestId;
+    if (!sketchActive || sketchOperation !== "revolve" || sketchProfile.segments.length === 0) {
+      setSketchRevolvePreview(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void getManifoldRuntime()
+        .then((runtime) => buildSketchRevolveMesh(runtime, sketchProfile, sketchRevolveSettings))
+        .then((mesh) => {
+          if (sketchRevolvePreviewRequestRef.current === requestId) setSketchRevolvePreview(mesh);
+        })
+        .catch(() => {
+          if (sketchRevolvePreviewRequestRef.current === requestId) setSketchRevolvePreview(null);
+        });
+    }, 90);
+    return () => window.clearTimeout(timer);
+  }, [sketchActive, sketchOperation, sketchProfile, sketchRevolveSettings]);
+
+  useEffect(() => {
+    const nextWorkspace = normalizeWorkspaceSettings(initialWorkspace);
+    workspaceSettingsRef.current = nextWorkspace;
+    setWorkspaceSettings((current) => (
+      workplaneSettingsFingerprint(current, snapGridRef.current) === workplaneSettingsFingerprint(nextWorkspace, snapGridRef.current)
+        ? current
+        : nextWorkspace
+    ));
   }, [initialWorkspace]);
+
+  useEffect(() => {
+    const nextSnap = normalizeSnapGrid(initialSnap);
+    snapGridRef.current = nextSnap;
+    setSnapGrid((current) => (current === nextSnap ? current : nextSnap));
+  }, [initialSnap]);
 
   const selectedShapes = useMemo(() => shapes.filter((shape) => selectedIds.includes(shape.id)), [selectedIds, shapes]);
   const selectedShape = selectedShapes.at(-1) ?? null;
@@ -5476,7 +5809,7 @@ export function SketchForgeEditor({
   );
   const toggleModifierEdge = useCallback((id: number, singleEdge = false) => {
     setEdgeModifier((current) => {
-      if (!current) return current;
+      if (!current || current.busy) return current;
       const allowed = new Set(current.edges.filter((edge) => selectableCadModifierEdge(edge, current.sharpAngle)).map((edge) => edge.id));
       if (!allowed.has(id)) return current;
       const ids = current.tangentChain && !singleEdge ? tangentCadEdgeChain(current.edges, id, allowed) : [id];
@@ -5487,11 +5820,13 @@ export function SketchForgeEditor({
     });
   }, []);
   const exportableShapeCount = useMemo(() => (hasSelection ? selectedShapes : shapes).filter((shape) => !shape.hole).length, [hasSelection, selectedShapes, shapes]);
+  const exportScopeLabel = hasSelection ? "selected" : "total";
   const designExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes)), [selectedShapes, shapes]);
   const selectedExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes, "selection")), [selectedShapes, shapes]);
+  // Preflight checks what the STL export writes: the full visible design.
   const exportPreflight = useMemo(
-    () => checkPrintability(stlSourceShapes(shapes, selectedShapes), workspaceSettings),
-    [selectedShapes, shapes, workspaceSettings],
+    () => (topPanel === "export" ? checkPrintability(stlSourceShapes(shapes, selectedShapes), workspaceSettings) : null),
+    [selectedShapes, shapes, topPanel, workspaceSettings],
   );
   const effectiveAlignAnchorId = useMemo(
     () => effectiveAlignmentAnchorId(selectedShapes, alignAnchorId),
@@ -5508,6 +5843,14 @@ export function SketchForgeEditor({
           ? mirroredShapesForSelection(shapes, selectedIds, selectedShapes, mirrorPreviewAxis).nextShapes
           : shapes,
     [alignMode, alignPreview, edgeModifier?.preview, effectiveAlignAnchorId, mirrorMode, mirrorPreviewAxis, selectedIds, selectedShapes, shapes],
+  );
+  const sketchReferenceShapes = useMemo(
+    () => sketchOperation === "revolve" || placementWorkplaneIsBase(activeSketchWorkplane)
+      ? shapes
+      : shapes.map((shape) => shape.hidden || shape.id === editingSketchShapeId
+        ? shape
+        : sketchReferenceShapeOnWorkplane(shape, activeSketchWorkplane)),
+    [activeSketchWorkplane, editingSketchShapeId, shapes, sketchOperation],
   );
   const debugState = useMemo(
     () =>
@@ -5534,21 +5877,43 @@ export function SketchForgeEditor({
 
     const runId = projectSnapshotRunRef.current + 1;
     projectSnapshotRunRef.current = runId;
-    const capture = () => {
+    const capture = async () => {
       if (projectSnapshotRunRef.current !== runId) {
-        return;
+        return true;
       }
-      const image = window.sketchforgeCaptureCanvas?.();
+      const image = window.sketchforgeCaptureCanvasAsync
+        ? await window.sketchforgeCaptureCanvasAsync()
+        : window.sketchforgeCaptureCanvas?.() ?? "";
+      if (projectSnapshotRunRef.current !== runId) {
+        return true;
+      }
       if (image && image.length > 100) {
         onProjectSnapshot({ image, projectId, shapes: shapes.length });
+        return true;
       }
+      return false;
     };
 
-    const firstTimer = window.setTimeout(capture, 850);
-    const secondTimer = window.setTimeout(capture, 1500);
+    let idleId: number | null = null;
+    let retryTimer: number | null = null;
+    const runCapture = () => {
+      void capture().then((captured) => {
+        if (!captured) {
+          retryTimer = window.setTimeout(() => void capture(), 650);
+        }
+      });
+    };
+    const captureTimer = window.setTimeout(() => {
+      if ("requestIdleCallback" in window) {
+        idleId = window.requestIdleCallback(runCapture, { timeout: 1200 });
+      } else {
+        runCapture();
+      }
+    }, 850);
     return () => {
-      window.clearTimeout(firstTimer);
-      window.clearTimeout(secondTimer);
+      window.clearTimeout(captureTimer);
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      if (idleId !== null && "cancelIdleCallback" in window) window.cancelIdleCallback(idleId);
     };
   }, [onProjectSnapshot, projectId, projectInteractionActive, shapes]);
 
@@ -5569,7 +5934,7 @@ export function SketchForgeEditor({
   }, [alignAnchorId, selectedIds, selectedShapes.length]);
 
   const syncProjectShapes = useCallback(
-    (nextShapes: WorkplaneShape[]) => {
+    (nextShapes: WorkplaneShape[], force = false) => {
       if (!projectId || !onProjectShapesChange) {
         return;
       }
@@ -5583,7 +5948,7 @@ export function SketchForgeEditor({
       }
       const canonicalNext = nextShapes.map(canonicalizeShape);
       const serialized = projectShapesFingerprint(canonicalNext);
-      if (lastProjectShapesSyncRef.current === serialized) {
+      if (!force && lastProjectShapesSyncRef.current === serialized) {
         return;
       }
       if (projectSyncTimerRef.current !== null) {
@@ -5592,11 +5957,63 @@ export function SketchForgeEditor({
       projectSyncTimerRef.current = window.setTimeout(() => {
         lastProjectShapesSyncRef.current = serialized;
         lastProjectShapesEchoRef.current = serialized;
-        onProjectShapesChange({ projectId, shapes: canonicalNext });
+        onProjectShapesChange({
+          projectId,
+          shapes: canonicalNext,
+          history: historyRef.current,
+          historyIndex: historyIndexRef.current,
+          assets: projectAssetsRef.current,
+          projectName: projectInfoRef.current.projectName,
+          projectCreatedAt: projectInfoRef.current.projectCreatedAt,
+          workspace: workspaceSettingsRef.current,
+          snapGrid: snapGridRef.current,
+          placementElevation: placementElevationRef.current,
+          placementWorkplane: placementWorkplaneRef.current,
+          sketchPlacementWorkplane: placementWorkplaneRef.current,
+        });
         projectSyncTimerRef.current = null;
       }, 120);
     },
     [onProjectShapesChange, projectId],
+  );
+
+  useEffect(() => {
+    const limitChanged = historyLimitRef.current !== workspaceSettings.historyLimit;
+    historyLimitRef.current = workspaceSettings.historyLimit;
+    const bounded = boundedEditorHistoryState(
+      historyRef.current,
+      historyIndexRef.current,
+      workspaceSettings.historyLimit,
+    );
+    if (bounded.entries !== historyRef.current || bounded.index !== historyIndexRef.current) {
+      historyRef.current = bounded.entries;
+      historyIndexRef.current = bounded.index;
+      setHistory(bounded.entries);
+      setHistoryIndex(bounded.index);
+    }
+    if (limitChanged) syncProjectShapes(shapesRef.current, true);
+  }, [syncProjectShapes, workspaceSettings.historyLimit]);
+
+  const appendHistoryEntry = useCallback((entry: EditorHistoryEntry) => {
+    const result = appendEditorHistorySnapshot(
+      historyRef.current,
+      historyIndexRef.current,
+      entry,
+      workspaceSettingsRef.current.historyLimit,
+    );
+    if (result.entries !== historyRef.current) {
+      historyRef.current = result.entries;
+      setHistory(result.entries);
+    }
+    historyIndexRef.current = result.index;
+    setHistoryIndex(result.index);
+    return result.changed;
+  }, []);
+
+  const appendHistorySnapshot = useCallback(
+    (nextShapes: WorkplaneShape[], nextSelection: string[]) =>
+      appendHistoryEntry(editorHistoryEntry(nextShapes, nextSelection)),
+    [appendHistoryEntry],
   );
 
   const finalizeInteractionHistory = useCallback(() => {
@@ -5608,36 +6025,20 @@ export function SketchForgeEditor({
       return;
     }
 
-    const canonicalNext = shapesRef.current.map(canonicalizeShape);
-    const nextFingerprint = projectShapesFingerprint(canonicalNext);
-    if (!startFingerprint || startFingerprint === nextFingerprint) {
+    const entry = editorHistoryEntry(shapesRef.current, selectedIdsRef.current);
+    if (!startFingerprint || startFingerprint === entry.fingerprint) {
       return;
     }
 
-    setHistory((current) => {
-      const historyIndex = Math.min(historyIndexRef.current, Math.max(0, current.length - 1));
-      const trimmed = current.slice(0, historyIndex + 1);
-      const latestHistory = trimmed.at(-1) ?? [];
-      if (projectShapesFingerprint(latestHistory) === nextFingerprint) {
-        historyIndexRef.current = Math.max(0, trimmed.length - 1);
-        setHistoryIndex(historyIndexRef.current);
-        return trimmed;
-      }
-
-      const nextHistory = [...trimmed, canonicalNext];
-      historyIndexRef.current = nextHistory.length - 1;
-      setHistoryIndex(historyIndexRef.current);
-      return nextHistory;
-    });
-  }, []);
+    appendHistoryEntry(entry);
+  }, [appendHistoryEntry]);
 
   useEffect(() => {
     if (projectInteractionActive || !pendingProjectShapesRef.current) {
       return;
     }
-    const pendingShapes = pendingProjectShapesRef.current;
     pendingProjectShapesRef.current = null;
-    const timer = window.setTimeout(() => syncProjectShapes(pendingShapes), 180);
+    const timer = window.setTimeout(() => syncProjectShapes(shapesRef.current), 180);
     return () => window.clearTimeout(timer);
   }, [projectInteractionActive, syncProjectShapes]);
 
@@ -5647,6 +6048,7 @@ export function SketchForgeEditor({
         if (interactionHistoryTimerRef.current !== null) {
           window.clearTimeout(interactionHistoryTimerRef.current);
           interactionHistoryTimerRef.current = null;
+          finalizeInteractionHistory();
         }
         if (!projectInteractionActiveRef.current) {
           interactionHistoryStartRef.current = projectShapesFingerprint(shapesRef.current);
@@ -5672,19 +6074,41 @@ export function SketchForgeEditor({
 
   const updateProjectWorkspaceSettings = useCallback(
     (settings: { workspace: WorkplaneWorkspaceSettings; snap: GridSize }) => {
-      setWorkspaceSettings(settings.workspace);
-      currentSnapRef.current = settings.snap;
+      const nextWorkspace = normalizeWorkspaceSettings(settings.workspace);
+      workspaceSettingsRef.current = nextWorkspace;
+      snapGridRef.current = settings.snap;
+      setWorkspaceSettings((current) => (
+        workplaneSettingsFingerprint(current, settings.snap) === workplaneSettingsFingerprint(nextWorkspace, settings.snap)
+          ? current
+          : nextWorkspace
+      ));
+      setSnapGrid(settings.snap);
       if (!projectId || !onProjectWorkspaceChange) {
         return;
       }
-      onProjectWorkspaceChange({ projectId, ...settings });
+      onProjectWorkspaceChange({
+        projectId,
+        workspace: nextWorkspace,
+        snap: settings.snap,
+        placementElevation,
+        placementWorkplane: placementWorkplaneRef.current,
+        sketchPlacementWorkplane: placementWorkplaneRef.current,
+      });
     },
-    [onProjectWorkspaceChange, projectId],
+    [onProjectWorkspaceChange, placementElevation, projectId],
   );
 
   useEffect(() => {
-    currentSnapRef.current = normalizeSnapGrid(initialSnap);
-  }, [initialSnap]);
+    if (!projectId || !onProjectWorkspaceChange) return;
+    onProjectWorkspaceChange({
+      projectId,
+      workspace: workspaceSettingsRef.current,
+      snap: snapGrid,
+      placementElevation,
+      placementWorkplane,
+      sketchPlacementWorkplane: placementWorkplane,
+    });
+  }, [onProjectWorkspaceChange, placementElevation, placementWorkplane, projectId, snapGrid]);
 
   const commitShapes = useCallback(
     (next: WorkplaneShape[], nextSelection: string | string[] | null = selectedIds, message?: string) => {
@@ -5692,20 +6116,18 @@ export function SketchForgeEditor({
       const requestedSelection = Array.isArray(nextSelection) ? nextSelection : nextSelection ? [nextSelection] : [];
       const validSelection = requestedSelection.filter((id, index) => requestedSelection.indexOf(id) === index && canonicalNext.some((shape) => shape.id === id));
       shapesRef.current = canonicalNext;
+      selectedIdsRef.current = validSelection;
       setShapes(canonicalNext);
       setSelectedIds(validSelection);
-      setHistory((current) => {
-        const trimmed = current.slice(0, historyIndex + 1);
-        historyIndexRef.current = trimmed.length;
-        setHistoryIndex(historyIndexRef.current);
-        return [...trimmed, canonicalNext];
-      });
+      const changed = appendHistorySnapshot(canonicalNext, validSelection);
       if (message) {
         setNotice(message);
       }
-      syncProjectShapes(canonicalNext);
+      if (changed) {
+        syncProjectShapes(canonicalNext);
+      }
     },
-    [historyIndex, selectedIds, syncProjectShapes],
+    [appendHistorySnapshot, selectedIds, syncProjectShapes],
   );
 
   const removeEdgeTreatment = useCallback(async (optionId: string) => {
@@ -5722,48 +6144,76 @@ export function SketchForgeEditor({
       setNotice("Choose an edge feature to remove");
       return;
     }
+    const sourceFingerprint = projectShapesFingerprint([selectedShape]);
+    const sourceProjectId = projectInfoRef.current.projectId;
     const restored = await restoreEdgeTreatmentInShape(selectedShape, option.path, option.entryId);
     if (!restored) {
       setNotice(selectedEdgeFeatureCount > 0 ? "This edge feature has no stored undo history" : "No edge feature to remove");
       return;
     }
+    const currentTarget = shapesRef.current.find((shape) => shape.id === selectedShape.id);
+    if (projectInfoRef.current.projectId !== sourceProjectId || !currentTarget || projectShapesFingerprint([currentTarget]) !== sourceFingerprint) {
+      setNotice("The object changed while removing the edge feature; try again");
+      return;
+    }
     invalidateCadModifierSession();
     commitShapes(
-      shapes.map((shape) => shape.id === selectedShape.id ? restored.shape : shape),
+      shapesRef.current.map((shape) => shape.id === selectedShape.id ? restored.shape : shape),
       restored.shape.id,
       `Removed ${restored.label}`,
     );
     setNotice(`Removed ${restored.label}`);
-  }, [commitShapes, invalidateCadModifierSession, selectedEdgeFeatureCount, selectedEdgeHistoryOptions, selectedShape, shapes]);
+  }, [commitShapes, invalidateCadModifierSession, selectedEdgeFeatureCount, selectedEdgeHistoryOptions, selectedShape]);
 
   const commitSketchProfile = useCallback(
     (next: SketchProfile, message?: string) => {
       const snapshot = cloneSketchProfile(next);
+      const current = sketchHistoryRef.current;
+      const currentIndex = Math.min(sketchHistoryIndexRef.current, Math.max(0, current.length - 1));
+      const trimmed = current.slice(0, currentIndex + 1);
+      const latest = trimmed.at(-1);
       setSketchProfile(snapshot);
-      setSketchHistory((current) => {
-        const trimmed = current.slice(0, sketchHistoryIndex + 1);
-        return [...trimmed, cloneSketchProfile(snapshot)];
-      });
-      setSketchHistoryIndex(sketchHistoryIndex + 1);
+      if (latest && JSON.stringify(latest) === JSON.stringify(snapshot)) {
+        return;
+      }
+      const nextHistory = [...trimmed, cloneSketchProfile(snapshot)].slice(-MAX_SKETCH_HISTORY_ENTRIES);
+      sketchHistoryRef.current = nextHistory;
+      sketchHistoryIndexRef.current = nextHistory.length - 1;
+      setSketchHistory(nextHistory);
+      setSketchHistoryIndex(sketchHistoryIndexRef.current);
       if (message) setNotice(message);
     },
-    [sketchHistoryIndex],
+    [],
   );
 
-  const beginSketch = useCallback((profile?: SketchProfile, editingId: string | null = null) => {
+  const beginSketch = useCallback((
+    operation: SketchOperation,
+    profile?: SketchProfile,
+    editingId: string | null = null,
+    revolveSettings?: Partial<SketchRevolveSettings>,
+    workplaneOverride?: PlacementWorkplane,
+  ) => {
     const initial = cloneSketchProfile(profile ?? emptySketchProfile());
+    setWorkplaneMode(false);
+    setActiveSketchWorkplane(normalizePlacementWorkplane(workplaneOverride ?? placementWorkplaneRef.current));
     setToolbarMode("sketch");
     setSketchActive(true);
+    setSketchOperation(operation);
+    setSketchRevolveSettings(normalizeSketchRevolveSettings(revolveSettings));
+    setSketchRevolvePreview(null);
     setSketchTool(profile?.segments.length ? "select" : "line");
     setSketchProfile(initial);
-    setSketchHistory([cloneSketchProfile(initial)]);
+    const initialHistory = [cloneSketchProfile(initial)];
+    sketchHistoryRef.current = initialHistory;
+    sketchHistoryIndexRef.current = 0;
+    setSketchHistory(initialHistory);
     setSketchHistoryIndex(0);
     setSketchActivePointId(null);
     setSketchSelection(null);
     setSketchMeasureStart(null);
     setSketchMeasurement(null);
     setEditingSketchShapeId(editingId);
-    setNotice(editingId ? "Editing sketch profile" : "Sketch started: place the first point");
+    setNotice(editingId ? `Editing ${operation} sketch profile` : operation === "revolve" ? "Revolve sketch started: draw on the left side of the axis" : "Sketch started: place the first point");
   }, []);
 
   const beginSketchEdit = useCallback(() => {
@@ -5771,7 +6221,35 @@ export function SketchForgeEditor({
       setNotice("Select one shape created from a sketch to edit it");
       return;
     }
-    beginSketch(selectedShape.sketchProfile, selectedShape.id);
+    const operation = selectedShape.sketchOperation ?? (selectedShape.sketchRevolve ? "revolve" : "extrude");
+    let editWorkplane: PlacementWorkplane | undefined;
+    if (operation === "extrude") {
+      const quaternion = quaternionForShape(selectedShape);
+      const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion).normalize();
+      const xAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion).normalize();
+      const zAxis = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion).normalize();
+      const points = selectedShape.sketchProfile.points;
+      const profileCenterX = points.length
+        ? (Math.min(...points.map((point) => point.x)) + Math.max(...points.map((point) => point.x))) / 2
+        : 0;
+      const profileCenterZ = points.length
+        ? (Math.min(...points.map((point) => point.z)) + Math.max(...points.map((point) => point.z))) / 2
+        : 0;
+      const origin = new THREE.Vector3(
+        selectedShape.x,
+        (selectedShape.elevation ?? 0) + selectedShape.height / 2,
+        selectedShape.z,
+      )
+        .addScaledVector(normal, -selectedShape.height / 2)
+        .addScaledVector(xAxis, -profileCenterX)
+        .addScaledVector(zAxis, -profileCenterZ);
+      editWorkplane = placementWorkplaneFromSurface(
+        { x: origin.x, y: origin.y, z: origin.z },
+        { x: normal.x, y: normal.y, z: normal.z },
+        { x: xAxis.x, y: xAxis.y, z: xAxis.z },
+      );
+    }
+    beginSketch(operation, selectedShape.sketchProfile, selectedShape.id, selectedShape.sketchRevolve, editWorkplane);
   }, [beginSketch, selectedShape, selectedShapes.length]);
 
   const cancelSketch = useCallback(() => {
@@ -5781,34 +6259,41 @@ export function SketchForgeEditor({
     setSketchMeasureStart(null);
     setSketchMeasurement(null);
     setEditingSketchShapeId(null);
+    setSketchRevolvePreview(null);
     setNotice("Sketch cancelled");
   }, []);
 
   const sketchUndo = useCallback(() => {
-    if (sketchHistoryIndex <= 0) {
+    const currentHistory = sketchHistoryRef.current;
+    const currentIndex = sketchHistoryIndexRef.current;
+    if (currentIndex <= 0) {
       setNotice("Nothing to undo in this sketch");
       return;
     }
-    const nextIndex = sketchHistoryIndex - 1;
+    const nextIndex = currentIndex - 1;
+    sketchHistoryIndexRef.current = nextIndex;
     setSketchHistoryIndex(nextIndex);
-    setSketchProfile(cloneSketchProfile(sketchHistory[nextIndex] ?? emptySketchProfile()));
+    setSketchProfile(cloneSketchProfile(currentHistory[nextIndex] ?? emptySketchProfile()));
     setSketchActivePointId(null);
     setSketchSelection(null);
     setNotice("Sketch undo");
-  }, [sketchHistory, sketchHistoryIndex]);
+  }, []);
 
   const sketchRedo = useCallback(() => {
-    if (sketchHistoryIndex >= sketchHistory.length - 1) {
+    const currentHistory = sketchHistoryRef.current;
+    const currentIndex = sketchHistoryIndexRef.current;
+    if (currentIndex >= currentHistory.length - 1) {
       setNotice("Nothing to redo in this sketch");
       return;
     }
-    const nextIndex = sketchHistoryIndex + 1;
+    const nextIndex = currentIndex + 1;
+    sketchHistoryIndexRef.current = nextIndex;
     setSketchHistoryIndex(nextIndex);
-    setSketchProfile(cloneSketchProfile(sketchHistory[nextIndex] ?? emptySketchProfile()));
+    setSketchProfile(cloneSketchProfile(currentHistory[nextIndex] ?? emptySketchProfile()));
     setSketchActivePointId(null);
     setSketchSelection(null);
     setNotice("Sketch redo");
-  }, [sketchHistory, sketchHistoryIndex]);
+  }, []);
 
   const setActiveSketchTool = useCallback((tool: SketchTool) => {
     setSketchTool(tool);
@@ -6112,20 +6597,33 @@ export function SketchForgeEditor({
     setSketchTool("select");
   }, [commitSketchProfile, sketchProfile]);
 
-  const finishSketch = useCallback(() => {
+  const finishSketch = useCallback(async () => {
     const existing = editingSketchShapeId ? shapes.find((shape) => shape.id === editingSketchShapeId) ?? null : null;
     const height = existing?.height ?? 10;
-    const extruded = shapeFromSketchProfile(sketchProfile, height, existing);
-    if (!extruded) {
+    let resolved: WorkplaneShape | null;
+    try {
+      if (sketchOperation === "revolve") {
+        resolved = await shapeFromRevolvedSketchProfile(sketchProfile, sketchRevolveSettings, existing);
+      } else {
+        const extrusion = await shapeFromSketchProfile(sketchProfile, height, existing);
+        resolved = extrusion ? placeSketchExtrusion(extrusion, activeSketchWorkplane, existing) : null;
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : `The sketch profile cannot be ${sketchOperation === "revolve" ? "revolved" : "extruded"} to 3D`);
+      return;
+    }
+    if (!resolved) {
       setNotice("Close at least one profile before finishing the sketch");
       return;
     }
-    const nextShapes = existing ? shapes.map((shape) => (shape.id === existing.id ? extruded : shape)) : [...shapes, extruded];
-    commitShapes(nextShapes, extruded.id, existing ? "Sketch updated" : "Sketch created at 10 mm height");
+    const nextShapes = existing ? shapes.map((shape) => (shape.id === existing.id ? resolved : shape)) : [...shapes, resolved];
+    const action = sketchOperation === "revolve" ? "Revolve sketch" : "Sketch";
+    commitShapes(nextShapes, resolved.id, existing ? `${action} updated` : sketchOperation === "revolve" ? "Revolved sketch created" : "Sketch created at 10 mm height");
     setSketchActive(false);
+    setSketchRevolvePreview(null);
     setEditingSketchShapeId(null);
     setToolbarMode("geometry");
-  }, [commitShapes, editingSketchShapeId, shapes, sketchProfile]);
+  }, [activeSketchWorkplane, commitShapes, editingSketchShapeId, shapes, sketchOperation, sketchProfile, sketchRevolveSettings]);
 
   useEffect(() => {
     if (!projectId) {
@@ -6134,19 +6632,26 @@ export function SketchForgeEditor({
       lastProjectShapesEchoRef.current = null;
       return;
     }
-    if (lastProjectIdRef.current !== projectId) {
+    if (projectInteractionActiveRef.current) {
+      return;
+    }
+    const projectChanged = lastProjectIdRef.current !== projectId;
+    if (projectChanged) {
       lastProjectIdRef.current = projectId;
       lastProjectShapesSyncRef.current = "";
       lastProjectShapesEchoRef.current = null;
+      const nextAssets = dedupeProjectAssets(initialAssets);
+      projectAssetsRef.current = nextAssets;
+      setProjectAssets(nextAssets);
+      const nextPlacementElevation = Number.isFinite(initialPlacementElevation) ? initialPlacementElevation : 0;
+      setPlacementElevation(nextPlacementElevation);
+      setPlacementWorkplane(normalizePlacementWorkplane(initialPlacementWorkplane, nextPlacementElevation));
     }
     const incoming = initialShapes.map(canonicalizeShape);
     const incomingSerialized = projectShapesFingerprint(incoming);
     // The parent echoes shapes after a local save; rehydrating that echo can reset active transform state.
-    if (lastProjectShapesEchoRef.current !== null && incomingSerialized === lastProjectShapesEchoRef.current) {
+    if (!projectChanged && lastProjectShapesEchoRef.current !== null && incomingSerialized === lastProjectShapesEchoRef.current) {
       lastProjectShapesSyncRef.current = incomingSerialized;
-      return;
-    }
-    if (projectInteractionActiveRef.current) {
       return;
     }
     lastProjectShapesSyncRef.current = incomingSerialized;
@@ -6154,16 +6659,26 @@ export function SketchForgeEditor({
       window.clearTimeout(projectSyncTimerRef.current);
       projectSyncTimerRef.current = null;
     }
-    if (incomingSerialized === projectShapesFingerprint(shapes)) {
+    if (!projectChanged && incomingSerialized === projectShapesFingerprint(shapes)) {
       return;
     }
+    const hydratedHistory = hydrateEditorHistoryState(
+      incoming,
+      initialHistory,
+      initialHistoryIndex,
+      normalizeWorkspaceSettings(initialWorkspace).historyLimit,
+    );
     projectHydratingRef.current = true;
+    shapesRef.current = incoming;
+    selectedIdsRef.current = [];
+    historyRef.current = hydratedHistory.entries;
+    historyIndexRef.current = hydratedHistory.index;
     setShapes(incoming);
     setSelectedIds([]);
-    setHistory([incoming]);
-    setHistoryIndex(0);
-    setNotice(incoming.length ? "Project synced" : "Ready");
-  }, [initialShapes, projectId, projectRevision]);
+    setHistory(hydratedHistory.entries);
+    setHistoryIndex(hydratedHistory.index);
+    setNotice("Ready");
+  }, [initialAssets, initialHistory, initialHistoryIndex, initialPlacementElevation, initialPlacementWorkplane, initialShapes, projectId, projectRevision]);
 
   useEffect(() => {
     if (!projectId || !onProjectShapesChange) {
@@ -6184,23 +6699,90 @@ export function SketchForgeEditor({
       if (interactionHistoryTimerRef.current !== null) {
         window.clearTimeout(interactionHistoryTimerRef.current);
       }
+      sketchRevolveUpdateTimerRef.current.forEach((timer) => window.clearTimeout(timer));
+      sketchRevolveUpdateTimerRef.current.clear();
     };
   }, []);
 
   const addShape = useCallback(
-    (asset: ShapeAsset, point?: { x: number; z: number; elevation?: number; rotation?: number; rotationX?: number; rotationZ?: number; surface?: { orientation: "ground" | "top" | "bottom" | "front" | "back" | "right" | "left" | "face"; x: number; y: number; z: number; normal?: [number, number, number] } }) => {
-      const automaticPlacement = point
-        ? point
-        : automaticShapePlacement(asset, shapes, workspaceSettingsRef.current, placementElevation);
-      const nextShape = makeShapeFromAsset(asset, automaticPlacement ?? { x: 0, z: 0, elevation: placementElevation });
+    (asset: ShapeAsset, point?: PlacementPoint) => {
+      const shape = makeShapeFromAsset(asset);
+      // A clicked library shape on the base workplane goes to the nearest clear
+      // spot; dragged shapes (explicit point) and custom workplanes keep
+      // upstream's placement at the given point / workplane origin.
+      const searchClearSpace = !point && placementWorkplaneIsBase(placementWorkplane);
+      const automaticPlacement = searchClearSpace
+        ? automaticShapePlacement(asset, shapes, workspaceSettingsRef.current, placementWorkplane.origin.y)
+        : null;
+      const basePoint = point
+        ?? (automaticPlacement ? { x: automaticPlacement.x, y: automaticPlacement.elevation, z: automaticPlacement.z } : placementWorkplane.origin);
+      const nextShape = {
+        ...shape,
+        ...placementPatchForNewShape(shape, placementWorkplane, basePoint),
+      };
       commitShapes(
         [...shapes, nextShape],
         nextShape.id,
-        automaticPlacement ? `${asset.name} added` : `${asset.name} added at centre (no clear space found)`,
+        searchClearSpace && !automaticPlacement ? `${asset.name} added at centre (no clear space found)` : `${asset.name} added`,
       );
     },
-    [commitShapes, placementElevation, shapes],
+    [commitShapes, placementWorkplane, shapes],
   );
+
+  const scheduleRevolveShapeUpdate = useCallback((id: string, settings: SketchRevolveSettings) => {
+    const previousTimer = sketchRevolveUpdateTimerRef.current.get(id);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+    const requestId = (sketchRevolveUpdateRequestRef.current.get(id) ?? 0) + 1;
+    sketchRevolveUpdateRequestRef.current.set(id, requestId);
+    const timer = window.setTimeout(() => {
+      sketchRevolveUpdateTimerRef.current.delete(id);
+      const source = shapesRef.current.find((shape) => shape.id === id);
+      if (!source?.sketchProfile || source.sketchOperation !== "revolve") return;
+      setNotice("Updating revolve preview…");
+      void shapeFromRevolvedSketchProfile(source.sketchProfile, settings, source)
+        .then((generated) => {
+          if (sketchRevolveUpdateRequestRef.current.get(id) !== requestId) return;
+          const current = shapesRef.current.find((shape) => shape.id === id);
+          if (!current?.importedMesh || current.sketchOperation !== "revolve") return;
+          const widthScale = current.width / Math.max(0.001, current.importedMesh.baseWidth);
+          const depthScale = current.depth / Math.max(0.001, current.importedMesh.baseDepth);
+          const heightScale = current.height / Math.max(0.001, current.importedMesh.baseHeight);
+          const width = generated.width * widthScale;
+          const depth = generated.depth * depthScale;
+          const height = generated.height * heightScale;
+          const updated = canonicalizeShape({
+            ...generated,
+            id: current.id,
+            name: current.name,
+            color: current.color,
+            hole: current.hole,
+            x: current.x,
+            z: current.z,
+            elevation: current.elevation,
+            width,
+            depth,
+            height,
+            size: Math.max(width, depth),
+            rotation: current.rotation,
+            rotationX: current.rotationX,
+            rotationZ: current.rotationZ,
+            mirrorX: current.mirrorX,
+            mirrorY: current.mirrorY,
+            mirrorZ: current.mirrorZ,
+            locked: current.locked,
+            hidden: current.hidden,
+            sketchRevolve: settings,
+          });
+          commitShapes(shapesRef.current.map((shape) => shape.id === id ? updated : shape), selectedIdsRef.current, "Revolve updated");
+        })
+        .catch((error) => {
+          if (sketchRevolveUpdateRequestRef.current.get(id) === requestId) {
+            setNotice(error instanceof Error ? error.message : "The revolve settings could not be applied");
+          }
+        });
+    }, 120);
+    sketchRevolveUpdateTimerRef.current.set(id, timer);
+  }, [commitShapes]);
 
   // --- Guided tutorial (hybrid auto-advance) ---
   const activeTutorial = getTutorial(activeTutorialId);
@@ -6210,8 +6792,15 @@ export function SketchForgeEditor({
 
   // Start (or restart) the tutorial when one is launched into this editor. Keyed on
   // projectId too so relaunching the same tutorial in a fresh project starts over.
+  // Opening a different project ends the tutorial; visiting the dashboard and
+  // coming back to the tutorial's own project keeps it.
+  const tutorialProjectIdRef = useRef(projectId);
   useEffect(() => {
-    if (!initialTutorialId) return;
+    if (!initialTutorialId) {
+      if (projectId !== tutorialProjectIdRef.current) setActiveTutorialId(null);
+      return;
+    }
+    tutorialProjectIdRef.current = projectId;
     setActiveTutorialId(initialTutorialId);
     setTutorialStepIndex(0);
     setTutorialStepDone(false);
@@ -6266,6 +6855,13 @@ export function SketchForgeEditor({
     (id: string, patch: ShapeUpdatePatch) => {
       const bakeTransform = Boolean(patch.bakeTransform);
       const cleanedPatch = cleanShapePatch(patch);
+      if (cleanedPatch.sketchRevolve) {
+        const source = shapesRef.current.find((shape) => shape.id === id);
+        if (source?.sketchOperation === "revolve" && source.sketchProfile) {
+          scheduleRevolveShapeUpdate(id, normalizeSketchRevolveSettings(cleanedPatch.sketchRevolve));
+          return;
+        }
+      }
       const applyPatch = (current: WorkplaneShape[]) => {
         let changed = false;
         const next = current.map((shape) => {
@@ -6298,12 +6894,14 @@ export function SketchForgeEditor({
         return;
       }
 
+      // Read the latest committed shapes so several patches issued in one tick
+      // (e.g. baking each member of a multi-selection) build on each other.
       const { changed, next } = applyPatch(shapesRef.current);
       if (changed) {
         commitShapes(next, selectedIds);
       }
     },
-    [commitShapes, selectedIds, shapes],
+    [commitShapes, scheduleRevolveShapeUpdate, selectedIds, shapes],
   );
 
   const deleteSelected = useCallback(() => {
@@ -6327,6 +6925,8 @@ export function SketchForgeEditor({
     const workspace = workspaceSettingsRef.current;
     const xLimit = Math.max(0, workspace.width / 2 - 6);
     const zLimit = Math.max(0, workspace.depth / 2 - 6);
+    // Duplicate-and-repeat: if the selection is exactly the previous duplicate,
+    // replay the transform the user applied to it since it was created.
     const repeatPattern = duplicateRepeatMatches(duplicateRepeatPatternRef.current, selectedIds);
     const sourceShapes = repeatPattern ? duplicateRepeatPatternRef.current?.sourceShapes ?? [] : selectedShapes;
     const sourceByIndex = new Map(sourceShapes.map((shape, index) => [index, shape]));
@@ -6345,7 +6945,7 @@ export function SketchForgeEditor({
         x: shape.x + offsetX,
         z: shape.z + offsetZ,
       };
-      return { ...next, id: createLocalId(`${shape.id}-copy`) };
+      return cloneWorkplaneShapeTreeWithFreshIds(next, "copy");
     });
     duplicateRepeatPatternRef.current = { selectedIds: duplicates.map((shape) => shape.id), sourceShapes: selectedShapes.map((shape) => ({ ...shape })) };
     commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Duplicated ${duplicates.length} shape${duplicates.length === 1 ? "" : "s"}`);
@@ -6360,8 +6960,7 @@ export function SketchForgeEditor({
       const copies = Math.max(1, Math.min(50, Math.floor(count)));
       const duplicates = Array.from({ length: copies }, (_, copyIndex) =>
         selectedShapes.map((shape) => ({
-          ...shape,
-          id: createLocalId(`${shape.id}-repeat-${copyIndex + 1}`),
+          ...cloneWorkplaneShapeTreeWithFreshIds(shape, `repeat-${copyIndex + 1}`),
           x: shape.x + offsetX * (copyIndex + 1),
           z: shape.z + offsetZ * (copyIndex + 1),
           elevation: (shape.elevation ?? 0) + offsetY * (copyIndex + 1),
@@ -6385,6 +6984,7 @@ export function SketchForgeEditor({
   }, [hasSelection, selectedShapes]);
 
   const pasteShape = useCallback(async () => {
+    const sourceProjectId = projectInfoRef.current.projectId;
     const systemClipboard = await readSystemClipboard();
     const sharedClipboard = readSharedClipboard();
     const sourceClipboard = systemClipboard.length > 0 ? systemClipboard : sharedClipboard.length > 0 ? sharedClipboard : clipboard;
@@ -6392,34 +6992,49 @@ export function SketchForgeEditor({
       setNotice("SketchForge clipboard is empty");
       return;
     }
+    if (projectInfoRef.current.projectId !== sourceProjectId) {
+      setNotice("Paste cancelled because the project changed");
+      return;
+    }
     if (serializeShapesForSync(sourceClipboard) !== serializeShapesForSync(clipboard)) {
       setClipboard(sourceClipboard);
     }
-    const pasted = sourceClipboard.map((shape) => ({
-      ...shape,
-      id: createLocalId(`${shape.id}-paste`),
-      x: Math.min(110, shape.x + 12),
-      z: Math.min(110, shape.z + 12),
-    }));
+    const pasted = sourceClipboard.map((shape) => {
+      const pastedShape = cloneWorkplaneShapeTreeWithFreshIds(shape, "paste");
+      return {
+        ...pastedShape,
+        x: Math.min(110, shape.x + 12),
+        z: Math.min(110, shape.z + 12),
+      };
+    });
     commitShapes([...shapesRef.current, ...pasted], pasted.map((shape) => shape.id), `Pasted ${pasted.length} shape${pasted.length === 1 ? "" : "s"}`);
   }, [clipboard, commitShapes]);
 
   const undo = useCallback(() => {
+    if (projectInteractionActiveRef.current) {
+      setNotice("Finish the current drag or transform before undoing");
+      return;
+    }
     const modifierCancelled = invalidateCadModifierSession();
-    if (historyIndex <= 0) {
+    const currentHistory = historyRef.current;
+    const currentIndex = historyIndexRef.current;
+    if (currentIndex <= 0) {
       setNotice(modifierCancelled ? "Edge modifier cancelled" : "Nothing to undo");
       return;
     }
-    const nextIndex = historyIndex - 1;
-    const nextShapes = (history[nextIndex] ?? []).map(canonicalizeShape);
+    const nextIndex = currentIndex - 1;
+    const entry = currentHistory[nextIndex];
+    const nextShapes = (entry?.shapes ?? []).map(canonicalizeShape);
+    const nextSelection = (entry?.selectedIds ?? []).filter((id) => nextShapes.some((shape) => shape.id === id));
     historyIndexRef.current = nextIndex;
     shapesRef.current = nextShapes;
+    selectedIdsRef.current = nextSelection;
     setHistoryIndex(nextIndex);
     setShapes(nextShapes);
-    setSelectedIds((current) => current.filter((id) => nextShapes.some((shape) => shape.id === id)));
+    setSelectedIds(nextSelection);
     syncProjectShapes(nextShapes);
     setNotice(modifierCancelled ? "Edge modifier cancelled · Undo" : "Undo");
-  }, [history, historyIndex, invalidateCadModifierSession, syncProjectShapes]);
+  }, [invalidateCadModifierSession, syncProjectShapes]);
 
   const updateRulerUndoState = useCallback((canUndo: boolean, rulerUndo: (() => void) | null) => {
     rulerUndoRef.current = rulerUndo;
@@ -6435,21 +7050,30 @@ export function SketchForgeEditor({
   }, [rulerCanUndo, undo]);
 
   const redo = useCallback(() => {
-    if (historyIndex >= history.length - 1) {
+    if (projectInteractionActiveRef.current) {
+      setNotice("Finish the current drag or transform before redoing");
+      return;
+    }
+    const currentHistory = historyRef.current;
+    const currentIndex = historyIndexRef.current;
+    if (currentIndex >= currentHistory.length - 1) {
       setNotice("Nothing to redo");
       return;
     }
     const modifierCancelled = invalidateCadModifierSession();
-    const nextIndex = historyIndex + 1;
-    const nextShapes = (history[nextIndex] ?? []).map(canonicalizeShape);
+    const nextIndex = currentIndex + 1;
+    const entry = currentHistory[nextIndex];
+    const nextShapes = (entry?.shapes ?? []).map(canonicalizeShape);
+    const nextSelection = (entry?.selectedIds ?? []).filter((id) => nextShapes.some((shape) => shape.id === id));
     historyIndexRef.current = nextIndex;
     shapesRef.current = nextShapes;
+    selectedIdsRef.current = nextSelection;
     setHistoryIndex(nextIndex);
     setShapes(nextShapes);
-    setSelectedIds((current) => current.filter((id) => nextShapes.some((shape) => shape.id === id)));
+    setSelectedIds(nextSelection);
     syncProjectShapes(nextShapes);
     setNotice(modifierCancelled ? "Edge modifier cancelled · Redo" : "Redo");
-  }, [history, historyIndex, invalidateCadModifierSession, syncProjectShapes]);
+  }, [invalidateCadModifierSession, syncProjectShapes]);
 
   const toggleAlignMode = useCallback(() => {
     if (selectedShapes.length < 2) {
@@ -6574,14 +7198,22 @@ export function SketchForgeEditor({
   }, []);
 
   const postCadModifierRequest = useCallback((request: CadModifierWorkerPayload, transfer: Transferable[] = []) => {
+    const worker = cadModifierWorkerRef.current ?? cadModifierWorkerRestartRef.current();
+    if (!worker) return null;
     const requestId = cadModifierRequestRef.current + 1;
     cadModifierRequestRef.current = requestId;
-    cadModifierWorkerRef.current?.postMessage({ ...request, requestId } as CadModifierWorkerRequest, transfer);
+    try {
+      worker.postMessage({ ...request, requestId } as CadModifierWorkerRequest, transfer);
+    } catch {
+      worker.terminate();
+      if (cadModifierWorkerRef.current === worker) cadModifierWorkerRef.current = null;
+      return null;
+    }
     return requestId;
   }, []);
 
   const postCadModifierRequestAsync = useCallback((request: CadModifierWorkerPayload, transfer: Transferable[] = [], timeoutMs = 20000) => {
-    const worker = cadModifierWorkerRef.current;
+    const worker = cadModifierWorkerRef.current ?? cadModifierWorkerRestartRef.current();
     if (!worker) {
       return Promise.reject(new Error("The CAD worker is not ready"));
     }
@@ -6589,11 +7221,31 @@ export function SketchForgeEditor({
     cadModifierRequestRef.current = requestId;
     return new Promise<CadModifierWorkerResponse>((resolve, reject) => {
       const timer = window.setTimeout(() => {
-        cadModifierPendingRef.current.delete(requestId);
-        reject(new Error("Timed out waiting for the CAD worker"));
+        if (!cadModifierPendingRef.current.has(requestId)) return;
+        const pendingRequests = [...cadModifierPendingRef.current.values()];
+        cadModifierPendingRef.current.clear();
+        pendingRequests.forEach((pending) => window.clearTimeout(pending.timer));
+        cadModifierWorkerRef.current?.terminate();
+        cadModifierWorkerRef.current = null;
+        const invalidationId = cadModifierRequestRef.current + 1;
+        cadModifierRequestRef.current = invalidationId;
+        cadModifierLatestPreviewRef.current = invalidationId;
+        cadModifierPrepareRef.current = invalidationId;
+        cadModifierBaseShapeRef.current = null;
+        cadModifierBaseFingerprintRef.current = "";
+        cadModifierSourcePartsRef.current = [];
+        setEdgeModifier(null);
+        cadModifierWorkerRestartRef.current();
+        pendingRequests.forEach((pending) => pending.reject(new Error("Timed out waiting for the CAD worker; the worker was restarted")));
       }, timeoutMs);
       cadModifierPendingRef.current.set(requestId, { resolve, reject, timer });
-      worker.postMessage({ ...request, requestId } as CadModifierWorkerRequest, transfer);
+      try {
+        worker.postMessage({ ...request, requestId } as CadModifierWorkerRequest, transfer);
+      } catch (error) {
+        window.clearTimeout(timer);
+        cadModifierPendingRef.current.delete(requestId);
+        reject(error instanceof Error ? error : new Error("The CAD worker rejected the request"));
+      }
     });
   }, []);
 
@@ -6607,6 +7259,7 @@ export function SketchForgeEditor({
       setNotice(`Select one unlocked solid to ${kind}`);
       return;
     }
+    invalidateCadModifierSession();
     const appliedEdgeTreatmentCount = edgeTreatmentFeatureCount(selectedShape);
     const hasAppliedEdgeTreatment = Boolean(selectedShape.importedMesh && selectedShape.edgeTreatments?.length);
     const sourceParts = selectedShape.groupedShapes?.length && !hasAppliedEdgeTreatment ? restoreGroupedChildren(selectedShape) : [selectedShape];
@@ -6646,7 +7299,7 @@ export function SketchForgeEditor({
       sharpAngle: 25,
       chamferAngle: 45,
       quality: "standard",
-      tangentChain: true,
+      tangentChain: defaultCadModifierTangentChain(appliedEdgeTreatmentCount),
       preserveEdgeSize: selectedShape.edgeResizeMode === "preserve",
       busy: true,
       prepared: false,
@@ -6660,13 +7313,21 @@ export function SketchForgeEditor({
       if (part.primitive) return { primitive: part.primitive, hole: Boolean(part.shape.hole) };
       return { ...meshDataToCadTransfer(part.mesh as MeshData), hole: Boolean(part.shape.hole) };
     });
-    cadModifierPrepareRef.current = postCadModifierRequest({
+    const prepareRequestId = postCadModifierRequest({
       type: "prepare",
       parts,
       sharpAngle: 25,
       suppressTreatmentDetailEdges: appliedEdgeTreatmentCount > 0,
     }, parts.flatMap((part) => part.positions && part.indices ? [part.positions.buffer, part.indices.buffer] : []));
-  }, [postCadModifierRequest, selectedShape, selectedShapes.length]);
+    if (prepareRequestId === null) {
+      const message = cadModifierWorkerFailureMessage();
+      setEdgeModifier((current) => current ? { ...current, busy: false, prepared: false, error: message } : current);
+      setNotice(message);
+      return;
+    }
+    cadModifierPrepareRef.current = prepareRequestId;
+    armCadModifierWatchdog(prepareRequestId, "prepare", cadModifierPrepareTimeoutMs(triangleCount));
+  }, [armCadModifierWatchdog, invalidateCadModifierSession, postCadModifierRequest, selectedShape, selectedShapes.length]);
 
   const prepareCadModifierForMcp = useCallback(async (shape: WorkplaneShape, sharpAngle: number) => {
     if (shape.locked || shape.hole) {
@@ -6706,7 +7367,7 @@ export function SketchForgeEditor({
       parts,
       sharpAngle,
       suppressTreatmentDetailEdges: appliedEdgeTreatmentCount > 0,
-    }, transfer);
+    }, transfer, cadModifierPrepareTimeoutMs(triangleCount));
     if (response.type !== "ready") {
       throw new Error("The CAD worker did not return an edge list");
     }
@@ -6718,8 +7379,10 @@ export function SketchForgeEditor({
     params: Record<string, unknown>,
   ) => {
     invalidateCadModifierSession();
+    const sourceFingerprint = projectShapesFingerprint([shape]);
+    const sourceProjectId = projectInfoRef.current.projectId;
     const kind: CadModifierKind = params.kind === "fillet" ? "fillet" : "chamfer";
-    const sharpAngle = Math.max(1, Math.min(120, mcpNumber(params.sharpAngle, 25)));
+    const sharpAngle = Math.max(1, Math.min(CAD_MODIFIER_MAX_SHARP_ANGLE, mcpNumber(params.sharpAngle, 25)));
     const amount = Math.max(MIN_EDGE_MODIFIER_AMOUNT, mcpNumber(params.amount, 1));
     const chamferAngle = Math.max(5, Math.min(85, mcpNumber(params.chamferAngle, 45)));
     const quality: CadModifierQuality = params.quality === "draft" || params.quality === "fine" ? params.quality : "standard";
@@ -6779,7 +7442,21 @@ export function SketchForgeEditor({
     };
     const createdAt = Date.now();
     const groupedModifiedShape = groupedShapeWithComponentEdgeTreatment(shape, preview, sourceParts, session, feature, createdAt);
-    const modifiedShape = groupedModifiedShape ?? shapeWithEdgeTreatmentRecord(preview, shape, feature, preserveEdgeSize, createdAt);
+    const modifiedShape = groupedModifiedShape ?? shapeWithEdgeTreatmentRecord(
+      bakedEdgeTreatmentPreview(preview, shape),
+      shape,
+      feature,
+      preserveEdgeSize,
+      createdAt,
+    );
+    const currentTarget = shapesRef.current.find((candidate) => candidate.id === shape.id);
+    if (
+      projectInfoRef.current.projectId !== sourceProjectId ||
+      !currentTarget ||
+      projectShapesFingerprint([currentTarget]) !== sourceFingerprint
+    ) {
+      throw new Error("The target object or project changed while the edge treatment was running; try again");
+    }
     commitShapes(
       shapesRef.current.map((candidate) => candidate.id === shape.id ? modifiedShape : candidate),
       modifiedShape.id,
@@ -6831,7 +7508,7 @@ export function SketchForgeEditor({
       createdAt,
     );
     const modifiedShape: WorkplaneShape = groupedModifiedShape ?? shapeWithEdgeTreatmentRecord(
-      previewShape,
+      bakedEdgeTreatmentPreview(previewShape, base),
       base,
       feature,
       edgeModifier.preserveEdgeSize,
@@ -6851,7 +7528,9 @@ export function SketchForgeEditor({
       if (event.key === "Escape") {
         event.preventDefault();
         cancelEdgeModifier();
-      } else if (event.key === "Enter" && edgeModifier.preview && !edgeModifier.busy && !edgeModifier.error) {
+      } else if (event.key === "Enter" && edgeModifier.preview && edgeModifier.selectedEdgeIds.length > 0 && !edgeModifier.busy && !edgeModifier.error) {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (target?.closest("input, select, textarea, button, [contenteditable='true']")) return;
         event.preventDefault();
         applyEdgeModifier();
       }
@@ -6862,8 +7541,6 @@ export function SketchForgeEditor({
 
   useEffect(() => {
     if (!edgeModifier?.prepared || edgeModifier.selectedEdgeIds.length === 0) return;
-    const worker = cadModifierWorkerRef.current;
-    if (!worker) return;
     const timer = window.setTimeout(() => {
       const requestId = postCadModifierRequest({
         type: "preview",
@@ -6873,11 +7550,18 @@ export function SketchForgeEditor({
         quality: edgeModifier.quality,
         chamferAngle: edgeModifier.chamferAngle,
       });
+      if (requestId === null) {
+        const message = cadModifierWorkerFailureMessage();
+        setEdgeModifier((current) => current ? { ...current, busy: false, prepared: false, preview: null, error: message } : current);
+        setNotice(message);
+        return;
+      }
       cadModifierLatestPreviewRef.current = requestId;
+      armCadModifierWatchdog(requestId, "preview");
       setEdgeModifier((current) => current ? { ...current, busy: true, error: null } : current);
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [edgeModifier?.amount, edgeModifier?.chamferAngle, edgeModifier?.kind, edgeModifier?.prepared, edgeModifier?.quality, edgeModifier?.selectedEdgeIds, postCadModifierRequest]);
+  }, [armCadModifierWatchdog, edgeModifier?.amount, edgeModifier?.chamferAngle, edgeModifier?.kind, edgeModifier?.prepared, edgeModifier?.quality, edgeModifier?.selectedEdgeIds, postCadModifierRequest]);
 
   const snapSelected = useCallback(() => {
     if (!hasSelection) {
@@ -6885,27 +7569,17 @@ export function SketchForgeEditor({
       return;
     }
     const selected = new Set(selectedIds);
-    const grid = 1;
-    const snapValue = (value: number) => Math.round(value / grid) * grid;
+    const grid = visibleGridStep(workspaceSettings);
     commitShapes(
       shapes.map((shape) =>
         selected.has(shape.id) && !shape.locked
-          ? {
-              ...shape,
-              x: snapValue(shape.x),
-              z: snapValue(shape.z),
-              elevation: snapValue(shape.elevation ?? 0),
-              width: Math.max(grid, snapValue(shape.width)),
-              depth: Math.max(grid, snapValue(shape.depth)),
-              height: Math.max(grid, snapValue(shape.height)),
-              size: Math.max(grid, snapValue(shape.size)),
-            }
+          ? snapShapeFootprintToVisibleGrid(shape, meshAabb(shape), workspaceSettings)
           : shape,
       ),
       selectedIds,
-      `Snapped ${selectedShapes.length} shape${selectedShapes.length === 1 ? "" : "s"} to 1 mm grid`,
+      `Snapped ${selectedShapes.length} shape${selectedShapes.length === 1 ? "" : "s"} to ${grid} mm visible grid`,
     );
-  }, [commitShapes, hasSelection, selectedIds, selectedShapes.length, shapes]);
+  }, [commitShapes, hasSelection, selectedIds, selectedShapes.length, shapes, workspaceSettings]);
 
   const toggleHidden = useCallback(() => {
     if (!hasSelection) {
@@ -6989,12 +7663,15 @@ export function SketchForgeEditor({
         return;
       }
       const selected = new Set(selectedIds);
+      const normal = placementWorkplane.normal;
       commitShapes(
         shapes.map((shape) =>
           selected.has(shape.id) && !shape.locked
             ? {
                 ...shape,
-                elevation: Math.max(0, Math.min(180, (shape.elevation ?? 0) + delta)),
+                x: cleanNearZero(shape.x + normal.x * delta),
+                z: cleanNearZero(shape.z + normal.z * delta),
+                elevation: cleanNearZero((shape.elevation ?? 0) + normal.y * delta),
               }
             : shape,
         ),
@@ -7002,7 +7679,7 @@ export function SketchForgeEditor({
         delta > 0 ? "Moved selection up" : "Moved selection down",
       );
     },
-    [commitShapes, hasSelection, selectedIds, shapes],
+    [commitShapes, hasSelection, placementWorkplane, selectedIds, shapes],
   );
 
   const dropSelectedToWorkplane = useCallback(() => {
@@ -7012,23 +7689,52 @@ export function SketchForgeEditor({
     }
     const selected = new Set(selectedIds);
     commitShapes(
-      shapes.map((shape) => (selected.has(shape.id) && !shape.locked ? { ...shape, ...dropPatchForShape(shape, placementElevation) } : shape)),
+      shapes.map((shape) => {
+        if (!selected.has(shape.id) || shape.locked) return shape;
+        const translation = translationToWorkplane(
+          placementWorkplane,
+          meshForShape(shape).vertices.map(([x, y, z]) => ({ x, y, z })),
+        );
+        return {
+          ...shape,
+          x: cleanNearZero(shape.x + translation.x),
+          z: cleanNearZero(shape.z + translation.z),
+          elevation: cleanNearZero((shape.elevation ?? 0) + translation.y),
+        };
+      }),
       selectedIds,
-      placementElevation === 0 ? "Dropped selection to the workplane" : `Dropped selection to ${placementElevation.toFixed(2)} mm workplane`,
+      "Dropped selection to the workplane",
     );
-  }, [commitShapes, hasSelection, placementElevation, selectedIds, shapes]);
+  }, [commitShapes, hasSelection, placementWorkplane, selectedIds, shapes]);
 
   const activateWorkplaneTool = useCallback(() => {
     setWorkplaneMode((active) => {
       const next = !active;
-      setNotice(next ? "Workplane tool: click a shape top or empty grid" : "Workplane tool cancelled");
+      setNotice(next ? "Workplane tool: click a face or empty grid; hold Shift to reverse" : "Workplane tool cancelled");
       return next;
     });
   }, []);
 
-  const setPlacementWorkplane = useCallback((elevation: number, source: "shape" | "base") => {
-    setPlacementElevation(elevation);
-    setNotice(source === "shape" ? `Workplane set to ${elevation.toFixed(2)} mm` : "Workplane reset to base");
+  const setActivePlacementWorkplane = useCallback((next: PlacementWorkplane, source: "shape" | "base") => {
+    placementWorkplaneRef.current = next;
+    setPlacementWorkplane(next);
+    const horizontalElevation = Math.abs(next.normal.x) < 1e-6
+      && Math.abs(next.normal.y - 1) < 1e-6
+      && Math.abs(next.normal.z) < 1e-6
+      ? next.origin.y
+      : 0;
+    setPlacementElevation(horizontalElevation);
+    setNotice(source === "shape"
+      ? "Workplane set to selected face"
+      : placementWorkplaneIsBase(next) ? "Workplane reset to base" : "Workplane updated");
+  }, []);
+
+  const setViewportPlacementWorkplane = useCallback((next: PlacementWorkplane, source: "shape" | "base") => {
+    setActivePlacementWorkplane(next, source);
+  }, [setActivePlacementWorkplane]);
+
+  const closeViewportWorkplaneMode = useCallback((active: boolean) => {
+    setWorkplaneMode(active);
   }, []);
 
   const groupSelected = useCallback(async () => {
@@ -7042,20 +7748,27 @@ export function SketchForgeEditor({
       return;
     }
 
+    const sourceFingerprint = projectShapesFingerprint(shapesRef.current);
+    const sourceProjectId = projectInfoRef.current.projectId;
     const result = await buildGroupedShapeFromSelection(selectedShapes);
+    if (projectInfoRef.current.projectId !== sourceProjectId || projectShapesFingerprint(shapesRef.current) !== sourceFingerprint) {
+      setNotice("The scene changed while grouping; select the objects and try again");
+      return;
+    }
     const { group } = result;
     if (!group) {
       if (result.consumed) {
         const selected = new Set(selectedIds);
-        commitShapes(shapes.filter((shape) => !selected.has(shape.id)), null, "Grouped: hole consumed solid");
+        commitShapes(shapesRef.current.filter((shape) => !selected.has(shape.id)), null, "Grouped: hole consumed solid");
         return;
       }
       setNotice(result.failureNotice);
       return;
     }
     const selected = new Set(selectedIds);
-    commitShapes([...shapes.filter((shape) => !selected.has(shape.id)), group], group.id, `Grouped ${selectedShapes.length} shapes`);
-  }, [commitShapes, selectedIds, selectedShapes, shapes]);
+    const editableGroup = canonicalizeShape({ ...group, groupOperation: "group" });
+    commitShapes([...shapesRef.current.filter((shape) => !selected.has(shape.id)), editableGroup], editableGroup.id, `Grouped ${selectedShapes.length} shapes`);
+  }, [commitShapes, selectedIds, selectedShapes]);
 
   const intersectSelected = useCallback(async () => {
     const groupable = selectedShapes.filter((shape) => !shape.locked);
@@ -7066,25 +7779,31 @@ export function SketchForgeEditor({
       return;
     }
 
+    const sourceFingerprint = projectShapesFingerprint(shapesRef.current);
+    const sourceProjectId = projectInfoRef.current.projectId;
     const result = await buildIntersectionShapeFromSelection(groupable);
+    if (projectInfoRef.current.projectId !== sourceProjectId || projectShapesFingerprint(shapesRef.current) !== sourceFingerprint) {
+      setNotice("The scene changed while intersecting; select the objects and try again");
+      return;
+    }
     if (!result.group && !result.empty) {
       setNotice(result.failureNotice);
       return;
     }
 
     const operandIds = new Set(groupable.map((shape) => shape.id));
-    const remainingShapes = shapes.filter((shape) => !operandIds.has(shape.id));
+    const remainingShapes = shapesRef.current.filter((shape) => !operandIds.has(shape.id));
     if (result.empty) {
       commitShapes(remainingShapes, null, "Intersection is empty");
       return;
     }
 
-    const intersection = result.group;
+    const intersection = result.group ? canonicalizeShape({ ...result.group, groupOperation: "intersection" }) : null;
     if (!intersection) {
       return;
     }
     commitShapes([...remainingShapes, intersection], intersection.id, `Intersected ${groupable.length} shapes`);
-  }, [commitShapes, selectedShapes, shapes]);
+  }, [commitShapes, selectedShapes]);
 
   const ungroupSelected = useCallback(() => {
     const groups = selectedShapes.filter((shape) => shape.groupedShapes?.length);
@@ -7182,9 +7901,19 @@ export function SketchForgeEditor({
         let shape: WorkplaneShape;
         if (kind === "sketch") {
           const profile = defaultMcpSketchProfile(width, depth);
-          const extruded = shapeFromSketchProfile(profile, height);
+          const extruded = await shapeFromSketchProfile(profile, height);
           if (!extruded) throw new Error("Could not create the sketch profile");
-          shape = canonicalizeShape({ ...extruded, name, color, x, z, elevation, rotation: mcpNumber(params.rotation, 0) });
+          shape = canonicalizeShape({
+            ...extruded,
+            name,
+            color,
+            x,
+            z,
+            elevation,
+            rotation: mcpNumber(params.rotation, 0),
+            rotationX: mcpNumber(params.rotationX, 0),
+            rotationZ: mcpNumber(params.rotationZ, 0),
+          });
         } else if (kind === "box" || kind === "cylinder") {
           shape = sceneShape({
             name,
@@ -7205,8 +7934,9 @@ export function SketchForgeEditor({
         } else {
           throw new Error("MCP create_shape currently supports box, cube, cylinder, and sketch");
         }
-        commitShapes([...currentShapes(), shape], shape.id, `${shape.name} added by MCP`);
-        return { object: mcpShapeSummary(shape) };
+        const committedShape = canonicalizeShape(bakeShapeTransformIntoMesh(shape));
+        commitShapes([...currentShapes(), committedShape], committedShape.id, `${committedShape.name} added by MCP`);
+        return { object: mcpShapeSummary(committedShape) };
       }
 
       if (command.action === "import_mesh") {
@@ -7271,6 +8001,9 @@ export function SketchForgeEditor({
         if (!target) throw new Error("Object not found");
         if (target.locked) throw new Error("Unlock the object before updating it");
         const patch: ShapeUpdatePatch = {};
+        const rotationWasRequested = [params.rotation, params.rotationX, params.rotationZ].some(
+          (value) => typeof value === "number" && Number.isFinite(value),
+        );
         (["x", "z", "elevation", "width", "depth", "height", "size", "rotation", "rotationX", "rotationZ"] as const).forEach((key) => {
           if (typeof params[key] === "number" && Number.isFinite(params[key])) {
             patch[key] = params[key];
@@ -7284,7 +8017,8 @@ export function SketchForgeEditor({
           const patched = { ...shape, ...cleanShapePatch(patch) };
           const width = shapeWidth(patched);
           const depth = shapeDepth(patched);
-          return canonicalizeShape({ ...patched, size: Math.max(width, depth) });
+          const canonical = canonicalizeShape({ ...patched, size: Math.max(width, depth) });
+          return rotationWasRequested ? canonicalizeShape(bakeShapeTransformIntoMesh(canonical)) : canonical;
         });
         const updated = nextShapes.find((shape) => shape.id === target.id) as WorkplaneShape;
         commitShapes(nextShapes, target.id, `${updated.name} updated by MCP`);
@@ -7328,7 +8062,12 @@ export function SketchForgeEditor({
         const groupable = currentShapes().filter((shape) => ids.has(shape.id));
         if (groupable.length < 2) throw new Error("Select at least two objects to group");
         if (groupable.some((shape) => shape.locked)) throw new Error("Unlock every selected object before grouping");
+        const sourceFingerprint = projectShapesFingerprint(currentShapes());
+        const sourceProjectId = projectInfoRef.current.projectId;
         const result = await buildGroupedShapeFromSelection(groupable);
+        if (projectInfoRef.current.projectId !== sourceProjectId || projectShapesFingerprint(currentShapes()) !== sourceFingerprint) {
+          throw new Error("The scene changed while grouping; run the command again");
+        }
         if (!result.group) {
           if (result.consumed) {
             commitShapes(currentShapes().filter((shape) => !ids.has(shape.id)), null, "MCP group consumed solid");
@@ -7336,8 +8075,9 @@ export function SketchForgeEditor({
           }
           throw new Error(result.failureNotice);
         }
-        commitShapes([...currentShapes().filter((shape) => !ids.has(shape.id)), result.group], result.group.id, `MCP grouped ${groupable.length} objects`);
-        return { object: mcpShapeSummary(result.group) };
+        const editableGroup = canonicalizeShape({ ...result.group, groupOperation: "group" });
+        commitShapes([...currentShapes().filter((shape) => !ids.has(shape.id)), editableGroup], editableGroup.id, `MCP grouped ${groupable.length} objects`);
+        return { object: mcpShapeSummary(editableGroup) };
       }
 
       if (command.action === "ungroup_objects") {
@@ -7364,7 +8104,12 @@ export function SketchForgeEditor({
         if (operands.some((shape) => shape.locked)) {
           throw new Error("Unlock every boolean operand before cutting");
         }
+        const sourceFingerprint = projectShapesFingerprint(currentShapes());
+        const sourceProjectId = projectInfoRef.current.projectId;
         const result = await buildGroupedShapeFromSelection(operands);
+        if (projectInfoRef.current.projectId !== sourceProjectId || projectShapesFingerprint(currentShapes()) !== sourceFingerprint) {
+          throw new Error("The scene changed while cutting; run the command again");
+        }
         const remainingShapes = currentShapes().filter((shape) => !operandIds.has(shape.id));
         if (result.consumed) {
           commitShapes(remainingShapes, null, "MCP cut consumed solid");
@@ -7373,8 +8118,9 @@ export function SketchForgeEditor({
         if (!result.group) {
           throw new Error(result.failureNotice);
         }
-        commitShapes([...remainingShapes, result.group], result.group.id, "MCP boolean cut complete");
-        return { object: mcpShapeSummary(result.group) };
+        const editableGroup = canonicalizeShape({ ...result.group, groupOperation: "group" });
+        commitShapes([...remainingShapes, editableGroup], editableGroup.id, "MCP boolean cut complete");
+        return { object: mcpShapeSummary(editableGroup) };
       }
 
       if (command.action === "separate_parts") {
@@ -7391,7 +8137,7 @@ export function SketchForgeEditor({
         const target = findShape(params.id);
         if (!target) throw new Error("Object not found");
         invalidateCadModifierSession();
-        const sharpAngle = Math.max(1, Math.min(120, mcpNumber(params.sharpAngle, 25)));
+        const sharpAngle = Math.max(1, Math.min(CAD_MODIFIER_MAX_SHARP_ANGLE, mcpNumber(params.sharpAngle, 25)));
         const { response } = await prepareCadModifierForMcp(target, sharpAngle);
         const selectableEdgeIds = response.edges.filter((edge) => selectableCadModifierEdge(edge, sharpAngle)).map((edge) => edge.id);
         return { object: mcpShapeSummary(target), sharpAngle, selectableEdgeIds, edges: response.edges };
@@ -7683,17 +8429,26 @@ export function SketchForgeEditor({
     void run();
   }, [commitShapes]);
 
-  const exportDesign = useCallback((format: ExportFormat, requestedScope?: StlExportScope) => {
+  const exportDesign = useCallback((format: DirectExportFormat, exportName: string, requestedScope?: StlExportScope) => {
+    // STL is the print export, so it defaults to the complete visible design
+    // (with hole cuts applied) even when something is selected. Selection-only
+    // STL is an explicit choice in the export dialog.
     const scope: StlExportScope = requestedScope ?? (format === "stl" ? "design" : hasSelection ? "selection" : "design");
     const sourceShapes = format === "stl"
       ? stlSourceShapes(shapes, selectedShapes, scope)
-      : (scope === "selection" ? selectedShapes : shapes).filter((shape) => !shape.hidden);
+      : format === "obj"
+        ? (scope === "selection" ? selectedShapes : shapes).filter((shape) => !shape.hidden)
+        : scope === "selection" ? selectedShapes : shapes;
     const exportable = sourceShapes.filter((shape) => !shape.hole);
     if (exportable.length === 0) {
       setNotice(scope === "selection" ? "Select at least one solid shape before exporting" : "Add a solid shape before exporting");
       return;
     }
-
+    const invalidSvg = exportable.map(invalidSvgMeshReason).find((reason): reason is string => Boolean(reason));
+    if (invalidSvg) {
+      setNotice(`${invalidSvg}. Re-import the source SVG after fixing its contours`);
+      return;
+    }
     const finishNotice = (label: string, result: DownloadResult) => {
       if (result.mode === "folder") {
         setNotice(`Saved ${label} to ${result.path}`);
@@ -7705,7 +8460,14 @@ export function SketchForgeEditor({
     const failNotice = (label: string, error: unknown) => {
       setNotice(error instanceof Error ? error.message : `Could not export ${label}`);
     };
-
+    if (format === "svg") {
+      setNotice("Building SVG top-view projection…");
+      void toSvg(exportable, exportName.trim() || projectName)
+        .then((content) => downloadTextFile(projectExportFileName(exportName, "svg"), content, "image/svg+xml;charset=utf-8"))
+        .then((result) => finishNotice("SVG", result))
+        .catch((error: unknown) => failNotice("SVG", error));
+      return;
+    }
     if (format === "stl") {
       if (stlExporting) {
         return;
@@ -7727,7 +8489,7 @@ export function SketchForgeEditor({
             throw new Error("The design did not produce valid solid geometry for STL export. The STL was not downloaded.");
           }
 
-          const result = await downloadTextFile(projectExportFileName(projectName, "stl"), toStl(meshes), "model/stl");
+          const result = await downloadTextFile(projectExportFileName(exportName, "stl"), toStl(meshes), "model/stl");
           if (result.mode === "folder") {
             setNotice(`Saved STL for ${scope === "selection" ? "the selection" : "the full design"} to ${result.path}`);
           } else {
@@ -7743,14 +8505,13 @@ export function SketchForgeEditor({
       })();
       return;
     }
-
     const meshes = exportable.map(meshForShape);
-    void downloadTextFile(projectExportFileName(projectName, "obj"), toObj(meshes), "text/plain")
+    void downloadTextFile(projectExportFileName(exportName, "obj"), toObj(meshes), "text/plain")
       .then((result) => finishNotice("OBJ", result))
       .catch((error: unknown) => failNotice("OBJ", error));
   }, [hasSelection, projectName, selectedShapes, shapes, stlExporting]);
 
-  const exportStepDesign = useCallback(async () => {
+  const exportStepDesign = useCallback(async (exportName: string) => {
     if (stepExporting) {
       return;
     }
@@ -7765,7 +8526,7 @@ export function SketchForgeEditor({
       const { exportShapesToStep } = await import("@/lib/stepExport");
       const { blob, exportedCount, skipped } = await exportShapesToStep(sourceShapes);
       const text = await blob.text();
-      const result = await downloadTextFile(projectExportFileName(projectName, "step"), text, "application/step");
+      const result = await downloadTextFile(projectExportFileName(exportName, "step"), text, "application/step");
       const skipNote = skipped.length > 0 ? `; skipped ${skipped.length} non-primitive shape${skipped.length === 1 ? "" : "s"}` : "";
       if (result.mode === "folder") {
         setNotice(`Saved STEP (${exportedCount} bod${exportedCount === 1 ? "y" : "ies"}) to ${result.path}${skipNote}`);
@@ -7778,6 +8539,93 @@ export function SketchForgeEditor({
       setStepExporting(false);
     }
   }, [hasSelection, projectName, selectedShapes, shapes, stepExporting]);
+
+  const exportSkfDesign = useCallback(async (exportName: string, historyLimit: SkfHistoryLimit, target: SkfExportTarget = "download") => {
+    if (skfExporting) return;
+    if (target === "shared" && !onSaveSharedProject) {
+      setNotice("Shared project storage is not available in this deployment");
+      return;
+    }
+    const toDrive = target === "drive" || target === "drive-copy";
+    if (toDrive && !isDriveConfigured()) {
+      setNotice("Google Drive saving isn't set up for this SketchForge build yet");
+      return;
+    }
+    if (projectInteractionActiveRef.current) {
+      setNotice("Finish the current drag or transform before saving the project file");
+      return;
+    }
+    setSkfExporting(true);
+    if (toDrive) setDriveSaving(true);
+    setNotice(
+      target === "shared"
+        ? "Packaging project for Docker shared storage…"
+        : toDrive
+          ? "Saving to Google Drive…"
+          : "Packaging editable project, history, and deduplicated assets…",
+    );
+    try {
+      // Ask for Drive access first, while the click still counts as a user
+      // gesture; packaging a large project could outlast it and get the
+      // Google sign-in pop-up blocked.
+      const driveToken = toDrive ? await requestDriveAccessToken() : null;
+      const exportedHistory = editorHistoryForExport(historyRef.current, historyIndexRef.current, historyLimit);
+      const bytes = await exportSkfProject({
+        projectId: projectInfoRef.current.projectId,
+        projectName: exportName.trim() || projectName,
+        createdAt: projectCreatedAt,
+        modifiedAt: projectModifiedAt,
+        shapes: shapesRef.current,
+        history: exportedHistory.entries,
+        historyIndex: exportedHistory.index,
+        assets: projectAssetsRef.current,
+        workspace: workspaceSettingsRef.current,
+        snapGrid,
+        placementElevation,
+        placementWorkplane,
+        sketchPlacementWorkplane: placementWorkplane,
+      });
+      if (target === "shared" && onSaveSharedProject) {
+        setNotice(await onSaveSharedProject({ exportName: exportName.trim() || projectName, bytes }));
+      } else if (driveToken) {
+        // Drive always receives the packaged .skf project; a linked project
+        // updates its own Drive file, "Save a copy" makes a separate one.
+        const copy = target === "drive-copy";
+        const result = await uploadProjectToDrive(driveToken, {
+          fileName: projectExportFileName(exportName.trim() || projectName, "skf"),
+          content: bytes,
+          mimeType: SKF_MEDIA_TYPE,
+          existingFileId: copy ? null : (driveFileLink?.fileId ?? null),
+        });
+        if (!copy) {
+          const drive: ProjectDriveFile = { fileId: result.fileId, fileName: result.fileName, savedAt: Date.now() };
+          setDriveFileLink(drive);
+          const currentProjectId = projectInfoRef.current.projectId;
+          if (currentProjectId) onProjectDriveFileChange?.({ projectId: currentProjectId, drive });
+        }
+        setNotice(
+          copy
+            ? `Saved a copy of ${result.fileName} to Google Drive`
+            : result.replacedMissingFile
+              ? `Drive file was missing — saved ${result.fileName} as a new Drive file`
+              : `Saved ${result.fileName} to Google Drive`,
+        );
+      } else {
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        const result = await downloadBlobFile(projectExportFileName(exportName, "skf"), new Blob([buffer], { type: SKF_MEDIA_TYPE }));
+        setNotice(result.mode === "folder" ? `Saved editable SketchForge project to ${result.path}` : "Saved editable SketchForge project (.skf)");
+      }
+    } catch (error) {
+      if (toDrive) {
+        setNotice(error instanceof DriveError ? error.message : "Could not save to Google Drive — use Download instead");
+      } else {
+        setNotice(error instanceof Error ? error.message : "Could not save SketchForge project");
+      }
+    } finally {
+      setSkfExporting(false);
+      if (toDrive) setDriveSaving(false);
+    }
+  }, [driveFileLink, onProjectDriveFileChange, onSaveSharedProject, placementElevation, placementWorkplane, projectCreatedAt, projectModifiedAt, projectName, skfExporting, snapGrid]);
 
   const clearDesign = useCallback(() => {
     commitShapes([], [], "New empty design");
@@ -7809,67 +8657,10 @@ export function SketchForgeEditor({
     [commitShapes],
   );
 
-  const saveProjectToFile = useCallback(() => {
-    const fileName = projectFileName(projectName);
-    const content = serializeProjectFile({
-      name: projectName,
-      workspace: workspaceSettingsRef.current,
-      snapGrid: currentSnapRef.current,
-      shapes: shapesRef.current,
-    });
-    void downloadTextFile(fileName, content, "application/json")
-      .then((result) => {
-        setNotice(result.mode === "folder" ? `Saved ${fileName} to ${result.path}` : `Saved ${fileName}`);
-      })
-      .catch((error: unknown) => {
-        setNotice(error instanceof Error ? error.message : "Could not save project file");
-      });
+  const saveDesign = useCallback(() => {
+    setNotice(`Saved design with ${shapes.length} shape${shapes.length === 1 ? "" : "s"}`);
     setMenuOpen(false);
-  }, [projectName]);
-
-  const saveProjectToGoogleDrive = useCallback(
-    (options?: { copy?: boolean }) => {
-      if (driveSaving) return;
-      if (!isDriveConfigured()) {
-        setNotice("Google Drive saving isn't set up for this SketchForge build yet");
-        return;
-      }
-      const fileName = projectFileName(projectName);
-      const content = serializeProjectFile({
-        name: projectName,
-        workspace: workspaceSettingsRef.current,
-        snapGrid: currentSnapRef.current,
-        shapes: shapesRef.current,
-      });
-      const existingFileId = options?.copy ? null : (driveFileLink?.fileId ?? null);
-      setDriveSaving(true);
-      setNotice("Saving to Google Drive…");
-      saveProjectToDrive({ fileName, content, existingFileId })
-        .then((result) => {
-          const drive: ProjectDriveFile = { fileId: result.fileId, fileName: result.fileName, savedAt: Date.now() };
-          if (!options?.copy) {
-            setDriveFileLink(drive);
-            if (projectId) {
-              onProjectDriveFileChange?.({ projectId, drive });
-            }
-          }
-          setNotice(
-            options?.copy
-              ? `Saved a copy of ${result.fileName} to Google Drive`
-              : result.replacedMissingFile
-                ? `Drive file was missing — saved ${result.fileName} as a new Drive file`
-                : `Saved ${result.fileName} to Google Drive`,
-          );
-        })
-        .catch((error: unknown) => {
-          setNotice(error instanceof DriveError ? error.message : "Could not save to Google Drive — use Download instead");
-        })
-        .finally(() => {
-          setDriveSaving(false);
-        });
-    },
-    [driveFileLink, driveSaving, onProjectDriveFileChange, projectId, projectName],
-  );
+  }, [shapes.length]);
 
   const makeCopy = useCallback(() => {
     if (shapes.length === 0) {
@@ -7887,54 +8678,108 @@ export function SketchForgeEditor({
     setMenuOpen(false);
   }, [commitShapes, shapes]);
 
-  const selectFile = useCallback(async (file: File) => {
-    if (isProjectFileName(file.name)) {
-      if (!onProjectFileImport) {
-        setNotice("Open project files from the dashboard");
+  const importFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    // Packaged .skf projects, plus legacy .sketchforge files opened read-only.
+    const projectFiles = files.filter((file) => /\.skf$/i.test(file.name) || isProjectFileName(file.name));
+    if (projectFiles.length) {
+      if (files.length !== 1) {
+        setNotice("Open one project file at a time; import STL, STEP, and SVG geometry separately");
         return;
       }
-      try {
-        const parsed = parseProjectFile(await file.text());
-        onProjectFileImport(parsed, file.name);
-        setTopPanel(null);
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : `Could not open ${file.name}`);
+      if (!onOpenSkfProjectFile) {
+        setNotice("Opening SketchForge project files is unavailable here");
+        return;
       }
+      setNotice(`Validating ${projectFiles[0].name} before opening it as a new project`);
+      const result = await onOpenSkfProjectFile(projectFiles[0]);
+      if (result?.message) setNotice(result.message);
+      if (result?.ok !== false) setTopPanel(null);
       return;
     }
-    const isStep = /\.(step|stp)$/i.test(file.name);
-    const isSvg = /\.svg$/i.test(file.name) || file.type === "image/svg+xml";
-    if (!isStep && !isSvg && !importExtensionSupported(file.name)) {
-      setNotice("Unsupported file type. Use STL, STEP, SVG, or .sketchforge.");
+    const sourceProjectId = projectInfoRef.current.projectId;
+    const importedShapes: WorkplaneShape[] = [];
+    const importedAssets: ProjectAsset[] = [];
+    const failures: Array<{ fileName: string; reason: string }> = [];
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      if (projectInfoRef.current.projectId !== sourceProjectId) {
+        setNotice(`Import of ${files.length} files cancelled because the project changed`);
+        return;
+      }
+
+      const sourceFormat = sourceFormatForFileName(file.name) ?? (file.type === "image/svg+xml" ? "svg" : null);
+      const isStep = sourceFormat === "step";
+      const isSvg = sourceFormat === "svg";
+      if (!sourceFormat || sourceFormat === "obj" || (!isStep && !isSvg && !importExtensionSupported(file.name))) {
+        failures.push({ fileName: file.name, reason: "Unsupported file type" });
+        continue;
+      }
+
+      setNotice(`Importing ${index + 1} of ${files.length}: ${file.name}${isStep ? "… first STEP import loads the OpenCascade kernel (~22 MB)" : ""}`);
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        let nextShape: WorkplaneShape;
+        if (isStep) {
+          const { importedShapeFromStep } = await import("@/lib/stepImport");
+          nextShape = await importedShapeFromStep(file.name, buffer);
+        } else if (isSvg) {
+          nextShape = importedShapeFromSvg(file.name, new TextDecoder().decode(bytes));
+        } else {
+          nextShape = importedShapeFromStl(file.name, buffer);
+        }
+        const asset = await projectAssetFromBytes(file.name, sourceFormat, bytes, file.type);
+        importedShapes.push(attachProjectAsset(nextShape, asset.id));
+        importedAssets.push(asset);
+      } catch (error) {
+        failures.push({
+          fileName: file.name,
+          reason: error instanceof Error ? error.message : "Could not read file",
+        });
+      }
+    }
+
+    if (projectInfoRef.current.projectId !== sourceProjectId) {
+      setNotice(`Import of ${files.length} files cancelled because the project changed`);
       return;
     }
 
-    try {
-      let nextShape: WorkplaneShape;
-      if (isStep) {
-        setNotice("Reading STEP… first import loads the OpenCascade kernel (~22 MB), one time per session");
-        const { importedShapeFromStep } = await import("@/lib/stepImport");
-        nextShape = await importedShapeFromStep(file.name, await file.arrayBuffer());
-      } else if (isSvg) {
-        nextShape = importedShapeFromSvg(file.name, await file.text());
-      } else {
-        nextShape = importedShapeFromStl(file.name, await file.arrayBuffer());
-      }
-      commitShapes([...shapes, nextShape], nextShape.id, `Imported ${file.name}`);
-      setTopPanel(null);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : `Could not import ${file.name}`);
+    const failureDetails = failures
+      .slice(0, 3)
+      .map((failure) => `${failure.fileName}: ${failure.reason}`)
+      .join("; ");
+    const remainingFailureCount = Math.max(0, failures.length - 3);
+    const failureSummary = failures.length
+      ? ` Failed: ${failureDetails}${remainingFailureCount ? `; plus ${remainingFailureCount} more` : ""}`
+      : "";
+
+    if (!importedShapes.length) {
+      setNotice(files.length === 1 && failures[0] ? failures[0].reason : `Could not import any of the ${files.length} selected files.${failureSummary}`);
+      return;
     }
-  }, [commitShapes, onProjectFileImport, shapes]);
+
+    const successSummary = importedShapes.length === 1 && files.length === 1
+      ? `Imported ${files[0].name}`
+      : `Imported ${importedShapes.length} of ${files.length} files`;
+    const nextAssets = dedupeProjectAssets([...projectAssetsRef.current, ...importedAssets]);
+    projectAssetsRef.current = nextAssets;
+    setProjectAssets(nextAssets);
+    commitShapes(
+      [...shapesRef.current, ...importedShapes],
+      importedShapes.map((shape) => shape.id),
+      `${successSummary}.${failureSummary}`.trim(),
+    );
+    setTopPanel(null);
+  }, [commitShapes, onOpenSkfProjectFile]);
 
   const selectFiles = useCallback(
     (files: FileList | File[]) => {
-      const file = Array.from(files)[0];
-      if (file) {
-        void selectFile(file);
-      }
+      const selectedFiles = Array.from(files);
+      if (selectedFiles.length) void importFiles(selectedFiles);
     },
-    [selectFile],
+    [importFiles],
   );
 
   const selectShape = useCallback((id: string | string[] | null, mode: "replace" | "toggle" = "replace") => {
@@ -7959,13 +8804,19 @@ export function SketchForgeEditor({
         return;
       }
       const selected = new Set(selectedIds);
+      const translation = {
+        x: placementWorkplane.xAxis.x * deltaX + placementWorkplane.zAxis.x * deltaZ,
+        y: placementWorkplane.xAxis.y * deltaX + placementWorkplane.zAxis.y * deltaZ,
+        z: placementWorkplane.xAxis.z * deltaX + placementWorkplane.zAxis.z * deltaZ,
+      };
       commitShapes(
         shapes.map((shape) =>
           selected.has(shape.id) && !shape.locked
             ? {
                 ...shape,
-                x: Math.max(-110, Math.min(110, shape.x + deltaX)),
-                z: Math.max(-110, Math.min(110, shape.z + deltaZ)),
+                x: cleanNearZero(shape.x + translation.x),
+                z: cleanNearZero(shape.z + translation.z),
+                elevation: cleanNearZero((shape.elevation ?? 0) + translation.y),
               }
             : shape,
         ),
@@ -7973,7 +8824,7 @@ export function SketchForgeEditor({
         `Moved ${selectedShapes.length} shape${selectedShapes.length === 1 ? "" : "s"}`,
       );
     },
-    [commitShapes, hasSelection, selectedIds, selectedShapes.length, shapes],
+    [commitShapes, hasSelection, placementWorkplane, selectedIds, selectedShapes.length, shapes],
   );
 
   useEffect(() => {
@@ -8031,7 +8882,8 @@ export function SketchForgeEditor({
         if (event.shiftKey) {
           redo();
         } else {
-          undo();
+          // Ruler edits have their own history and are undone first.
+          undoFromToolbar();
         }
         return;
       }
@@ -8099,13 +8951,7 @@ export function SketchForgeEditor({
         return;
       }
 
-      if (shortcut && key === "s") {
-        event.preventDefault();
-        saveProjectToFile();
-        return;
-      }
-
-      const step = keyboardMoveStep(currentSnapRef.current, event.shiftKey);
+      const step = keyboardMoveStep(snapGridRef.current, event.shiftKey);
       if (shortcut && event.key === "ArrowUp") {
         event.preventDefault();
         raiseSelected(step);
@@ -8159,7 +9005,6 @@ export function SketchForgeEditor({
     pasteShape,
     raiseSelected,
     redo,
-    saveProjectToFile,
     sketchActive,
     sketchRedo,
     sketchMeasurement,
@@ -8173,6 +9018,7 @@ export function SketchForgeEditor({
     toggleLocked,
     toolbarMode,
     undo,
+    undoFromToolbar,
     ungroupSelected,
   ]);
 
@@ -8182,16 +9028,19 @@ export function SketchForgeEditor({
         toolbarMode={toolbarMode}
         onToolbarModeChange={(mode) => {
           setToolbarMode(mode);
+          setWorkplaneMode(false);
           setTopPanel(null);
           setMenuOpen(false);
         }}
-        canUndo={historyIndex > 0 || Boolean(edgeModifier) || rulerCanUndo}
-        canRedo={historyIndex < history.length - 1}
+        canUndo={!projectInteractionActive && (historyIndex > 0 || Boolean(edgeModifier) || rulerCanUndo)}
+        canRedo={!projectInteractionActive && historyIndex < history.length - 1}
         canGroup={selectedShapes.length > 1 && selectedShapes.every((shape) => !shape.locked)}
         canIntersect={selectedShapes.some((shape) => !shape.locked && !shape.hole) && selectedShapes.some((shape) => !shape.locked && Boolean(shape.hole))}
         canUngroup={selectedShapes.some((shape) => Boolean(shape.groupedShapes?.length))}
         hasClipboard={clipboard.length > 0 || systemClipboardSupported}
         hasSelection={hasSelection}
+        hiddenShapeCount={shapes.filter((shape) => shape.hidden).length}
+        selectionHidden={hasSelection && selectedShapes.every((shape) => shape.hidden)}
         alignMode={alignMode}
         canAlign={selectedShapes.length > 1}
         canDistribute={selectedShapes.length > 2}
@@ -8199,11 +9048,12 @@ export function SketchForgeEditor({
         edgeModifierKind={edgeModifier?.kind ?? null}
         mirrorMode={mirrorMode}
         sketchActive={sketchActive}
+        sketchOperation={sketchOperation}
         sketchTool={sketchTool}
         sketchCanUndo={sketchHistoryIndex > 0}
         sketchCanRedo={sketchHistoryIndex < sketchHistory.length - 1}
         canEditSketch={selectedShapes.length === 1 && Boolean(selectedShape?.sketchProfile)}
-        onStartSketch={() => beginSketch()}
+        onStartSketch={(operation) => beginSketch(operation)}
         onEditSketch={beginSketchEdit}
         onSketchTool={setActiveSketchTool}
         onSketchImage={() => {
@@ -8236,20 +9086,12 @@ export function SketchForgeEditor({
         onPaste={pasteShape}
         onRedo={redo}
         onSnap={snapSelected}
-        onTips={() => {
-          setTopPanel(topPanel === "tips" ? null : "tips");
-          setMenuOpen(false);
-        }}
+        onShowHidden={showHidden}
         onToggleHidden={toggleHidden}
         onUngroup={ungroupSelected}
         onUndo={undoFromToolbar}
-        onWorkplaneTool={activateWorkplaneTool}
-        workplaneMode={workplaneMode}
-        saveStatus={saveStatus}
-        projectName={projectName}
-        onRenameProject={projectId && onProjectRename ? (name: string) => onProjectRename({ projectId, name }) : undefined}
         onTopPanel={(panel) => {
-          setTopPanel(panel);
+          setTopPanel((current) => (current === panel ? null : panel));
           setMenuOpen(false);
         }}
         onAddShape={(shape) => {
@@ -8257,19 +9099,24 @@ export function SketchForgeEditor({
           setTopPanel(null);
           setMenuOpen(false);
         }}
+        projectName={projectName}
+        saveStatus={saveStatus}
+        onRenameProject={projectId && onProjectRename ? (name: string) => onProjectRename({ projectId, name }) : undefined}
       />
       <div className="editor-body">
         {toolbarMode === "sketch" && sketchActive ? (
           <SketchWorkspace
             profile={sketchProfile}
-            referenceShapes={shapes.filter((shape) => shape.id !== editingSketchShapeId)}
+            operation={sketchOperation}
+            revolvePreviewPositions={sketchRevolvePreview?.positions ?? null}
+            referenceShapes={sketchReferenceShapes.filter((shape) => shape.id !== editingSketchShapeId)}
             tool={sketchTool}
             activePointId={sketchActivePointId}
             selected={sketchSelection}
             measurement={sketchMeasurement}
             pendingMeasurementStart={sketchMeasureStart}
-            initialSnap={initialSnap}
-            initialWorkspace={initialWorkspace}
+            initialSnap={snapGrid}
+            initialWorkspace={workspaceSettings}
             onPlanePoint={addSketchPlanePoint}
             onPointPress={pressSketchPoint}
             onSelectSegment={(id) => {
@@ -8307,10 +9154,10 @@ export function SketchForgeEditor({
           alignReferenceShapes={shapes}
           mirrorMode={mirrorMode}
           mirrorReferenceShapes={shapes}
-          placementElevation={placementElevation}
+          placementWorkplane={placementWorkplane}
           workplaneMode={workplaneMode}
-          initialSnap={initialSnap}
-          initialWorkspace={initialWorkspace}
+          initialSnap={snapGrid}
+          initialWorkspace={workspaceSettings}
           workspaceSettingsKey={projectId ?? "local-workplane"}
           onAddShape={addShape}
           onAlignAnchorChange={chooseAlignAnchor}
@@ -8321,7 +9168,8 @@ export function SketchForgeEditor({
           onMirrorPreviewClear={clearMirrorPreview}
           onMirrorSelection={mirrorSelectionAcross}
           onSelectShape={selectShape}
-          onSetPlacementElevation={setPlacementWorkplane}
+          onSetPlacementWorkplane={setViewportPlacementWorkplane}
+          onToggleWorkplaneTool={activateWorkplaneTool}
           onInteractionActiveChange={updateProjectInteractionActive}
           onRulerUndoStateChange={updateRulerUndoState}
           onEditSketch={beginSketchEdit}
@@ -8329,12 +9177,15 @@ export function SketchForgeEditor({
           onSeparateParts={separateSelectedParts}
           onUpdateShape={updateShape}
           onWorkspaceSettingsChange={updateProjectWorkspaceSettings}
-          onWorkplaneModeChange={setWorkplaneMode}
+          onWorkplaneModeChange={closeViewportWorkplaneMode}
           modifierActive={Boolean(edgeModifier)}
           modifierPreviewActive={Boolean(edgeModifier?.preview)}
           modifierEdges={edgeModifier?.edges.filter((edge) => modifierAvailableEdgeIds.includes(edge.id)) ?? []}
           selectedModifierEdgeIds={edgeModifier?.selectedEdgeIds ?? []}
           onModifierEdgeToggle={toggleModifierEdge}
+          themePreference={themePreference}
+          resolvedTheme={resolvedTheme}
+          onThemePreferenceChange={onThemePreferenceChange}
           />
         )}
       </div>
@@ -8370,13 +9221,14 @@ export function SketchForgeEditor({
           selectedCount={edgeModifier.selectedEdgeIds.length}
           availableCount={modifierAvailableEdgeIds.length}
           busy={edgeModifier.busy}
+          prepared={edgeModifier.prepared}
           error={edgeModifier.error}
-          onAmountChange={(value) => setEdgeModifier((current) => current ? { ...current, amount: Math.max(MIN_EDGE_MODIFIER_AMOUNT, Math.min(edgeModifierMaxAmount, value)), preview: null, busy: true, error: null } : current)}
-          onChamferAngleChange={(value) => setEdgeModifier((current) => current ? { ...current, chamferAngle: Math.max(5, Math.min(85, value)), preview: null, busy: true, error: null } : current)}
-          onQualityChange={(quality) => setEdgeModifier((current) => current ? { ...current, quality, preview: null, busy: true, error: null } : current)}
+          onAmountChange={(value) => setEdgeModifier((current) => current?.prepared ? { ...current, amount: Math.max(MIN_EDGE_MODIFIER_AMOUNT, Math.min(edgeModifierMaxAmount, value)), preview: null, busy: true, error: null } : current)}
+          onChamferAngleChange={(value) => setEdgeModifier((current) => current?.prepared ? { ...current, chamferAngle: Math.max(5, Math.min(85, value)), preview: null, busy: true, error: null } : current)}
+          onQualityChange={(quality) => setEdgeModifier((current) => current?.prepared ? { ...current, quality, preview: null, busy: true, error: null } : current)}
           onSharpAngleChange={(sharpAngle) => setEdgeModifier((current) => {
-            if (!current) return current;
-            const nextAngle = Math.max(1, Math.min(120, sharpAngle));
+            if (!current?.prepared) return current;
+            const nextAngle = Math.max(1, Math.min(CAD_MODIFIER_MAX_SHARP_ANGLE, sharpAngle));
             const availableIds = new Set(current.edges
               .filter((edge) => selectableCadModifierEdge(edge, nextAngle))
               .map((edge) => edge.id));
@@ -8390,10 +9242,10 @@ export function SketchForgeEditor({
               error: availableIds.size === 0 ? "No sharp edges match this threshold" : selectedEdgeIds.length ? null : "Select at least one highlighted edge",
             };
           })}
-          onTangentChainChange={(tangentChain) => setEdgeModifier((current) => current ? { ...current, tangentChain } : current)}
-          onPreserveEdgeSizeChange={(preserveEdgeSize) => setEdgeModifier((current) => current ? { ...current, preserveEdgeSize } : current)}
-          onSelectAll={() => setEdgeModifier((current) => current ? { ...current, selectedEdgeIds: modifierAvailableEdgeIds, preview: null, busy: modifierAvailableEdgeIds.length > 0, error: modifierAvailableEdgeIds.length ? null : current.error } : current)}
-          onClear={() => setEdgeModifier((current) => current ? { ...current, selectedEdgeIds: [], preview: null, busy: false, error: "Select at least one highlighted edge" } : current)}
+          onTangentChainChange={(tangentChain) => setEdgeModifier((current) => current?.prepared ? { ...current, tangentChain } : current)}
+          onPreserveEdgeSizeChange={(preserveEdgeSize) => setEdgeModifier((current) => current?.prepared ? { ...current, preserveEdgeSize } : current)}
+          onSelectAll={() => setEdgeModifier((current) => current?.prepared ? { ...current, selectedEdgeIds: modifierAvailableEdgeIds, preview: null, busy: modifierAvailableEdgeIds.length > 0, error: modifierAvailableEdgeIds.length ? null : current.error } : current)}
+          onClear={() => setEdgeModifier((current) => current?.prepared ? { ...current, selectedEdgeIds: [], preview: null, busy: false, error: "Select at least one highlighted edge" } : current)}
           onRemoveFeature={removeEdgeTreatment}
           onApply={applyEdgeModifier}
           onCancel={cancelEdgeModifier}
@@ -8402,29 +9254,37 @@ export function SketchForgeEditor({
       {topPanel ? (
         <TopActionPanel
           panel={topPanel}
+          projectName={projectName}
           shapeCount={exportableShapeCount}
+          scopeLabel={exportScopeLabel}
           designShapeCount={designExportableShapeCount}
           selectedShapeCount={selectedExportableShapeCount}
           hasSelection={hasSelection}
           onClose={() => setTopPanel(null)}
           onExport={exportDesign}
+          onExportSkf={exportSkfDesign}
           onExportStep={exportStepDesign}
-          preflight={exportPreflight}
-          onSaveProject={saveProjectToFile}
-          onSaveToDrive={saveProjectToGoogleDrive}
-          onOpenFromDrive={() => {
-            setTopPanel(null);
-            onOpenFromDrive?.();
-          }}
-          driveConfigured={isDriveConfigured()}
-          driveSaving={driveSaving}
-          driveFile={driveFileLink}
+          sharedProjectsEnabled={sharedProjectsEnabled}
+          skfExporting={skfExporting}
           onRepeat={repeatSelected}
           repeatDefaults={repeatDefaults}
           stlExporting={stlExporting}
           stepExporting={stepExporting}
+          preflight={exportPreflight}
+          driveConfigured={isDriveConfigured()}
+          driveSaving={driveSaving}
+          driveFile={driveFileLink}
+          onOpenFromDrive={
+            onOpenFromDrive
+              ? () => {
+                  setTopPanel(null);
+                  onOpenFromDrive();
+                }
+              : undefined
+          }
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
+          onPickProjectFile={() => projectFileInputRef.current?.click()}
           onNotice={setNotice}
         />
       ) : null}
@@ -8440,10 +9300,22 @@ export function SketchForgeEditor({
         }}
       />
       <input
+        ref={projectFileInputRef}
+        className="hidden-file-input"
+        type="file"
+        accept=".skf,.sketchforge,.sketchforge.json"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (file) selectFiles([file]);
+          event.currentTarget.value = "";
+        }}
+      />
+      <input
         ref={fileInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".stl,.step,.stp,.svg,image/svg+xml,.sketchforge,.sketchforge.json"
+        multiple
+        accept=".stl,.step,.stp,.svg,image/svg+xml"
         onChange={(event) => {
           if (event.currentTarget.files) {
             selectFiles(event.currentTarget.files);
@@ -8507,8 +9379,11 @@ function SecondaryToolbar({
   canUndo,
   hasClipboard,
   hasSelection,
+  hiddenShapeCount,
+  selectionHidden,
   mirrorMode,
   sketchActive,
+  sketchOperation,
   sketchTool,
   sketchCanUndo,
   sketchCanRedo,
@@ -8537,16 +9412,14 @@ function SecondaryToolbar({
   onPaste,
   onRedo,
   onSnap,
-  onTips,
+  onShowHidden,
   onToggleHidden,
   onUngroup,
   onUndo,
-  onWorkplaneTool,
-  workplaneMode,
   onTopPanel,
   onAddShape,
-  saveStatus,
   projectName,
+  saveStatus,
   onRenameProject,
 }: {
   toolbarMode: ToolbarMode;
@@ -8563,13 +9436,16 @@ function SecondaryToolbar({
   canUndo: boolean;
   hasClipboard: boolean;
   hasSelection: boolean;
+  hiddenShapeCount: number;
+  selectionHidden: boolean;
   mirrorMode: boolean;
   sketchActive: boolean;
+  sketchOperation: SketchOperation;
   sketchTool: SketchTool;
   sketchCanUndo: boolean;
   sketchCanRedo: boolean;
   canEditSketch: boolean;
-  onStartSketch: () => void;
+  onStartSketch: (operation: SketchOperation) => void;
   onEditSketch: () => void;
   onSketchTool: (tool: SketchTool) => void;
   onSketchImage: () => void;
@@ -8593,30 +9469,102 @@ function SecondaryToolbar({
   onPaste: () => void;
   onRedo: () => void;
   onSnap: () => void;
-  onTips: () => void;
+  onShowHidden: () => void;
   onToggleHidden: () => void;
   onUngroup: () => void;
   onUndo: () => void;
-  onWorkplaneTool: () => void;
-  workplaneMode: boolean;
   onTopPanel: (panel: TopPanel) => void;
   onAddShape: (shape: ShapeAsset) => void;
-  saveStatus?: ProjectSaveStatus | null;
   projectName: string;
+  saveStatus?: ProjectSaveStatus | null;
   onRenameProject?: (name: string) => void;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
+  const [sketchCreateOpen, setSketchCreateOpen] = useState(false);
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
+  const [visibilityMenuPosition, setVisibilityMenuPosition] = useState({ top: 0, left: 0 });
+  const sketchCreateMenuRef = useRef<HTMLDivElement>(null);
+  const visibilityMenuRef = useRef<HTMLDivElement>(null);
   const [shapeCategory, setShapeCategory] = useState<"basic" | "connectors" | "architectural" | "printableParts" | "text">("basic");
   const touchShapeStartRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const suppressNextShapeClickRef = useRef(false);
   const selectToolbarMode = (mode: "geometry" | "sketch") => {
     setShapesOpen(false);
+    setSketchCreateOpen(false);
+    setVisibilityOpen(false);
     onTopPanel(null);
     onToolbarModeChange(mode);
   };
   const addShapeFromMenu = (shape: ShapeAsset) => {
     onAddShape(shape);
     setShapesOpen(false);
+  };
+  const startSketch = (operation: SketchOperation) => {
+    setSketchCreateOpen(false);
+    onStartSketch(operation);
+  };
+  useEffect(() => {
+    if (!sketchCreateOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!sketchCreateMenuRef.current?.contains(event.target as Node)) setSketchCreateOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSketchCreateOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnPointerDown);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnPointerDown);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [sketchCreateOpen]);
+  useEffect(() => {
+    if (sketchActive) setSketchCreateOpen(false);
+  }, [sketchActive]);
+  useEffect(() => {
+    if (!visibilityOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!visibilityMenuRef.current?.contains(event.target as Node)) setVisibilityOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setVisibilityOpen(false);
+    };
+    const closeOnViewportChange = () => setVisibilityOpen(false);
+    window.addEventListener("pointerdown", closeOnPointerDown);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnPointerDown);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
+  }, [visibilityOpen]);
+  const toggleVisibilityMenu = () => {
+    if (visibilityOpen) {
+      setVisibilityOpen(false);
+      return;
+    }
+    const triggerBounds = visibilityMenuRef.current?.getBoundingClientRect();
+    if (triggerBounds) {
+      const viewportGutter = 12;
+      const menuWidth = Math.min(276, Math.max(0, window.innerWidth - viewportGutter * 2));
+      setVisibilityMenuPosition({
+        top: triggerBounds.bottom + 8,
+        left: Math.max(
+          viewportGutter,
+          Math.min(
+            triggerBounds.left + triggerBounds.width / 2 - menuWidth / 2,
+            window.innerWidth - menuWidth - viewportGutter,
+          ),
+        ),
+      });
+    }
+    setShapesOpen(false);
+    setSketchCreateOpen(false);
+    onTopPanel(null);
+    setVisibilityOpen(true);
   };
   const activeShapeCategory = shapeLibraryCategories.find((category) => category.id === shapeCategory) ?? shapeLibraryCategories[0];
   const leftTools = [
@@ -8629,8 +9577,15 @@ function SecondaryToolbar({
     { label: "Redo", icon: ToolbarRedoIcon, action: onRedo, enabled: canRedo },
   ];
   const visibilityTools = [
-    { label: "Hide selected", icon: ToolbarHideSelectedIcon, action: onToggleHidden, enabled: hasSelection },
-    { label: "Visibility options", icon: ToolbarCaretDownIcon, action: onTips, enabled: hasSelection },
+    {
+      label: selectionHidden ? "Show selected" : "Hide selected",
+      icon: ToolbarHideSelectedIcon,
+      action: () => {
+        setVisibilityOpen(false);
+        onToggleHidden();
+      },
+      enabled: hasSelection,
+    },
   ];
   const combineTools = [
     { label: "Group", icon: ToolbarGroupIcon, action: onGroup, enabled: canGroup },
@@ -8647,7 +9602,6 @@ function SecondaryToolbar({
     { label: "Fillet", icon: ToolbarFilletIcon, action: onFillet, enabled: canEdgeModify, active: edgeModifierKind === "fillet" },
   ];
   const arrangeTools = [
-    { label: "Workplane", icon: ToolbarWorkplaneIcon, action: onWorkplaneTool, enabled: true, active: workplaneMode },
     { label: "Drop to workplane", icon: ToolbarDropToWorkplaneIcon, action: onDropToWorkplane, enabled: hasSelection },
   ];
   const renderToolButton = (tool: (typeof leftTools)[number] | (typeof visibilityTools)[number] | (typeof combineTools)[number] | (typeof modifyTools)[number] | (typeof arrangeTools)[number]) => {
@@ -8693,7 +9647,10 @@ function SecondaryToolbar({
               className={`shape-menu-trigger ${shapesOpen ? "active" : ""}`}
               aria-label="Add shape"
               aria-expanded={shapesOpen}
-              onClick={() => setShapesOpen((value) => !value)}
+              onClick={() => {
+                setVisibilityOpen(false);
+                setShapesOpen((value) => !value);
+              }}
             >
               <ToolbarShapeAddIcon />
             </button>
@@ -8796,9 +9753,49 @@ function SecondaryToolbar({
       </div>
       <div className="toolbar-spacer" />
       <div className="tool-group right">
-        <div className="toolbar-section compact">
+        <div className="toolbar-section compact toolbar-visibility-section" ref={visibilityMenuRef}>
           <div className="toolbar-section-label">Visibility</div>
-          <div className="toolbar-section-tools">{visibilityTools.map(renderToolButton)}</div>
+          <div className="toolbar-section-tools">
+            {visibilityTools.map(renderToolButton)}
+            <button
+              className={`toolbar-icon visibility-menu-trigger ${visibilityOpen ? "active" : ""}`}
+              type="button"
+              aria-label="Visibility options"
+              title="Visibility options"
+              aria-haspopup="menu"
+              aria-expanded={visibilityOpen}
+              onClick={toggleVisibilityMenu}
+            >
+              <ToolbarCaretDownIcon />
+            </button>
+          </div>
+          {visibilityOpen ? (
+            <div
+              className="visibility-dropdown"
+              role="menu"
+              aria-label="Visibility options"
+              style={visibilityMenuPosition}
+            >
+              <button
+                className="visibility-dropdown-action"
+                type="button"
+                role="menuitem"
+                disabled={hiddenShapeCount === 0}
+                onClick={() => {
+                  setVisibilityOpen(false);
+                  onShowHidden();
+                }}
+              >
+                <Eye size={20} aria-hidden="true" />
+                <strong>{hiddenShapeCount === 0 ? "Nothing hidden" : `Show all hidden (${hiddenShapeCount})`}</strong>
+              </button>
+              <div className="visibility-dropdown-help">
+                <span>Eye again: selected</span>
+                <span aria-hidden="true">·</span>
+                <span><kbd>Ctrl/Cmd</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd>: all</span>
+              </div>
+            </div>
+          ) : null}
         </div>
         <div className="toolbar-section">
           <div className="toolbar-section-label">Combine</div>
@@ -8814,13 +9811,8 @@ function SecondaryToolbar({
         </div>
       </div>
       <div className="toolbar-section toolbar-actions-section">
-        <div className="toolbar-section-label">Output</div>
+        <div className="toolbar-section-label">Manage</div>
         <div className="action-buttons">
-          {saveStatus && saveStatus !== "idle" ? (
-            <div className={`autosave-indicator ${saveStatus}`} role="status" title="Designs autosave to this browser">
-              {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : "Save failed"}
-            </div>
-          ) : null}
           <button className="action-icon-button" aria-label="Import" title="Import" onClick={() => onTopPanel("import")}>
             <ToolbarImportIcon />
           </button>
@@ -8900,7 +9892,7 @@ function SecondaryToolbar({
                   <div className="toolbar-section-tools">
                     <button className="sketch-command-button primary" type="button" onClick={onSketchFinish}>
                       <Check />
-                      <span>Finish sketch</span>
+                      <span>{sketchOperation === "revolve" ? "Finish revolve" : "Finish sketch"}</span>
                     </button>
                     <button className="sketch-command-button cancel" type="button" onClick={onSketchCancel}>
                       <X />
@@ -8913,10 +9905,32 @@ function SecondaryToolbar({
               <div className="toolbar-section sketch-start-section">
                 <div className="toolbar-section-label">Create</div>
                 <div className="toolbar-section-tools">
-                  <button className="sketch-command-button primary" type="button" onClick={onStartSketch}>
-                    <SketchReferenceIcon name="sketchTo3d" />
-                    <span>Sketch to 3D</span>
-                  </button>
+                  <div className="sketch-create-menu" ref={sketchCreateMenuRef}>
+                    <button
+                      className={`sketch-command-button primary sketch-create-menu-trigger ${sketchCreateOpen ? "active" : ""}`}
+                      type="button"
+                      aria-label="Sketch to 3D options"
+                      aria-haspopup="menu"
+                      aria-expanded={sketchCreateOpen}
+                      onClick={() => setSketchCreateOpen((open) => !open)}
+                    >
+                      <SketchReferenceIcon name="sketchTo3d" />
+                      <span>Sketch to 3D</span>
+                      <ToolbarCaretDownIcon className="sketch-create-menu-chevron" />
+                    </button>
+                    {sketchCreateOpen ? (
+                      <div className="sketch-create-dropdown" role="menu" aria-label="Sketch to 3D method">
+                        <button type="button" role="menuitem" onClick={() => startSketch("extrude")}>
+                          <strong>Extrude sketch</strong>
+                          <span>Raise the profile into a 3D shape</span>
+                        </button>
+                        <button type="button" role="menuitem" onClick={() => startSketch("revolve")}>
+                          <strong>Revolve sketch</strong>
+                          <span>Rotate the profile around an axis</span>
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                   <button className={`sketch-command-button ${canEditSketch ? "" : "disabled"}`} type="button" aria-label="Edit Sketch to 3D" title="Edit Sketch to 3D" onClick={onEditSketch} disabled={!canEditSketch}>
                     <SketchReferenceIcon name="editSketchTo3d" />
                     <span>Edit</span>
@@ -8951,68 +9965,13 @@ function SecondaryToolbar({
         ) : (
           <span className="project-name-static" title="Design name">{projectName}</span>
         )}
+        {saveStatus && saveStatus !== "idle" ? (
+          <span className={`autosave-indicator ${saveStatus}`} role="status" title="Designs autosave to this browser">
+            {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : "Save failed"}
+          </span>
+        ) : null}
       </div>
     </div>
-  );
-}
-
-function timeAgoLabel(timestamp: number) {
-  const age = Date.now() - timestamp;
-  if (age < 60_000) return "just now";
-  if (age < 3_600_000) return `${Math.max(1, Math.round(age / 60_000))} min ago`;
-  if (age < 86_400_000) return "today";
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(timestamp));
-}
-
-function ProjectNameField({ name, onRename }: { name: string; onRename: (name: string) => void }) {
-  const [draft, setDraft] = useState(name);
-  const [editing, setEditing] = useState(false);
-  const cancelledRef = useRef(false);
-
-  useEffect(() => {
-    if (!editing) {
-      setDraft(name);
-    }
-  }, [editing, name]);
-
-  const commit = () => {
-    setEditing(false);
-    if (cancelledRef.current) {
-      cancelledRef.current = false;
-      setDraft(name);
-      return;
-    }
-    const next = draft.trim();
-    if (!next || next === name) {
-      setDraft(name);
-      return;
-    }
-    onRename(next);
-  };
-
-  return (
-    <input
-      className="project-name-input"
-      aria-label="Design name"
-      title="Design name — click to rename"
-      value={draft}
-      maxLength={80}
-      spellCheck={false}
-      onFocus={(event) => {
-        setEditing(true);
-        event.currentTarget.select();
-      }}
-      onChange={(event) => setDraft(event.currentTarget.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.currentTarget.blur();
-        } else if (event.key === "Escape") {
-          cancelledRef.current = true;
-          event.currentTarget.blur();
-        }
-      }}
-    />
   );
 }
 
@@ -9111,117 +10070,311 @@ function TutorialPanel({
   );
 }
 
+function timeAgoLabel(timestamp: number) {
+  const age = Date.now() - timestamp;
+  if (age < 60_000) return "just now";
+  if (age < 3_600_000) return `${Math.max(1, Math.round(age / 60_000))} min ago`;
+  if (age < 86_400_000) return "today";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(timestamp));
+}
+
+function ProjectNameField({ name, onRename }: { name: string; onRename: (name: string) => void }) {
+  const [draft, setDraft] = useState(name);
+  const [editing, setEditing] = useState(false);
+  const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(name);
+    }
+  }, [editing, name]);
+
+  const commit = () => {
+    setEditing(false);
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      setDraft(name);
+      return;
+    }
+    const next = draft.trim();
+    if (!next || next === name) {
+      setDraft(name);
+      return;
+    }
+    onRename(next);
+  };
+
+  return (
+    <input
+      className="project-name-input"
+      aria-label="Design name"
+      title="Design name — click to rename"
+      value={draft}
+      maxLength={80}
+      spellCheck={false}
+      onFocus={(event) => {
+        setEditing(true);
+        event.currentTarget.select();
+      }}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          cancelledRef.current = true;
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function TopActionPanel({
   panel,
+  projectName,
   shapeCount,
+  scopeLabel,
   designShapeCount,
   selectedShapeCount,
   hasSelection,
   onClose,
   onExport,
+  onExportSkf,
   onExportStep,
-  preflight,
-  onSaveProject,
-  onSaveToDrive,
-  onOpenFromDrive,
-  driveConfigured,
-  driveSaving,
-  driveFile,
+  sharedProjectsEnabled,
+  skfExporting,
   onRepeat,
   repeatDefaults,
   stlExporting,
   stepExporting,
+  preflight,
+  driveConfigured,
+  driveSaving,
+  driveFile,
+  onOpenFromDrive,
   onImportFiles,
   onPickFile,
+  onPickProjectFile,
   onNotice,
 }: {
   panel: Exclude<TopPanel, null>;
+  projectName: string;
   shapeCount: number;
+  scopeLabel: "selected" | "total";
   designShapeCount: number;
   selectedShapeCount: number;
   hasSelection: boolean;
   onClose: () => void;
-  onExport: (format: ExportFormat, scope?: StlExportScope) => void;
-  onExportStep: () => void;
-  preflight: PrintabilityReport;
-  onSaveProject: () => void;
-  onSaveToDrive: (options?: { copy?: boolean }) => void;
-  onOpenFromDrive: () => void;
-  driveConfigured: boolean;
-  driveSaving: boolean;
-  driveFile: ProjectDriveFile | null;
+  onExport: (format: DirectExportFormat, exportName: string, scope?: StlExportScope) => void;
+  onExportSkf: (exportName: string, historyLimit: SkfHistoryLimit, target?: SkfExportTarget) => void;
+  onExportStep: (exportName: string) => void;
+  sharedProjectsEnabled: boolean;
+  skfExporting: boolean;
   onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void;
   repeatDefaults: { count: number; offsetX: number; offsetY: number; offsetZ: number };
   stlExporting: boolean;
   stepExporting: boolean;
+  preflight: PrintabilityReport | null;
+  driveConfigured: boolean;
+  driveSaving: boolean;
+  driveFile: ProjectDriveFile | null;
+  onOpenFromDrive?: () => void;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
+  onPickProjectFile: () => void;
   onNotice: (message: string) => void;
 }) {
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("stl");
+  const [exportName, setExportName] = useState(projectName);
+  const [skfHistoryLimit, setSkfHistoryLimit] = useState<SkfHistoryLimit>("unlimited");
+  const skfHistoryLimits: readonly SkfHistoryLimit[] = ["unlimited", 100, 50, 30];
+  const skfHistoryLimitIndex = skfHistoryLimits.indexOf(skfHistoryLimit);
   const title =
     panel === "profile"
       ? "Profile"
       : panel === "settings"
         ? "Settings"
-        : panel === "tips"
-          ? "Tips"
-      : panel === "export"
-            ? "Export"
-            : panel === "repeat"
-              ? "Repeat"
+        : panel === "export"
+          ? "Export"
+          : panel === "repeat"
+            ? "Repeat"
             : "Import";
 
+  const exportDetails: Record<ExportFormat, { label: string; description: string; note: string }> = {
+    stl: {
+      label: "STL",
+      description: "3D print mesh",
+      note: "Best for slicers and 3D printing. Exports the complete visible design with hole cuts applied, even when shapes are selected.",
+    },
+    obj: {
+      label: "OBJ",
+      description: "Universal 3D mesh",
+      note: "A broadly compatible mesh format for modeling, rendering, and interchange.",
+    },
+    step: {
+      label: "STEP",
+      description: "CAD / B-Rep",
+      note: "Keeps supported boxes, cylinders, spheres, and cones as precise CAD geometry.",
+    },
+    svg: {
+      label: "SVG",
+      description: "Top-view vector",
+      note: "Exports a clean top-view silhouette in millimeters, including holes and curved contours.",
+    },
+    skf: {
+      label: "SKF",
+      description: "Editable project",
+      note: "Preserves the editable project, undo/redo history, sketches, groups, CAD data, and imported sources.",
+    },
+  };
+  const selectedExport = exportDetails[exportFormat];
+  const runSelectedExport = () => {
+    if (exportFormat === "step") onExportStep(exportName);
+    else if (exportFormat === "skf") onExportSkf(exportName, skfHistoryLimit);
+    else if (exportFormat === "stl") onExport("stl", exportName, "design");
+    else onExport(exportFormat, exportName);
+  };
+  // STL always counts the full visible design; other mesh formats follow the selection.
+  const formatShapeCount = exportFormat === "stl" ? designShapeCount : shapeCount;
+  const exportBusy = stepExporting || skfExporting || stlExporting;
+
   return (
-    <div className="top-action-panel" role="dialog" aria-label={title}>
+    <div
+      className={`top-action-panel ${panel === "export" ? "export-action-panel" : panel === "import" ? "import-action-panel" : ""}`}
+      role="dialog"
+      aria-label={title}
+    >
       <header>
-        <strong>{title}</strong>
+        <div className="top-action-heading">
+          <strong>{title}</strong>
+        </div>
         <button aria-label={`Close ${title}`} onClick={onClose}>
           <X size={18} />
         </button>
       </header>
       {panel === "import" ? (
         <div className="top-action-body">
-          {driveConfigured ? (
-            <section className="panel-section">
-              <div className="panel-section-label">Google Drive</div>
-              <button onClick={onOpenFromDrive}>
-                <CloudDownload size={18} />
-                Open from Google Drive
-              </button>
-            </section>
-          ) : null}
-          <section className="panel-section">
-            {driveConfigured ? <div className="panel-section-label">This computer</div> : null}
-            <button
-              className="import-drop-zone"
-              onClick={onPickFile}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "copy";
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                if (event.dataTransfer.files.length > 0) {
-                  onImportFiles(event.dataTransfer.files);
-                }
-              }}
-            >
-              <ToolbarImportIcon />
-              <strong>Drop STL, STEP, SVG, or .sketchforge files</strong>
-              <span>or click to choose from your computer</span>
+          <button className="open-skf-project-button" type="button" onClick={onPickProjectFile}>
+            <span className="open-skf-project-icon"><FolderOpen size={18} /></span>
+            <span>
+              <strong>Open SketchForge Project</strong>
+              <small>Restore an editable .skf (or older .sketchforge) file as a new local project</small>
+            </span>
+          </button>
+          {driveConfigured && onOpenFromDrive ? (
+            <button className="open-skf-project-button" type="button" onClick={onOpenFromDrive}>
+              <span className="open-skf-project-icon"><CloudDownload size={18} /></span>
+              <span>
+                <strong>Open from Google Drive</strong>
+                <small>Open a project SketchForge saved to your Drive</small>
+              </span>
             </button>
-          </section>
+          ) : null}
+          <div className="import-kind-divider"><span>or add geometry</span></div>
+          <button
+            className="import-drop-zone"
+            onClick={onPickFile}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (event.dataTransfer.files.length > 0) {
+                onImportFiles(event.dataTransfer.files);
+              }
+            }}
+          >
+            <ToolbarImportIcon />
+            <strong>Drop STL, STEP, or SVG files</strong>
+            <span>or click to choose from your computer</span>
+          </button>
         </div>
       ) : null}
       {panel === "export" ? (
-        <div className="top-action-body">
-          {driveConfigured ? (
-            <section className="panel-section">
-              <div className="panel-section-label">Google Drive</div>
-              <button className="panel-primary-button" onClick={() => onSaveToDrive()} disabled={driveSaving}>
-                <CloudUpload size={18} />
-                {driveSaving ? "Saving to Google Drive…" : "Save to Google Drive"}
-              </button>
+        <div className="export-dialog-body">
+          <section className="export-setting-section export-file-section">
+            <label htmlFor="export-file-name">File name</label>
+            <div className="export-file-input-wrap">
+              <input
+                id="export-file-name"
+                className="export-file-input"
+                value={exportName}
+                maxLength={120}
+                spellCheck={false}
+                onChange={(event) => setExportName(event.target.value)}
+                onFocus={(event) => event.currentTarget.select()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (formatShapeCount > 0 || exportFormat === "skf") && !exportBusy) runSelectedExport();
+                }}
+              />
+              <span>.{exportFormat}</span>
+            </div>
+          </section>
+
+          <section className="export-setting-section">
+            <div className="export-section-heading">
+              <div>
+                <strong>Format</strong>
+              </div>
+              <span className="export-scope-badge">{exportFormat === "skf" ? "Full project" : exportFormat === "stl" ? `${designShapeCount} full design` : `${shapeCount} ${scopeLabel}`}</span>
+            </div>
+            <div className="export-format-slider" data-format={exportFormat} role="radiogroup" aria-label="Export format">
+              {(["stl", "obj", "step", "svg", "skf"] as const).map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  role="radio"
+                  aria-checked={exportFormat === format}
+                  aria-label={`${exportDetails[format].label}: ${exportDetails[format].description}`}
+                  onClick={() => setExportFormat(format)}
+                >
+                  {exportDetails[format].label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {exportFormat === "skf" ? (
+            <section className="export-setting-section skf-history-section">
+              <div className="export-section-heading">
+                <div>
+                  <strong>Saved action history</strong>
+                  <span>Choose how many recent undo actions travel with the project</span>
+                </div>
+              </div>
+              <div className="skf-history-range-control" data-limit={String(skfHistoryLimit)}>
+                <input
+                  className="skf-history-range"
+                  type="range"
+                  min={0}
+                  max={skfHistoryLimits.length - 1}
+                  step={1}
+                  value={skfHistoryLimitIndex}
+                  aria-label="Saved SKF action history"
+                  aria-valuetext={skfHistoryLimit === "unlimited" ? "Unlimited" : `${skfHistoryLimit} actions`}
+                  onChange={(event) => setSkfHistoryLimit(skfHistoryLimits[Number(event.currentTarget.value)] ?? "unlimited")}
+                />
+              </div>
+              <div className="skf-history-range-labels" aria-hidden="true">
+                {skfHistoryLimits.map((limit) => (
+                  <span key={limit} className={skfHistoryLimit === limit ? "active" : undefined}>
+                    {limit === "unlimited" ? "Unlimited" : limit}
+                  </span>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {exportFormat === "skf" && driveConfigured ? (
+            <section className="export-setting-section drive-export-section" aria-label="Google Drive">
+              <div className="export-section-heading">
+                <div>
+                  <strong>Google Drive</strong>
+                  <span>{driveFile ? "Saving updates the linked Drive file" : "Files go to My Drive → SketchForge"}</span>
+                </div>
+              </div>
               {driveFile ? (
                 <div className="drive-status-card">
                   <div className="drive-status-file">
@@ -9236,80 +10389,74 @@ function TopActionPanel({
                     <button
                       type="button"
                       title="Keep this version in Drive as its own separate file"
-                      onClick={() => onSaveToDrive({ copy: true })}
-                      disabled={driveSaving}
+                      onClick={() => onExportSkf(exportName, skfHistoryLimit, "drive-copy")}
+                      disabled={exportBusy}
                     >
                       Save a copy
                     </button>
                   </div>
                 </div>
-              ) : (
-                <p className="panel-note">Files go to My Drive → SketchForge.</p>
-              )}
+              ) : null}
             </section>
           ) : null}
-          <section className="panel-section">
-            <div className="panel-section-label">Project file</div>
-            <button onClick={onSaveProject}>
-              <Download size={18} />
-              {driveConfigured ? "Download project" : "Save project"}
-            </button>
-            <p className="panel-note">A .sketchforge file that reopens with everything still editable.</p>
-          </section>
-          <section className="panel-section">
-            <div className="panel-section-label">3D printing &amp; CAD</div>
-            {preflight.checkedCount === 0 ? (
-              <p className="panel-note">Add a solid shape to enable exporting.</p>
-            ) : preflight.issues.length === 0 ? (
-              <p className="panel-note export-ready-line">
-                <Check size={14} strokeWidth={3} />
-                {designShapeCount} visible solid shape{designShapeCount === 1 ? "" : "s"} · full design ready to print
-              </p>
-            ) : (
-              <PrintabilityPreflight report={preflight} />
-            )}
-            <div className="export-format-row">
-              <button
-                className="panel-primary-button"
-                title="Export the complete visible design, prepared for 3D printing"
-                onClick={() => onExport("stl", "design")}
-                disabled={stlExporting || designShapeCount === 0}
-              >
-                {stlExporting ? "STL…" : "STL"}
-              </button>
-              <button title="Mesh with named parts" onClick={() => onExport("obj")} disabled={shapeCount === 0}>
-                OBJ
-              </button>
-              <button
-                title="Exact CAD geometry (boxes, cylinders, spheres, cones)"
-                onClick={onExportStep}
-                disabled={stepExporting || shapeCount === 0}
-              >
-                {stepExporting ? "STEP…" : "STEP"}
+
+          <div className="export-format-summary">
+            <div>
+              <strong>{selectedExport.label}</strong>
+              <span>{selectedExport.description}</span>
+            </div>
+            <p>{selectedExport.note}</p>
+          </div>
+
+          {preflight && (exportFormat === "stl" || exportFormat === "obj" || exportFormat === "step") ? <PrintabilityPreflight report={preflight} /> : null}
+
+          <footer className="export-dialog-footer">
+            <div>
+              {exportFormat === "skf" && sharedProjectsEnabled ? (
+                <button
+                  className="export-shared-button"
+                  type="button"
+                  onClick={() => onExportSkf(exportName, skfHistoryLimit, "shared")}
+                  disabled={skfExporting || stepExporting}
+                >
+                  <CloudUpload />
+                  <span>Save to shared</span>
+                </button>
+              ) : null}
+              {exportFormat === "skf" && driveConfigured ? (
+                <button
+                  className="export-shared-button export-drive-button"
+                  type="button"
+                  onClick={() => onExportSkf(exportName, skfHistoryLimit, "drive")}
+                  disabled={exportBusy}
+                >
+                  <CloudUpload />
+                  <span>{driveSaving ? "Saving to Drive…" : "Save to Drive"}</span>
+                </button>
+              ) : null}
+              {exportFormat === "stl" && hasSelection && selectedShapeCount > 0 ? (
+                <button
+                  className="export-selection-button"
+                  type="button"
+                  title="Export only the currently selected solid shapes as STL"
+                  onClick={() => onExport("stl", exportName, "selection")}
+                  disabled={exportBusy}
+                >
+                  Export selection as STL ({selectedShapeCount})
+                </button>
+              ) : null}
+              <button className="export-primary-button" onClick={runSelectedExport} disabled={(formatShapeCount === 0 && exportFormat !== "skf") || exportBusy}>
+                <Download />
+                {exportFormat === "skf" ? (skfExporting && !driveSaving ? "Saving project…" : "Save SketchForge Project") : null}
+                <span hidden={exportFormat === "skf"}>
+                {stepExporting && exportFormat === "step" ? "Building STEP…" : stlExporting && exportFormat === "stl" ? "Preparing STL…" : `Export ${selectedExport.label}`}
+                </span>
               </button>
             </div>
-            {hasSelection && selectedShapeCount > 0 ? (
-              <button
-                className="export-selection-button"
-                title="Export only the currently selected solid shapes as STL"
-                onClick={() => onExport("stl", "selection")}
-                disabled={stlExporting}
-              >
-                Export selection as STL ({selectedShapeCount})
-              </button>
-            ) : null}
-            <p className="panel-note">
-              STL exports the full visible design and applies hole cuts. {hasSelection ? "Use the selection option only for an intentional partial export. " : ""}OBJ for mesh parts · STEP for other CAD tools.
-            </p>
-          </section>
+          </footer>
         </div>
       ) : null}
       {panel === "repeat" ? <RepeatPanel onRepeat={onRepeat} defaults={repeatDefaults} /> : null}
-      {panel === "tips" ? (
-        <div className="top-action-body">
-          <p>Click a shape to select it. Use the inspector for dimensions, rotation, solid/hole, color, duplicate, and delete.</p>
-        </div>
-      ) : null}
       {panel === "settings" ? (
         <div className="top-action-body">
           <p>Workspace preferences</p>
@@ -9334,7 +10481,12 @@ function PrintabilityPreflight({ report }: { report: PrintabilityReport }) {
     return <p className="printability-preflight neutral">Add a solid shape to run the printability check.</p>;
   }
   if (report.issues.length === 0) {
-    return <p className="printability-preflight ready">Printability check: ready to export.</p>;
+    return (
+      <p className="printability-preflight ready">
+        <Check size={14} strokeWidth={3} />
+        Printability check: full design ready to print.
+      </p>
+    );
   }
   return (
     <section className="printability-preflight warning" aria-label="Printability check">

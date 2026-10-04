@@ -161,6 +161,12 @@ describe("shape catalog", () => {
     });
   });
 
+  it("keeps upstream's gear in the Basic Shapes category", () => {
+    const basic = shapeLibraryCategories.find((category) => category.id === "basic");
+    expect(basic?.shapes.map((asset) => asset.kind)).toContain("gear");
+    expect(shapeLibraryCategories.map((category) => category.id)).toEqual(["basic", "connectors", "architectural", "printableParts", "text"]);
+  });
+
   it("creates placed shapes from toolbar assets", () => {
     const asset: ShapeAsset = { id: "box", name: "Box", src: "box.png", kind: "box", color: "#d41721" };
     const placed = makeShapeFromAsset(asset, { x: 12, z: -8, elevation: 4 });
@@ -184,23 +190,25 @@ describe("shape catalog", () => {
     });
   });
 
-  it("places a new solid on an oriented face with the correct local rotation", () => {
-    const asset = toolbarShapeAssets.find((shape) => shape.id === "box")!;
-    expect(makeShapeFromAsset(asset, {
-      x: 0,
-      z: 20,
-      elevation: 10,
-      rotationX: 90,
-      surface: { orientation: "front", x: 0, y: 10, z: 20 },
-    })).toMatchObject({ x: 0, z: 30, elevation: 0, rotationX: 90, rotationZ: 0 });
-  });
-
   it("uses shape-specific defaults for text and round profiles", () => {
     const text = makeShapeFromAsset({ id: "text", name: "Text", src: "text.png", kind: "text", color: "#cf101b" });
     const torus = makeShapeFromAsset({ id: "torus", name: "Torus", src: "torus.png", kind: "torus", color: "#0098c7" });
+    const gear = makeShapeFromAsset({ id: "gear", name: "Gear", src: "gear.svg", kind: "gear", color: "#6f7f8d" });
 
     expect(text).toMatchObject({ width: 86, depth: 28, height: 10, text: "TEXT", font: "Multilanguage" });
     expect(torus).toMatchObject({ size: 22, width: 22, depth: 22, height: 5 });
+    expect(gear).toMatchObject({
+      size: 30,
+      width: 30,
+      depth: 30,
+      height: 6,
+      teeth: 12,
+      toothSize: 2.5,
+      centerHoleSize: 6,
+      gearType: "spur",
+      helixAngle: 22.5,
+      helixQuality: 16,
+    });
   });
 
   it("creates canonical scene shapes with stable defaults", () => {

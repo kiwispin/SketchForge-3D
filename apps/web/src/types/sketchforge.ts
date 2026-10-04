@@ -12,6 +12,7 @@ export type ShapeKind =
   | "halfSphere"
   | "torus"
   | "tube"
+  | "gear"
   | "ring"
   | "wedge"
   | "polygon"
@@ -27,10 +28,23 @@ export type ShapeAsset = {
   hole?: boolean;
 };
 
+export type ProjectAssetSourceFormat = "stl" | "obj" | "svg" | "step";
+
+export type ProjectAsset = {
+  id: string;
+  name: string;
+  mediaType: string;
+  sourceFormat: ProjectAssetSourceFormat;
+  bytes: Uint8Array;
+  byteLength: number;
+  sha256: string;
+};
+
 export type GridSize = "Off" | "0.1 mm" | "0.25 mm" | "0.5 mm" | "1.0 mm" | "2.0 mm" | "5.0 mm" | "Brick";
 export type ProjectSaveStatus = "idle" | "saving" | "saved" | "error";
 export type ProjectDriveFile = { fileId: string; fileName: string; savedAt: number };
 export type MeasurementAccuracy = 1 | 2 | 3;
+export type HistoryRetentionLimit = "unlimited" | number;
 
 export type WorkplaneWorkspaceSettings = {
   width: number;
@@ -38,6 +52,7 @@ export type WorkplaneWorkspaceSettings = {
   sizePreset: string;
   gridBlockSize: number;
   gridBlockPreset: string;
+  gridColor: string;
   background: string;
   showShadows: boolean;
   showGrid: boolean;
@@ -46,6 +61,7 @@ export type WorkplaneWorkspaceSettings = {
   units: string;
   scale: string;
   accuracy: MeasurementAccuracy;
+  historyLimit: HistoryRetentionLimit;
 };
 
 export type AlignAxis = "x" | "y" | "z";
@@ -95,6 +111,18 @@ export type SketchProfile = {
   images?: SketchImage[];
 };
 
+export type SketchOperation = "extrude" | "revolve";
+
+export type GearType = "spur" | "helical" | "bevel";
+
+export type SketchRevolveSettings = {
+  startAngle: number;
+  sweepAngle: number;
+  sides: number;
+  quality: number;
+  thickness: number;
+};
+
 export type EdgeTreatmentFeature = {
   kind: "fillet" | "chamfer";
   amount: number;
@@ -107,6 +135,20 @@ export type EdgeTreatmentHistoryEntry = {
   createdAt: number;
   feature: EdgeTreatmentFeature;
   before: WorkplaneShape;
+  appliedFrame?: {
+    x: number;
+    z: number;
+    elevation: number;
+    width: number;
+    depth: number;
+    height: number;
+    rotation: number;
+    rotationX: number;
+    rotationZ: number;
+    mirrorX: boolean;
+    mirrorY: boolean;
+    mirrorZ: boolean;
+  };
 };
 
 export type CadDisplayEdge = {
@@ -129,6 +171,17 @@ export type CadPrimitiveFrame = {
   depth: number;
   height: number;
   frame: CadBrepFrame;
+};
+
+/**
+ * The orientation of a shape whose rotation has been baked into world-space
+ * mesh positions (rotation fields reset to 0). `quaternion` ([x, y, z, w])
+ * maps the shape's own X/Y/Z axes to world axes, so the selection frame and
+ * resize handles can keep following the shape after the bake. The shape's
+ * true local size is not stored: it is measured from the mesh along these axes.
+ */
+export type ShapeLocalFrame = {
+  quaternion: [number, number, number, number];
 };
 
 export type WorkplaneShape = {
@@ -157,6 +210,13 @@ export type WorkplaneShape = {
   segments?: number;
   topRadius?: number;
   baseRadius?: number;
+  teeth?: number;
+  toothSize?: number;
+  toothWidth?: number;
+  centerHoleSize?: number;
+  gearType?: GearType;
+  helixAngle?: number;
+  helixQuality?: number;
   text?: string;
   font?: string;
   importedMesh?: {
@@ -167,6 +227,12 @@ export type WorkplaneShape = {
     baseHeight: number;
     triangleCount: number;
     sourceFormat: "stl" | "obj" | "svg" | "json" | "step";
+    // IndexedDB persistence uses this only in compact stored shape records.
+    // Runtime editor shapes are hydrated with the full immutable mesh resource.
+    storageResourceId?: string;
+    // Stable reference to the original imported file in the project's shared
+    // asset table. Copies and grouped operands reuse this reference.
+    assetId?: string;
     // Exact OpenCascade B-Rep of the body (single-shape STEP text) in the same
     // local frame as `positions`. Set only for STEP imports; lets the exporter
     // re-emit the original analytic geometry instead of the tessellation.
@@ -179,6 +245,8 @@ export type WorkplaneShape = {
     pixelHeight: number;
   };
   sketchProfile?: SketchProfile;
+  sketchOperation?: SketchOperation;
+  sketchRevolve?: SketchRevolveSettings;
   edgeTreatments?: EdgeTreatmentFeature[];
   edgeTreatmentHistory?: EdgeTreatmentHistoryEntry[];
   cadDisplayEdges?: CadDisplayEdge[];
@@ -187,10 +255,12 @@ export type WorkplaneShape = {
   cadBrep?: string;
   cadBrepFrame?: CadBrepFrame;
   cadPrimitiveFrame?: CadPrimitiveFrame;
+  localFrame?: ShapeLocalFrame;
   groupedShapes?: WorkplaneShape[];
   groupedBaseWidth?: number;
   groupedBaseDepth?: number;
   groupedBaseHeight?: number;
+  groupOperation?: "group" | "intersection";
   locked?: boolean;
   hidden?: boolean;
 };

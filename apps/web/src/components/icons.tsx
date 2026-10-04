@@ -1,6 +1,5 @@
 import type { CSSProperties, SVGProps } from "react";
-
-const assetBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+import { ASSET_BASE_PATH } from "@/lib/basePath";
 
 type IconProps = SVGProps<SVGSVGElement>;
 type SpriteRect = {
@@ -65,7 +64,7 @@ type ToolbarCommandImageProps = { file: string; className?: string };
 
 function ToolbarCommandImage({ file, className }: ToolbarCommandImageProps) {
   const assetClassName = `toolbar-art-${file.replace(/\.png$/i, "")}`;
-  return <img aria-hidden="true" className={["toolbar-command-icon", assetClassName, className].filter(Boolean).join(" ")} src={`${assetBasePath}/assets/sketchforge/${file}`} alt="" draggable={false} />;
+  return <img aria-hidden="true" className={["toolbar-command-icon", assetClassName, className].filter(Boolean).join(" ")} src={`${ASSET_BASE_PATH}/assets/sketchforge/${file}`} alt="" draggable={false} />;
 }
 
 export function ToolbarHomeIcon() {

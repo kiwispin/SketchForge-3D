@@ -1,12 +1,19 @@
 # Save to Google Drive — Setup Guide
 
-SketchForge can save `.sketchforge` projects straight from the browser into the
+SketchForge can save editable `.skf` projects straight from the browser into the
 student's own Google Drive (`My Drive → SketchForge`). No SketchForge server is
 involved: the browser talks directly to Google with the narrow `drive.file`
 permission, which only allows access to files SketchForge itself creates.
 
 The feature is **hidden until a Google OAuth Client ID is configured**. Without
 it, the app behaves exactly as before (local autosave + Download).
+
+Drive saves use the same packaged `.skf` format as **Save SketchForge Project**
+(see [SKF_PROJECT_FORMAT.md](SKF_PROJECT_FORMAT.md)), including the chosen
+amount of undo history. Older `.sketchforge` files saved to Drive by earlier
+builds still appear in **Open from Google Drive** and open as new projects;
+SketchForge never overwrites them, so the first Drive save of such a project
+creates a new `.skf` file next to the old one.
 
 ## One-time Google Cloud setup (~15 minutes)
 
@@ -68,14 +75,26 @@ The app reads the ID from the public build-time variable
 
 ## What students see
 
-- The editor's **Export** panel gains a **Save to Google Drive** button above
-  the download options. The first press opens Google sign-in and asks to
-  approve SketchForge; the file is then uploaded to `My Drive → SketchForge`.
-- Later saves update the **same Drive file** (no duplicates). The panel shows
-  the linked file name with **View in Drive** and **Save a copy** actions.
+- In the editor's **Export** panel, choosing the **SKF** format shows a
+  **Google Drive** section and a **Save to Drive** button next to
+  **Save SketchForge Project**. The first press opens Google sign-in and asks to
+  approve SketchForge; the `.skf` file is then uploaded to
+  `My Drive → SketchForge`, named from the export dialog's file name.
+- Later saves update the **same Drive file** (no duplicates; renaming the
+  design renames the Drive file on the next save). The panel shows the linked
+  file name and when it was saved, with **View in Drive** and **Save a copy**
+  actions.
+- **Open from Drive** on the dashboard (and **Open from Google Drive** in the
+  editor's Import panel) lists the project files SketchForge saved to that
+  Drive. Opening a `.skf` file creates a project linked to it; if this device
+  already has a project linked to that file it is replaced, unless it has
+  changes that were never saved to Drive, in which case it is kept as a
+  separate, unlinked project.
+- The design name at the top of the editor (next to Geometry / Sketch) can be
+  clicked to rename the project.
 - If Drive is full, blocked by school policy, offline, or sign-in is
   cancelled, the design stays open, an accurate message is shown, and
-  **Download project** remains available. A save is never reported as
+  **Save SketchForge Project** (download) remains available. A save is never reported as
   successful unless Google confirmed it.
 - Access tokens are held only in memory for the session; nothing Google-related
   is stored beyond the Drive file name/ID linked to the project.

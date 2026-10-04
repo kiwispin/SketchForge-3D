@@ -2,6 +2,7 @@
 
 import { OcctKernel, type ShapeHandle } from "occt-wasm";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
+import { CAD_MODIFIER_RUNTIME_BASE, cadModifierTopologyEdgeIsSelectable, cadTransformRequiresGeneralTransform, isCadModifierWasmMemoryFault } from "@/lib/cadModifierRuntime";
 
 const HASH_UPPER_BOUND = 2_147_483_647;
 const CAD_EDGE_WIREFRAME_DEFLECTION = 0.035;
@@ -25,10 +26,9 @@ function post(message: CadModifierWorkerResponse, transfer: Transferable[] = [])
 }
 
 function kernel() {
-  const assetBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-  const moduleUrl = `${assetBasePath}/assets/occt/occt-wasm.js`;
+  const moduleUrl = `${CAD_MODIFIER_RUNTIME_BASE}/occt-wasm.js`;
   kernelPromise ??= import(/* webpackIgnore: true */ moduleUrl).then((imported: { default: (options?: { locateFile?: (path: string) => string }) => Promise<unknown> }) => imported.default({
-    locateFile: (path) => path.endsWith(".wasm") ? `${assetBasePath}/assets/occt/occt-wasm.wasm` : path,
+    locateFile: (path) => path.endsWith(".wasm") ? `${CAD_MODIFIER_RUNTIME_BASE}/occt-wasm.wasm` : path,
   })).then((module) => {
     const KernelConstructor = OcctKernel as unknown as new (rawModule: unknown) => OcctKernel;
     return new KernelConstructor(module);
@@ -50,7 +50,7 @@ function releaseSession(cad: OcctKernel) {
 
 function cadShapeIsValid(cad: OcctKernel, shape: ShapeHandle) {
   const validator = (cad as { isValid?: unknown }).isValid;
-  if (typeof validator !== "function") return true;
+  if (typeof validator !== "function") throw new Error("isValid is not a function");
   try {
     return Boolean(validator.call(cad, shape));
   } catch {
@@ -152,6 +152,9 @@ function isIdentityCadTransform(transform: number[]) {
 
 function applyCadTransform(cad: OcctKernel, shape: ShapeHandle, transform: number[] | undefined) {
   if (!isCadTransform(transform) || isIdentityCadTransform(transform)) return shape;
+  if (cadTransformRequiresGeneralTransform(transform)) {
+    return cad.generalTransform(shape, transform);
+  }
   try {
     return cad.transform(shape, transform);
   } catch {
@@ -276,73 +279,89 @@ function isModifierDisplayCadEdge(edge: CollectedCadEdgeGeometry, treatmentAreaL
   return isDisplayCadEdge(edge) && !touchesTreatmentDetailFace(edge, treatmentAreaLimit);
 }
 
-function isSelectableModifierEdge(edge: CollectedCadEdgeGeometry) {
-  return edge.manifold && !edge.boundary && edge.points.length >= 6;
+function releaseHandles(cad: OcctKernel, handles: ShapeHandle[]) {
+  handles.forEach((handle) => {
+    try {
+      cad.release(handle);
+    } catch {
+      // A failed topology operation can invalidate temporary handles.
+    }
+  });
 }
 
-function collectEdges(cad: OcctKernel, shape: ShapeHandle, sharpAngle: number, suppressTreatmentDetailEdges = false) {
+function collectEdges(cad: OcctKernel, shape: ShapeHandle, sharpAngle: number, suppressTreatmentDetailEdges = false, retainEdgeHandles = false) {
   const handles = cad.getSubShapes(shape, "edge");
   const faces = cad.getSubShapes(shape, "face");
-  const faceByHash = new Map(faces.map((face) => [cad.hashCode(face, HASH_UPPER_BOUND), face]));
-  const faceAreaByHash = new Map<number, number>();
-  faces.forEach((face) => {
-    const hash = cad.hashCode(face, HASH_UPPER_BOUND);
-    let area = 0;
-    try {
-      area = Math.abs(cad.getSurfaceArea(face));
-    } catch {
-      area = 0;
+  let keepEdgeHandles = false;
+  try {
+    const faceByHash = new Map(faces.map((face) => [cad.hashCode(face, HASH_UPPER_BOUND), face]));
+    const faceAreaByHash = new Map<number, number>();
+    faces.forEach((face) => {
+      const hash = cad.hashCode(face, HASH_UPPER_BOUND);
+      let area = 0;
+      try {
+        area = Math.abs(cad.getSurfaceArea(face));
+      } catch {
+        area = 0;
+      }
+      faceAreaByHash.set(hash, area);
+    });
+    const treatmentAreaLimit = suppressTreatmentDetailEdges ? treatmentDetailFaceAreaLimit([...faceAreaByHash.values()]) : 0;
+    const adjacentFaces = parseEdgeFaceMap(cad.edgeToFaceMap(shape, HASH_UPPER_BOUND));
+    const wire = cad.wireframe(shape, CAD_EDGE_WIREFRAME_DEFLECTION);
+    const pointsByHash = new Map<number, number[]>();
+    for (let index = 0; index + 2 < wire.edgeGroups.length; index += 3) {
+      const start = wire.edgeGroups[index];
+      const count = wire.edgeGroups[index + 1];
+      const hash = wire.edgeGroups[index + 2];
+      if (!pointsByHash.has(hash)) pointsByHash.set(hash, Array.from(wire.points.slice(start, start + count)));
     }
-    faceAreaByHash.set(hash, area);
-  });
-  const treatmentAreaLimit = suppressTreatmentDetailEdges ? treatmentDetailFaceAreaLimit([...faceAreaByHash.values()]) : 0;
-  const adjacentFaces = parseEdgeFaceMap(cad.edgeToFaceMap(shape, HASH_UPPER_BOUND));
-  const wire = cad.wireframe(shape, CAD_EDGE_WIREFRAME_DEFLECTION);
-  const pointsByHash = new Map<number, number[]>();
-  for (let index = 0; index + 2 < wire.edgeGroups.length; index += 3) {
-    const start = wire.edgeGroups[index];
-    const count = wire.edgeGroups[index + 1];
-    const hash = wire.edgeGroups[index + 2];
-    if (!pointsByHash.has(hash)) pointsByHash.set(hash, Array.from(wire.points.slice(start, start + count)));
-  }
 
-  const collectedEdges = handles.map((handle, id) => {
-    const hash = cad.hashCode(handle, HASH_UPPER_BOUND);
-    const faceHashes = adjacentFaces.get(hash) ?? [];
-    const points = pointsByHash.get(hash) ?? [];
-    const classification = edgeAngle(cad, points, faceHashes, faceByHash);
-    const faceAreas = faceHashes.map((faceHash) => faceAreaByHash.get(faceHash) ?? 0);
-    const surfaceTypes = faceHashes
-      .map((faceHash) => faceByHash.get(faceHash))
-      .filter((face): face is ShapeHandle => face !== undefined)
-      .map((face) => {
-        try {
-          return cad.surfaceType(face);
-        } catch {
-          return "unknown";
-        }
-      });
-    let curveType = "line";
-    try {
-      curveType = cad.curveType(handle);
-    } catch {
-      curveType = "unknown";
-    }
-    return { id, points, ...classification, curveType, surfaceTypes, faceAreas };
-  }).filter((edge) => edge.points.length >= 6);
-  const edges: CollectedCadEdge[] = collectedEdges.map((edge) => ({
-    ...edge,
-    display: treatmentAreaLimit > 0 ? isModifierDisplayCadEdge(edge, treatmentAreaLimit) : isDisplayCadEdge(edge),
-    selectable: isSelectableModifierEdge(edge),
-  }));
-  const selectableEdgeIds = edges.filter((edge) => edge.selectable && edge.angle + 1e-3 >= sharpAngle).map((edge) => edge.id);
-  const displayEdges = cadDisplayEdgesFromCollected(edges);
-  return { handles, edges: edges.map(({ curveType: _curveType, surfaceTypes: _surfaceTypes, faceAreas: _faceAreas, ...edge }) => edge), selectableEdgeIds, displayEdges };
+    const collectedEdges = handles.map((handle, id) => {
+      const hash = cad.hashCode(handle, HASH_UPPER_BOUND);
+      const faceHashes = adjacentFaces.get(hash) ?? [];
+      const points = pointsByHash.get(hash) ?? [];
+      const classification = edgeAngle(cad, points, faceHashes, faceByHash);
+      const faceAreas = faceHashes.map((faceHash) => faceAreaByHash.get(faceHash) ?? 0);
+      const surfaceTypes = faceHashes
+        .map((faceHash) => faceByHash.get(faceHash))
+        .filter((face): face is ShapeHandle => face !== undefined)
+        .map((face) => {
+          try {
+            return cad.surfaceType(face);
+          } catch {
+            return "unknown";
+          }
+        });
+      let curveType = "line";
+      try {
+        curveType = cad.curveType(handle);
+      } catch {
+        curveType = "unknown";
+      }
+      return { id, points, ...classification, curveType, surfaceTypes, faceAreas };
+    }).filter((edge) => edge.points.length >= 6);
+    const edges: CollectedCadEdge[] = collectedEdges.map((edge) => {
+      const display = treatmentAreaLimit > 0 ? isModifierDisplayCadEdge(edge, treatmentAreaLimit) : isDisplayCadEdge(edge);
+      return {
+        ...edge,
+        display,
+        selectable: cadModifierTopologyEdgeIsSelectable(edge),
+      };
+    });
+    const selectableEdgeIds = edges.filter((edge) => edge.selectable && edge.angle + 1e-3 >= sharpAngle).map((edge) => edge.id);
+    const displayEdges = cadDisplayEdgesFromCollected(edges);
+    keepEdgeHandles = retainEdgeHandles;
+    return { handles, edges: edges.map(({ curveType: _curveType, surfaceTypes: _surfaceTypes, faceAreas: _faceAreas, ...edge }) => edge), selectableEdgeIds, displayEdges };
+  } finally {
+    releaseHandles(cad, faces);
+    if (!keepEdgeHandles) releaseHandles(cad, handles);
+  }
 }
 
 function cadDisplayEdgesFromCollected(edges: CollectedCadEdge[]): CadModifierDisplayEdge[] {
   return edges
-    .filter(isDisplayCadEdge)
+    .filter((edge) => edge.display)
     .map((edge) => ({ points: edge.points }));
 }
 
@@ -359,10 +378,6 @@ function copyCadMesh(mesh: { positions: Float32Array; normals: Float32Array; ind
     indices: new Uint32Array(mesh.indices),
     triangleCount: mesh.triangleCount,
   };
-}
-
-function isWasmMemoryFault(message: string) {
-  return /memory access out of bounds|WebAssembly\.RuntimeError|wasm|abort/i.test(message);
 }
 
 function isImportStlWasmFault(message: string) {
@@ -387,15 +402,31 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
     if (request.type === "prepare") {
       releaseSession(activeCad);
       baseShape = reconstructParts(activeCad, request.parts);
-      const collected = collectEdges(activeCad, baseShape, request.sharpAngle, Boolean(request.suppressTreatmentDetailEdges));
+      const collected = collectEdges(activeCad, baseShape, request.sharpAngle, Boolean(request.suppressTreatmentDetailEdges), true);
       edgeHandles = collected.handles;
       baseSolids = activeCad.isSolid(baseShape) ? [baseShape] : activeCad.getSubShapes(baseShape, "solid");
       if (baseSolids.length === 0) throw new Error("The selected group contains no closed solid components");
-      const ownerHashes = baseSolids.map((solid) => new Set(activeCad.getSubShapes(solid, "edge").map((edge) => activeCad.hashCode(edge, HASH_UPPER_BOUND))));
-      edgeOwners = edgeHandles.map((edge) => {
-        const hash = activeCad.hashCode(edge, HASH_UPPER_BOUND);
-        return Math.max(0, ownerHashes.findIndex((hashes) => hashes.has(hash)));
-      });
+      const ownerEdgeHandles = baseSolids.map((solid) => activeCad.getSubShapes(solid, "edge"));
+      try {
+        const ownerCandidates = new Map<number, Array<{ owner: number; edge: ShapeHandle }>>();
+        ownerEdgeHandles.forEach((componentEdges, owner) => {
+          componentEdges.forEach((edge) => {
+            const hash = activeCad.hashCode(edge, HASH_UPPER_BOUND);
+            const candidates = ownerCandidates.get(hash) ?? [];
+            candidates.push({ owner, edge });
+            ownerCandidates.set(hash, candidates);
+          });
+        });
+        edgeOwners = edgeHandles.map((edge) => {
+          const hash = activeCad.hashCode(edge, HASH_UPPER_BOUND);
+          const candidates = ownerCandidates.get(hash) ?? [];
+          const exact = candidates.find((candidate) => activeCad.isSame(edge, candidate.edge));
+          if (!exact) throw new Error("A CAD edge could not be mapped to its solid component; restart the edge tool");
+          return exact.owner;
+        });
+      } finally {
+        ownerEdgeHandles.forEach((componentEdges) => releaseHandles(activeCad, componentEdges));
+      }
       post({
         type: "ready",
         requestId: request.requestId,
@@ -408,47 +439,56 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
     if (baseShape === null) throw new Error("Prepare an object before previewing the modifier");
     const selected = request.edgeIds.map((id) => ({ edge: edgeHandles[id], owner: edgeOwners[id] })).filter((entry): entry is { edge: ShapeHandle; owner: number } => entry.edge !== undefined);
     if (selected.length === 0) throw new Error("Select at least one highlighted edge");
-    const componentResults = baseSolids.map((solid, owner) => {
-      const componentEdges = selected.filter((entry) => entry.owner === owner).map((entry) => entry.edge);
-      if (componentEdges.length === 0) return activeCad.copy(solid);
-      return request.kind === "fillet"
-        ? activeCad.fillet(solid, componentEdges, request.amount)
-        : Math.abs(request.chamferAngle - 45) < 0.001
-          ? activeCad.chamfer(solid, componentEdges, request.amount)
-          : activeCad.chamferDistAngle(solid, componentEdges, request.amount, request.chamferAngle);
-    });
-    const result = componentResults.length === 1 ? componentResults[0] : activeCad.makeCompound(componentResults);
-    if (!cadShapeIsValid(activeCad, result)) throw new Error("The chosen size creates invalid or overlapping edge geometry");
-    const options = tessellationOptions(request.quality, request.amount);
-    const mesh = copyCadMesh(activeCad.tessellate(result, options));
-    const displayEdges = collectEdges(activeCad, result, request.chamferAngle).displayEdges;
-    const brep = activeCad.toBREP(result);
-    const components: CadModifierComponentMesh[] = componentResults.map((component, owner) => {
-      const componentMesh = copyCadMesh(activeCad.tessellate(component, options));
-      return {
-        owner,
-        positions: componentMesh.positions,
-        normals: componentMesh.normals,
-        indices: componentMesh.indices,
-        triangleCount: componentMesh.triangleCount,
-        brep: activeCad.toBREP(component),
-        displayEdges: collectEdges(activeCad, component, request.chamferAngle).displayEdges,
-      };
-    });
-    componentResults.forEach((component) => activeCad.release(component));
-    if (componentResults.length > 1) activeCad.release(result);
-    post(
-      { type: "preview", requestId: request.requestId, positions: mesh.positions, normals: mesh.normals, indices: mesh.indices, triangleCount: mesh.triangleCount, brep, displayEdges, components },
-      [
-        mesh.positions.buffer,
-        mesh.normals.buffer,
-        mesh.indices.buffer,
-        ...components.flatMap((component) => [component.positions.buffer, component.normals.buffer, component.indices.buffer]),
-      ],
-    );
+    const componentResults: ShapeHandle[] = [];
+    let result: ShapeHandle | null = null;
+    try {
+      for (let owner = 0; owner < baseSolids.length; owner += 1) {
+        const solid = baseSolids[owner];
+        const componentEdges = selected.filter((entry) => entry.owner === owner).map((entry) => entry.edge);
+        const component = componentEdges.length === 0
+          ? activeCad.copy(solid)
+          : request.kind === "fillet"
+            ? activeCad.fillet(solid, componentEdges, request.amount)
+            : Math.abs(request.chamferAngle - 45) < 0.001
+              ? activeCad.chamfer(solid, componentEdges, request.amount)
+              : activeCad.chamferDistAngle(solid, componentEdges, request.amount, request.chamferAngle);
+        componentResults.push(component);
+      }
+      result = componentResults.length === 1 ? componentResults[0] : activeCad.makeCompound(componentResults);
+      if (!cadShapeIsValid(activeCad, result)) throw new Error("The chosen size creates invalid or overlapping edge geometry");
+      const options = tessellationOptions(request.quality, request.amount);
+      const mesh = copyCadMesh(activeCad.tessellate(result, options));
+      const displayEdges = collectEdges(activeCad, result, 0).displayEdges;
+      const brep = activeCad.toBREP(result);
+      const components: CadModifierComponentMesh[] = componentResults.map((component, owner) => {
+        const componentMesh = copyCadMesh(activeCad.tessellate(component, options));
+        return {
+          owner,
+          positions: componentMesh.positions,
+          normals: componentMesh.normals,
+          indices: componentMesh.indices,
+          triangleCount: componentMesh.triangleCount,
+          brep: activeCad.toBREP(component),
+          displayEdges: collectEdges(activeCad, component, 0).displayEdges,
+        };
+      });
+      post(
+        { type: "preview", requestId: request.requestId, positions: mesh.positions, normals: mesh.normals, indices: mesh.indices, triangleCount: mesh.triangleCount, brep, displayEdges, components },
+        [
+          mesh.positions.buffer,
+          mesh.normals.buffer,
+          mesh.indices.buffer,
+          ...components.flatMap((component) => [component.positions.buffer, component.normals.buffer, component.indices.buffer]),
+        ],
+      );
+    } finally {
+      componentResults.forEach((component) => activeCad.release(component));
+      if (result !== null && componentResults.length > 1) activeCad.release(result);
+    }
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error ?? "");
-    if (isWasmMemoryFault(rawMessage) || isImportStlWasmFault(rawMessage) || isMissingValidatorFault(rawMessage)) {
+    const errorName = error instanceof Error ? error.name : "";
+    if (isCadModifierWasmMemoryFault(rawMessage, errorName) || isImportStlWasmFault(rawMessage) || isMissingValidatorFault(rawMessage)) {
       if (cad) releaseSession(cad);
       kernelPromise = null;
       const message = isImportStlWasmFault(rawMessage)
@@ -467,6 +507,7 @@ self.onmessage = async (event: MessageEvent<CadModifierWorkerRequest>) => {
     const message = request.type === "preview" && (rawMessage.includes("WebAssembly.Exception") || rawMessage.includes("fillet:") || rawMessage.includes("chamfer:"))
       ? `The selected edges cannot be ${request.kind === "fillet" ? "filleted" : "chamfered"} together at this size. Reduce the size or select fewer connected edges.`
       : rawMessage || "The CAD kernel could not complete this edge treatment";
+    if (request.type === "prepare" && cad) releaseSession(cad);
     post({ type: "error", requestId: request.requestId, message });
   }
 };

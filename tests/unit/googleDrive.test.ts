@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DriveError,
+  buildMultipartBlob,
   buildMultipartBody,
   downloadDriveProjectFile,
   driveErrorFromResponse,
   driveFileViewUrl,
   escapeDriveQueryValue,
   findOrCreateSketchForgeFolder,
+  isDriveProjectFileName,
   listDriveProjectFiles,
   uploadProjectToDrive,
 } from "@/lib/googleDrive";
@@ -66,6 +68,38 @@ describe("buildMultipartBody", () => {
         "",
       ].join("\r\n"),
     );
+  });
+});
+
+describe("buildMultipartBlob", () => {
+  it("wraps binary .skf bytes unmodified between the multipart text parts", async () => {
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff]);
+    const blob = buildMultipartBlob({ name: "part.skf" }, bytes, "b2", "application/vnd.sketchforge.project+zip");
+    const body = new Uint8Array(await blob.arrayBuffer());
+    const head = [
+      "--b2",
+      "Content-Type: application/json; charset=UTF-8",
+      "",
+      '{"name":"part.skf"}',
+      "--b2",
+      "Content-Type: application/vnd.sketchforge.project+zip",
+      "",
+      "",
+    ].join("\r\n");
+    const headBytes = new TextEncoder().encode(head);
+    expect(Array.from(body.subarray(0, headBytes.length))).toEqual(Array.from(headBytes));
+    expect(Array.from(body.subarray(headBytes.length, headBytes.length + bytes.length))).toEqual(Array.from(bytes));
+    expect(new TextDecoder().decode(body.subarray(headBytes.length + bytes.length))).toBe("\r\n--b2--\r\n");
+  });
+});
+
+describe("isDriveProjectFileName", () => {
+  it("accepts packaged .skf projects and legacy .sketchforge files", () => {
+    expect(isDriveProjectFileName("Bracket.skf")).toBe(true);
+    expect(isDriveProjectFileName("Bracket.sketchforge")).toBe(true);
+    expect(isDriveProjectFileName("Rocket.sketchforge.json")).toBe(true);
+    expect(isDriveProjectFileName("notes.txt")).toBe(false);
+    expect(isDriveProjectFileName("skf")).toBe(false);
   });
 });
 
@@ -160,6 +194,37 @@ describe("uploadProjectToDrive", () => {
     expect(calls).toHaveLength(3);
   });
 
+  it("uploads binary .skf content with its media type", async () => {
+    const calls = stubFetchSequence([
+      jsonResponse(200, { files: [{ id: "folder-1" }] }),
+      jsonResponse(200, { id: "file-skf" }),
+    ]);
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+    const result = await uploadProjectToDrive("tok", {
+      fileName: "Bracket.skf",
+      content: bytes,
+      mimeType: "application/vnd.sketchforge.project+zip",
+    });
+    expect(result).toEqual({ fileId: "file-skf", fileName: "Bracket.skf", replacedMissingFile: false });
+    const body = calls[1].init.body as Blob;
+    expect(body).toBeInstanceOf(Blob);
+    const text = await body.text();
+    expect(text).toContain('"mimeType":"application/vnd.sketchforge.project+zip"');
+    expect(text).toContain("Content-Type: application/vnd.sketchforge.project+zip");
+  });
+
+  it("sends the media type in the metadata when updating a linked .skf file", async () => {
+    const calls = stubFetchSequence([jsonResponse(200, { id: "file-1" })]);
+    await uploadProjectToDrive("tok", {
+      fileName: "Bracket.skf",
+      content: new Uint8Array([1, 2, 3]),
+      mimeType: "application/vnd.sketchforge.project+zip",
+      existingFileId: "file-1",
+    });
+    expect(calls[0].init.method).toBe("PATCH");
+    expect(await (calls[0].init.body as Blob).text()).toContain('{"name":"Bracket.skf","mimeType":"application/vnd.sketchforge.project+zip"}');
+  });
+
   it("surfaces a quota error when Drive is full", async () => {
     stubFetchSequence([
       jsonResponse(403, { error: { message: "Quota exceeded", errors: [{ reason: "storageQuotaExceeded" }] } }),
@@ -185,7 +250,7 @@ describe("uploadProjectToDrive", () => {
 });
 
 describe("listDriveProjectFiles", () => {
-  it("returns only .sketchforge files, newest first as Drive orders them", async () => {
+  it("returns only SketchForge project files, newest first as Drive orders them", async () => {
     const calls = stubFetchSequence([
       jsonResponse(200, {
         files: [
@@ -193,11 +258,12 @@ describe("listDriveProjectFiles", () => {
           { id: "f2", name: "notes.txt", modifiedTime: "2026-07-21T01:00:00.000Z" },
           { id: "f3", name: "Rocket.sketchforge.json", modifiedTime: "2026-07-20T01:00:00.000Z" },
           { id: "f4", name: "broken-entry" },
+          { id: "f5", name: "Gear.skf", modifiedTime: "2026-07-19T01:00:00.000Z" },
         ],
       }),
     ]);
     const files = await listDriveProjectFiles("tok");
-    expect(files.map((file) => file.fileId)).toEqual(["f1", "f3"]);
+    expect(files.map((file) => file.fileId)).toEqual(["f1", "f3", "f5"]);
     expect(files[0]).toEqual({
       fileId: "f1",
       fileName: "Bracket.sketchforge",
@@ -213,9 +279,10 @@ describe("listDriveProjectFiles", () => {
 });
 
 describe("downloadDriveProjectFile", () => {
-  it("downloads the file content as text", async () => {
+  it("downloads the file content as raw bytes", async () => {
     const calls = stubFetchSequence([new Response('{"format":"sketchforge-project"}', { status: 200 })]);
-    await expect(downloadDriveProjectFile("tok", "file-1")).resolves.toBe('{"format":"sketchforge-project"}');
+    const bytes = await downloadDriveProjectFile("tok", "file-1");
+    expect(new TextDecoder().decode(bytes)).toBe('{"format":"sketchforge-project"}');
     expect(calls[0].url).toContain("/files/file-1?alt=media");
   });
 

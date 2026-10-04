@@ -3,12 +3,31 @@ import {
   PROJECT_FILE_FORMAT,
   PROJECT_FILE_VERSION,
   isProjectFileName,
+  looksLikeProjectFile,
   parseProjectFile,
-  projectFileName,
-  serializeProjectFile,
+  projectFileNameStem,
+  restoredProjectFromLegacyFile,
 } from "@/lib/projectFile";
+import { exportSkfProject, importSkfProject } from "@/lib/skfProject";
 import { DEFAULT_WORKPLANE_WORKSPACE } from "@/lib/workplaneSettings";
-import type { WorkplaneShape } from "@/types/sketchforge";
+import type { GridSize, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+
+// SketchForge no longer writes .sketchforge files; this builds the exact
+// envelope the fork's serializeProjectFile wrote, as a fixture for the reader.
+function legacyFileText(payload: { name: string; workspace?: WorkplaneWorkspaceSettings; snapGrid?: GridSize; shapes: WorkplaneShape[] }, savedAt = 1_752_300_000_000) {
+  return JSON.stringify({
+    format: PROJECT_FILE_FORMAT,
+    version: PROJECT_FILE_VERSION,
+    savedAt,
+    app: { name: "SketchForge", version: "0.5.0" },
+    project: {
+      name: payload.name,
+      workspace: payload.workspace ?? DEFAULT_WORKPLANE_WORKSPACE,
+      snapGrid: payload.snapGrid ?? "1.0 mm",
+      shapes: payload.shapes,
+    },
+  });
+}
 
 const solidBox: WorkplaneShape = {
   id: "shape-box-1",
@@ -78,10 +97,10 @@ const importedMeshShape: WorkplaneShape = {
   },
 };
 
-describe("serializeProjectFile / parseProjectFile", () => {
-  it("round-trips name, settings, and shapes including groups, holes, and meshes", () => {
+describe("parseProjectFile", () => {
+  it("reads name, settings, and shapes including groups, holes, and meshes", () => {
     const workspace = { ...DEFAULT_WORKPLANE_WORKSPACE, width: 300, showGrid: false };
-    const text = serializeProjectFile({
+    const text = legacyFileText({
       name: "Bracket v2",
       workspace,
       snapGrid: "0.5 mm",
@@ -104,19 +123,6 @@ describe("serializeProjectFile / parseProjectFile", () => {
     expect(parsedGroup.groupedShapes?.[1].hole).toBe(true);
     expect(parsedMesh.importedMesh?.positions).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     expect(parsedMesh.importedMesh?.sourceFormat).toBe("stl");
-  });
-
-  it("writes the declared format and version envelope", () => {
-    const envelope = JSON.parse(serializeProjectFile({ name: "X", shapes: [] })) as {
-      format: string;
-      version: number;
-      savedAt: number;
-      project: { name: string };
-    };
-    expect(envelope.format).toBe(PROJECT_FILE_FORMAT);
-    expect(envelope.version).toBe(PROJECT_FILE_VERSION);
-    expect(typeof envelope.savedAt).toBe("number");
-    expect(envelope.project.name).toBe("X");
   });
 
   it("defaults workspace and snap grid when the file omits them", () => {
@@ -218,17 +224,6 @@ describe("serializeProjectFile / parseProjectFile", () => {
   });
 });
 
-describe("projectFileName", () => {
-  it("uses the sanitized project name with the .sketchforge extension", () => {
-    expect(projectFileName("Gearbox Prototype")).toBe("Gearbox Prototype.sketchforge");
-    expect(projectFileName("  enclosure: v2 / final?  ")).toBe("enclosure- v2 - final-.sketchforge");
-  });
-
-  it("falls back when the name cannot be used", () => {
-    expect(projectFileName("...")).toBe("SketchForge design.sketchforge");
-  });
-});
-
 describe("isProjectFileName", () => {
   it("matches .sketchforge and .sketchforge.json case-insensitively", () => {
     expect(isProjectFileName("part.sketchforge")).toBe(true);
@@ -240,5 +235,92 @@ describe("isProjectFileName", () => {
     expect(isProjectFileName("part.stl")).toBe(false);
     expect(isProjectFileName("part.json")).toBe(false);
     expect(isProjectFileName("sketchforge")).toBe(false);
+  });
+});
+
+describe("looksLikeProjectFile", () => {
+  it("recognises a legacy project by its envelope, whatever the file is called", () => {
+    const bytes = new TextEncoder().encode(legacyFileText({ name: "Renamed", shapes: [] }));
+    expect(looksLikeProjectFile(bytes)).toBe(true);
+    expect(looksLikeProjectFile(bytes.buffer)).toBe(true);
+  });
+
+  it("does not claim .skf packages or other JSON", () => {
+    expect(looksLikeProjectFile(new Uint8Array([0x50, 0x4b, 0x03, 0x04]))).toBe(false);
+    expect(looksLikeProjectFile(new TextEncoder().encode('{"schema":"com.sketchforge.project"}'))).toBe(false);
+  });
+});
+
+describe("restoredProjectFromLegacyFile", () => {
+  it("converts a legacy file into the in-memory shape importSkfProject returns", () => {
+    const workspace = { ...DEFAULT_WORKPLANE_WORKSPACE, width: 300 };
+    const restored = restoredProjectFromLegacyFile(
+      legacyFileText({ name: "Old name", workspace, snapGrid: "0.5 mm", shapes: [groupShape, importedMeshShape] }, 1_752_300_000_000),
+      "Bracket v3.sketchforge",
+    );
+    expect(restored.projectName).toBe("Bracket v3");
+    expect(restored.createdAt).toBe(1_752_300_000_000);
+    expect(restored.modifiedAt).toBe(1_752_300_000_000);
+    expect(restored.workspace.width).toBe(300);
+    expect(restored.snapGrid).toBe("0.5 mm");
+    expect(restored.shapes.map((shape) => shape.id)).toEqual(["shape-group-1", "shape-mesh-1"]);
+    expect(restored.history).toHaveLength(1);
+    expect(restored.history[0].shapes).toEqual(restored.shapes);
+    expect(restored.historyIndex).toBe(0);
+    expect(restored.assets).toEqual([]);
+    expect(restored.placementElevation).toBe(0);
+    expect(restored.droppedShapeCount).toBe(0);
+  });
+
+  it("falls back to the stored name when the file name has no usable stem", () => {
+    expect(restoredProjectFromLegacyFile(legacyFileText({ name: "Stored", shapes: [] }), ".sketchforge").projectName).toBe("Stored");
+    expect(restoredProjectFromLegacyFile(legacyFileText({ name: "Stored", shapes: [] })).projectName).toBe("Stored");
+  });
+
+  it("drops device-local mesh storage references", () => {
+    const meshWithStorage = {
+      ...importedMeshShape,
+      importedMesh: { ...importedMeshShape.importedMesh!, storageResourceId: "mesh-1", assetId: "asset-1" },
+    };
+    const restored = restoredProjectFromLegacyFile(legacyFileText({ name: "M", shapes: [meshWithStorage] }));
+    expect(restored.shapes[0].importedMesh?.storageResourceId).toBeUndefined();
+    expect(restored.shapes[0].importedMesh?.assetId).toBeUndefined();
+    expect(restored.shapes[0].importedMesh?.positions).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  });
+
+  it("can be saved as .skf and reopened with the same shapes", async () => {
+    const restored = restoredProjectFromLegacyFile(
+      legacyFileText({ name: "Round trip", snapGrid: "2.0 mm", shapes: [groupShape, importedMeshShape] }),
+      "Round trip.sketchforge.json",
+    );
+    const bytes = await exportSkfProject({
+      projectName: restored.projectName,
+      createdAt: restored.createdAt,
+      modifiedAt: restored.modifiedAt,
+      shapes: restored.shapes,
+      history: restored.history,
+      historyIndex: restored.historyIndex,
+      assets: restored.assets,
+      workspace: restored.workspace,
+      snapGrid: restored.snapGrid,
+      placementElevation: restored.placementElevation,
+      placementWorkplane: restored.placementWorkplane,
+      sketchPlacementWorkplane: restored.sketchPlacementWorkplane,
+    });
+    const reopened = await importSkfProject(bytes);
+    expect(reopened.projectName).toBe("Round trip");
+    expect(reopened.snapGrid).toBe("2.0 mm");
+    expect(reopened.shapes.map((shape) => shape.id)).toEqual(["shape-group-1", "shape-mesh-1"]);
+    expect(reopened.shapes[0].groupedShapes?.map((shape) => shape.id)).toEqual(["shape-box-1", "shape-cyl-1"]);
+    expect(reopened.shapes[0].groupedShapes?.[1].hole).toBe(true);
+    expect(reopened.shapes[1].importedMesh?.positions).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  });
+});
+
+describe("projectFileNameStem", () => {
+  it("strips either legacy extension", () => {
+    expect(projectFileNameStem("Gear.sketchforge")).toBe("Gear");
+    expect(projectFileNameStem("Gear.SKETCHFORGE.json")).toBe("Gear");
+    expect(projectFileNameStem("Gear.skf")).toBe("Gear.skf");
   });
 });

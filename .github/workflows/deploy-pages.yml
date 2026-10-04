@@ -24,12 +24,25 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run pages:build
+      # Upstream's static export (STATIC_EXPORT=true; see apps/web/next.config.ts),
+      # served from /<repository>/ on Pages. `npm run build` also stages the
+      # OCCT runtime through its prebuild step.
+      - name: Build static export
+        run: npm run build
         env:
+          STATIC_EXPORT: "true"
+          GITHUB_PAGES: "true"
+          PAGES_BASE_PATH: /${{ github.event.repository.name }}
+          SKETCHFORGE_BUILD_ID: ${{ github.sha }}
           NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+      - name: Verify static worker assets
+        run: npm run verify:static-worker-assets
+        env:
+          GITHUB_PAGES: "true"
+          PAGES_BASE_PATH: /${{ github.event.repository.name }}
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: apps/web/out
+          path: apps/web/.next-export
 
   deploy:
     environment:

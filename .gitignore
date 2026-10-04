@@ -5,6 +5,8 @@ node_modules/
 
 # Next.js
 .next/
+.next-dev/
+.next-export/
 out/
 build/
 dist/
@@ -34,6 +36,7 @@ playwright-report/
 .codex/
 .codex-run/
 .codex-remote-attachments/
+.tools/
 
 # OS/editor noise
 .DS_Store
