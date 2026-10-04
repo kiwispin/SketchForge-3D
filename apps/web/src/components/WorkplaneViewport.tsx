@@ -57,7 +57,7 @@ import {
 import { regularPolygonFootprintScale } from "@/lib/regularPolygonFootprint";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint, workspaceHydrationSyncDecision } from "@/lib/workplaneSettings";
 import { interiorWorkplaneGridCoordinates, workplaneThemePalette, WORKPLANE_LINE_ELEVATION, WORKPLANE_MAJOR_GRID_INTERVAL } from "@/lib/workplaneGrid";
-import { cleanNearZero, cleanRotationDegrees, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
+import { cleanNearZero, cleanRotationDegrees, constrainedAxisMoveDelta, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { sphereTessellation } from "@/lib/sphereTessellation";
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
@@ -65,12 +65,15 @@ import {
   buildRotationPlaneDescriptor,
   feedbackScreenPoint,
   formatAngleText,
+  formatDeltaText,
   frameRotationPlanes,
   getElevationMeasureKey,
   measureKeyForHandle,
+  projectedMoveHandle,
   rotationSnapDelta,
   rotationWheelLocalRadius,
   rotationWheelPoint,
+  separatedLiftHandlePoint,
   signedAngleAroundAxis,
   unwrapRadians,
   type DimensionMark,
@@ -455,6 +458,11 @@ type TransformDragState = {
   liftStartPoint?: THREE.Vector3;
   liftHandlePoint?: THREE.Vector3;
   liftStartValue?: number;
+  movePlane?: THREE.Plane;
+  moveStartPoint?: THREE.Vector3;
+  moveAxis?: THREE.Vector3;
+  /** True when the move axis is world X or Z, so the workspace bounds apply. */
+  moveAxisIsWorldHorizontal?: boolean;
   rotationAxisVector?: THREE.Vector3;
   rotationPivot?: THREE.Vector3;
   rotationPlaneCenter?: THREE.Vector3;
@@ -2159,6 +2167,7 @@ export function WorkplaneViewport({
   const [workspace, setWorkspace] = useState<WorkspaceSettings>(() => normalizeWorkspaceSettings(initialWorkspace));
   const [transformOverlay, setTransformOverlay] = useState<TransformOverlayState | null>(null);
   const [smartGuideOverlay, setSmartGuideOverlay] = useState<SmartGuideOverlayState | null>(null);
+  const [directDragActive, setDirectDragActive] = useState(false);
   const [alignOverlay, setAlignOverlay] = useState<AlignOverlayState | null>(null);
   const [mirrorOverlay, setMirrorOverlay] = useState<MirrorOverlayState | null>(null);
   const [marqueeRect, setMarqueeRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -2484,6 +2493,7 @@ export function WorkplaneViewport({
       setActiveRotationWheel(false);
       setHoveredRotationWheelAxis(null);
       setActiveTransformKind(null);
+      setDirectDragActive(Boolean(dragRef.current));
     }
     selectedIdsRef.current = selectedIds;
     rebuildShapes(
@@ -3276,10 +3286,25 @@ export function WorkplaneViewport({
       const liftStartValue = kind === "lift"
         ? workplaneFootprintY(frame, activeWorkplane) - workplaneYForFrame(frame, activeWorkplane)
         : undefined;
+      // Axis move handles drag in the selection's horizontal (workplane) plane
+      // through its centre and keep only the component along their axis.
+      const movePlane = kind === "move"
+        ? new THREE.Plane().setFromNormalAndCoplanarPoint(frame.yAxis.clone().normalize(), frame.center)
+        : undefined;
+      const moveStartPoint = movePlane ? toRawPlanePoint(event.clientX, event.clientY, movePlane) ?? undefined : undefined;
+      const moveAxis = kind === "move"
+        ? (handleKey === "move-x" ? frame.xAxis : frame.zAxis).clone().normalize()
+        : undefined;
+      const moveAxisIsWorldHorizontal = moveAxis
+        ? Math.abs(Math.abs(moveAxis.x) - 1) < 1e-6 || Math.abs(Math.abs(moveAxis.z) - 1) < 1e-6
+        : undefined;
       if (kind === "scale" && !scaleStartPoint) {
         return;
       }
       if ((kind === "lift" || kind === "height") && !liftStartPoint) {
+        return;
+      }
+      if (kind === "move" && !moveStartPoint) {
         return;
       }
       rememberResizeAnchor(shape.id, kind, resizeHandleKey);
@@ -3293,6 +3318,7 @@ export function WorkplaneViewport({
       }
       setActiveRotationWheel(kind === "rotate");
       setActiveTransformKind(kind);
+      setDirectDragActive(false);
       setActiveRotationAxis(kind === "rotate" ? rotationAxis : null);
       setSelectionHelpersVisible(state ?? null, kind !== "rotate");
       if (kind === "rotate") {
@@ -3332,6 +3358,10 @@ export function WorkplaneViewport({
         liftStartPoint,
         liftHandlePoint,
         liftStartValue,
+        movePlane,
+        moveStartPoint,
+        moveAxis,
+        moveAxisIsWorldHorizontal,
         rotationAxisVector: kind === "rotate" ? axisVector : undefined,
         rotationPivot: kind === "rotate" ? pivot : undefined,
         rotationPlaneCenter: kind === "rotate" ? rotationPlaneCenter : undefined,
@@ -3355,10 +3385,11 @@ export function WorkplaneViewport({
         });
       } else if (kind === "lift" && state) {
         const renderRect = state.renderer.domElement.getBoundingClientRect();
+        const readoutPoint = feedbackScreenPoint({ x: event.clientX - renderRect.left, y: event.clientY - renderRect.top }, { width: renderRect.width, height: renderRect.height });
         setRotationReadout({
-          x: event.clientX - renderRect.left + 22,
-          y: event.clientY - renderRect.top - 34,
-          text: formatMeasure(liftStartValue ?? 0, workspaceRef.current.accuracy),
+          x: readoutPoint.x,
+          y: readoutPoint.y,
+          text: formatDeltaText(0, "Y", workspaceRef.current.accuracy),
         });
       } else {
         setRotationReadout(null);
@@ -3456,6 +3487,62 @@ export function WorkplaneViewport({
       }
 
       const step = snapStep(snapRef.current);
+      const feedbackViewport = {
+        width: transformOverlayRef.current?.width ?? 1200,
+        height: transformOverlayRef.current?.height ?? 800,
+      };
+      if (transform.kind === "move") {
+        const point = transform.movePlane ? toRawPlanePoint(clientX, clientY, transform.movePlane) : null;
+        if (!point || !transform.moveStartPoint || !transform.moveAxis) {
+          return true;
+        }
+        const moveAxis = transform.moveAxis;
+        const requestedDelta = snapValue(point.clone().sub(transform.moveStartPoint).dot(moveAxis), step);
+        let delta = requestedDelta;
+        const movingAlongX = Math.abs(moveAxis.x) >= Math.abs(moveAxis.z);
+        if (transform.moveAxisIsWorldHorizontal) {
+          // Keep every moved shape inside the workspace, as the fork does.
+          const limit = Math.max(
+            0,
+            (movingAlongX ? workspaceRef.current.width : workspaceRef.current.depth) / 2 - 6,
+          );
+          const axisSign = (movingAlongX ? moveAxis.x : moveAxis.z) >= 0 ? 1 : -1;
+          const startValues = transform.items.map((item) => movingAlongX ? item.startShape.x : item.startShape.z);
+          delta = axisSign * constrainedAxisMoveDelta(startValues, axisSign * requestedDelta, -limit, limit);
+          transform.items.forEach((item) =>
+            onUpdateShape(item.id, movingAlongX
+              ? { x: cleanNearZero(item.startShape.x + axisSign * delta, 0.0005) }
+              : { z: cleanNearZero(item.startShape.z + axisSign * delta, 0.0005) }),
+          );
+        } else {
+          // Tilted workplane: move along the workplane axis without the
+          // world-X/Z workspace clamp (upstream's free drag does the same).
+          transform.items.forEach((item) => {
+            const nextCenter = item.startCenter.clone().addScaledVector(moveAxis, delta);
+            onUpdateShape(item.id, {
+              x: cleanNearZero(nextCenter.x, 0.0005),
+              z: cleanNearZero(nextCenter.z, 0.0005),
+              elevation: cleanNearZero(clamp(nextCenter.y - item.startShape.height / 2, MIN_ELEVATION, MAX_ELEVATION), 0.0005),
+            });
+          });
+        }
+        const state = threeRef.current;
+        if (state) {
+          const axisLabel = transform.handleKey === "move-x" ? "X" : "Z";
+          const readoutWorldPoint = transform.selectionFrame.center
+            .clone()
+            .addScaledVector(moveAxis, Math.max(transform.selectionFrame.width, transform.selectionFrame.depth, 8) * 0.22);
+          const readoutPoint = feedbackScreenPoint(projectToScreen(readoutWorldPoint, state), feedbackViewport);
+          setRotationReadout({
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(delta, axisLabel, workspaceRef.current.accuracy),
+            angle: 0,
+          });
+        }
+        return true;
+      }
+
       if (transform.kind === "height") {
         const axis = (transform.liftAxis ?? transform.selectionFrame.yAxis).clone().normalize();
         const currentPoint = transform.liftPlane
@@ -3477,6 +3564,20 @@ export function WorkplaneViewport({
             resizeShapeAlongFrameNormal(item.startShape, transform.selectionFrame, nextFrameHeight, resizingFromBottom),
           );
         });
+        const state = threeRef.current;
+        if (state) {
+          const frame = transform.selectionFrame;
+          const heightChange = nextFrameHeight - frame.height;
+          const handleWorld = framePoint(frame, 0, resizingFromBottom ? frame.min.y : frame.max.y, 0)
+            .addScaledVector(axis, resizingFromBottom ? -heightChange : heightChange);
+          const readoutPoint = feedbackScreenPoint(projectToScreen(handleWorld, state), feedbackViewport);
+          setRotationReadout({
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(heightChange, "H", workspaceRef.current.accuracy),
+            angle: 0,
+          });
+        }
         return true;
       }
 
@@ -3503,11 +3604,11 @@ export function WorkplaneViewport({
         });
         if (state) {
           const readoutWorld = (transform.liftHandlePoint ?? transform.selectionFrame.center).clone().addScaledVector(axis, delta);
-          const readoutPoint = projectToScreen(readoutWorld, state);
+          const readoutPoint = feedbackScreenPoint(projectToScreen(readoutWorld, state), feedbackViewport);
           setRotationReadout({
-            x: readoutPoint.x + 28,
-            y: readoutPoint.y - 30,
-            text: formatMeasure((transform.liftStartValue ?? 0) + delta, workspaceRef.current.accuracy),
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(delta, "Y", workspaceRef.current.accuracy),
           });
         }
         return true;
@@ -3518,11 +3619,31 @@ export function WorkplaneViewport({
         if (!worldPoint) {
           return true;
         }
-        if (transform.items.length === 1) {
-          const next = resizeShapeFromFrameHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step);
-          onUpdateShape(transform.id, next);
-        } else {
-          resizeSelectionFromHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step).forEach(({ id, patch }) => onUpdateShape(id, patch));
+        const patches = transform.items.length === 1
+          ? [{ id: transform.id, patch: resizeShapeFromFrameHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step) }]
+          : resizeSelectionFromHandle(transform, worldPoint, transform.handleKey, shiftKey, altKey, step);
+        patches.forEach(({ id, patch }) => onUpdateShape(id, patch));
+        const state = threeRef.current;
+        if (state) {
+          // Report the change of the displayed (workplane-aligned) frame, so
+          // the ΔW · ΔD · ΔH readout matches the dimension labels.
+          const readoutPoint = feedbackScreenPoint(
+            projectToScreen(transform.scaleAnchorPoint ?? transform.selectionFrame.center, state),
+            feedbackViewport,
+          );
+          const patchById = new Map(patches.map(({ id, patch }) => [id, patch]));
+          const previewShapes = shapesRef.current.map((entry) => patchById.has(entry.id) ? { ...entry, ...patchById.get(entry.id) } : entry);
+          const nextFrame = selectionFrameForShapes(previewShapes, transform.ids, placementWorkplaneRef.current);
+          const widthDelta = nextFrame ? nextFrame.width - transform.selectionFrame.width : 0;
+          const depthDelta = nextFrame ? nextFrame.depth - transform.selectionFrame.depth : 0;
+          const heightDelta = nextFrame ? nextFrame.height - transform.selectionFrame.height : 0;
+          const accuracy = workspaceRef.current.accuracy;
+          setRotationReadout({
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: `${formatDeltaText(widthDelta, "W", accuracy)} · ${formatDeltaText(depthDelta, "D", accuracy)} · ${formatDeltaText(heightDelta, "H", accuracy)}`,
+            angle: 0,
+          });
         }
         return true;
       }
@@ -4056,6 +4177,7 @@ export function WorkplaneViewport({
         }
         setActiveRotationWheel(handle.kind === "rotate");
         setActiveTransformKind(handle.kind);
+        setDirectDragActive(false);
         setActiveRotationAxis(handle.kind === "rotate" ? rotationAxis : null);
         setSelectionHelpersVisible(state, handle.kind !== "rotate");
         if (handle.kind === "rotate") {
@@ -4116,10 +4238,11 @@ export function WorkplaneViewport({
             angle: 0,
           });
         } else if (handle.kind === "lift") {
+          const readoutPoint = feedbackScreenPoint({ x: event.clientX - rect.left, y: event.clientY - rect.top }, { width: rect.width, height: rect.height });
           setRotationReadout({
-            x: event.clientX - rect.left + 22,
-            y: event.clientY - rect.top - 34,
-            text: formatMeasure(liftStartValue ?? 0, workspaceRef.current.accuracy),
+            x: readoutPoint.x,
+            y: readoutPoint.y,
+            text: formatDeltaText(0, "Y", workspaceRef.current.accuracy),
           });
         } else {
           setRotationReadout(null);
@@ -4223,6 +4346,7 @@ export function WorkplaneViewport({
         hasMoved: false,
         items,
       };
+      setDirectDragActive(true);
       const usesWorldHorizontalAxes = Math.abs(activeWorkplane.normal.y - 1) < 1e-6
         && Math.abs(activeWorkplane.xAxis.x - 1) < 1e-6
         && Math.abs(activeWorkplane.zAxis.z - 1) < 1e-6;
@@ -4494,6 +4618,7 @@ export function WorkplaneViewport({
         clearMoveDimensions();
       }
       dragRef.current = null;
+      setDirectDragActive(false);
       updateSmartGuideOverlayIfChanged(smartGuideOverlayRef, setSmartGuideOverlay, null);
       if (state) {
         // A moved shape triggers the shapes effect, which rebuilds this preview.
@@ -4923,7 +5048,7 @@ export function WorkplaneViewport({
               showRotationWheel={activeRotationWheel || hoveredRotationWheelAxis !== null}
               activeRotationAxis={activeRotationAxis}
               hideSelectionChrome={false}
-              hideDimensionMarks={false}
+              hideDimensionMarks={activeTransformKind === "scale" || activeTransformKind === "move" || directDragActive}
               rotationWheelAxis={rotationWheelAxis}
               pinnedRotationWheelView={pinnedRotationWheelView}
               onBeginCameraDrag={beginCameraDragFromOverlay}
@@ -6497,13 +6622,23 @@ function syncTransformOverlay(
   const bottomCenterPoint = project(bottomCenterWorld);
   const topPoint = project(topCenterWorld);
   const heightPoint = project(showLowerHandles ? lowerCenterWorld : upperCenterWorld);
-  const liftPoint = project(liftHandle);
-  const liftBasePoint = project(showLowerHandles ? lowerCenterWorld : upperCenterWorld);
+  // Keep the lift arrow a minimum screen distance from the height handle so
+  // the two never overlap (e.g. looking straight down).
+  const liftPoint = separatedLiftHandlePoint(heightPoint, project(liftHandle), showLowerHandles);
+  const liftBasePoint = heightPoint;
   const liftTargetAngle = THREE.MathUtils.radToDeg(
     Math.atan2(liftPoint.y - liftBasePoint.y, liftPoint.x - liftBasePoint.x),
   );
   const liftHandleAngle = liftTargetAngle - (showLowerHandles ? 90 : -90);
   const centerPoint = project(frame.center);
+  // Tinkercad-style X/Z move handles sit just outside the selection along the
+  // projected frame (workplane) axes.
+  const xMoveAxisPoint = project(framePoint(frame, frame.max.x, 0, 0));
+  const zMoveAxisPoint = project(framePoint(frame, 0, 0, frame.max.z));
+  const xMoveEdgeDistance = Math.hypot(xMoveAxisPoint.x - centerPoint.x, xMoveAxisPoint.y - centerPoint.y);
+  const zMoveEdgeDistance = Math.hypot(zMoveAxisPoint.x - centerPoint.x, zMoveAxisPoint.y - centerPoint.y);
+  const moveXPoint = projectedMoveHandle(centerPoint, xMoveAxisPoint, 0, xMoveEdgeDistance + 28);
+  const moveZPoint = projectedMoveHandle(centerPoint, zMoveAxisPoint, Math.PI / 2, zMoveEdgeDistance + 28);
   const footprintGuides = [
     { x1: bottom.nearLeft.x, y1: bottom.nearLeft.y, x2: bottom.nearRight.x, y2: bottom.nearRight.y },
     { x1: bottom.nearRight.x, y1: bottom.nearRight.y, x2: bottom.farRight.x, y2: bottom.farRight.y },
@@ -6722,8 +6857,10 @@ function syncTransformOverlay(
       { key: "right-mid", className: "edge dark", kind: "scale" as const, x: mid.right.x, y: mid.right.y, title: "Resize" },
       { key: "far-mid", className: "edge dark", kind: "scale" as const, x: mid.far.x, y: mid.far.y, title: "Resize" },
       { key: "left-mid", className: "edge dark", kind: "scale" as const, x: mid.left.x, y: mid.left.y, title: "Resize" },
+      { key: "move-x", className: "move-axis axis-x", kind: "move" as const, x: moveXPoint.x, y: moveXPoint.y, angle: moveXPoint.angle, title: "Move left or right (X axis)" },
+      { key: "move-z", className: "move-axis axis-z", kind: "move" as const, x: moveZPoint.x, y: moveZPoint.y, angle: moveZPoint.angle, title: "Move forward or back (Z axis)" },
       { key: heightHandleKey, className: "height-top", kind: "height" as const, x: heightPoint.x, y: heightPoint.y, title: "Height" },
-      { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, title: "Lift", angle: liftHandleAngle },
+      { key: liftHandleKey, className: showLowerHandles ? "height-lift lower" : "height-lift", kind: "lift" as const, x: liftPoint.x, y: liftPoint.y, title: "Move up or down", angle: liftHandleAngle },
     ],
     rotateHandles: [
       ...(upperXVisible ? [{
