@@ -7,6 +7,7 @@ import { applyAppTheme, readStoredAppTheme, resolveAppTheme, storeAppTheme, type
 import { hydrateEditorHistoryState, type EditorHistoryEntry } from "@/lib/editorHistory";
 import { DriveError, downloadProjectFromDrive, isDriveConfigured, listProjectsFromDrive, preloadGoogleIdentity, type DriveProjectFileInfo } from "@/lib/googleDrive";
 import { createLocalId } from "@/lib/localIds";
+import { isProjectFileName, looksLikeProjectFile, restoredProjectFromLegacyFile } from "@/lib/projectFile";
 import {
   horizontalPlacementWorkplane,
   normalizePlacementWorkplane,
@@ -18,7 +19,7 @@ import { hydrateProjectShapeState, type ImportedMeshResource } from "@/lib/proje
 import { exportSkfProject, importSkfProject, SKF_CREATED_WITH_VERSION, type SkfRestoredProject } from "@/lib/skfProject";
 import { importExtensionSupported } from "@/lib/stlImport";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
-import type { GridSize, ProjectAsset, ProjectDriveFile, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { GridSize, ProjectAsset, ProjectDriveFile, ProjectSaveStatus, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 type AppView = "dashboard" | "editor";
 type ViewMode = "grid" | "list";
@@ -513,9 +514,31 @@ function projectFileNameStem(fileName: string) {
   return fileName.replace(/\.(skf|sketchforge(\.json)?)$/i, "").trim();
 }
 
-async function restoreProjectFromBytes(fileName: string, bytes: ArrayBuffer): Promise<SkfRestoredProject> {
-  void fileName;
-  return importSkfProject(bytes);
+// Files the open-project paths accept: packaged .skf projects and legacy
+// .sketchforge(.json) files from earlier builds.
+function isOpenableProjectFileName(fileName: string) {
+  return /\.skf$/i.test(fileName) || isProjectFileName(fileName);
+}
+
+type OpenedProjectFile = { restored: SkfRestoredProject; legacy: boolean; droppedShapeCount: number };
+
+async function restoreProjectFromBytes(fileName: string, bytes: ArrayBuffer): Promise<OpenedProjectFile> {
+  if (isProjectFileName(fileName) || looksLikeProjectFile(bytes)) {
+    // Read-only path for the fork's JSON format; the result is saved as .skf.
+    const { droppedShapeCount, ...restored } = restoredProjectFromLegacyFile(new TextDecoder().decode(bytes), fileName);
+    return { restored, legacy: true, droppedShapeCount };
+  }
+  return { restored: await importSkfProject(bytes), legacy: false, droppedShapeCount: 0 };
+}
+
+function droppedShapesNote(opened: OpenedProjectFile) {
+  return opened.droppedShapeCount > 0
+    ? ` (skipped ${opened.droppedShapeCount} unreadable shape${opened.droppedShapeCount === 1 ? "" : "s"})`
+    : "";
+}
+
+function legacyOpenNote(opened: OpenedProjectFile) {
+  return opened.legacy ? `${droppedShapesNote(opened)}; it saves as .skf from now on` : "";
 }
 
 export default function Home() {
@@ -540,6 +563,8 @@ export default function Home() {
   const [sharedProjectsLoading, setSharedProjectsLoading] = useState(false);
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
   const [driveDialog, setDriveDialog] = useState<DriveOpenDialogState | null>(null);
+  const [projectSaveStatus, setProjectSaveStatus] = useState<ProjectSaveStatus>("idle");
+  const pendingProjectSavesRef = useRef(0);
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
   const nextProjectRevisionRef = useRef(0);
@@ -841,9 +866,15 @@ export default function Home() {
     };
     const queuedSave = previousSave.catch(() => undefined).then(() => saveProjectShapesWhenIdle(snapshot.projectId, entry, saveContext));
     projectShapeSaveQueuesRef.current[snapshot.projectId] = queuedSave;
+    pendingProjectSavesRef.current += 1;
+    setProjectSaveStatus("saving");
 
     void queuedSave
       .then(() => {
+        pendingProjectSavesRef.current -= 1;
+        if (pendingProjectSavesRef.current === 0) {
+          setProjectSaveStatus("saved");
+        }
         setProjects((current) =>
           current.map((project) =>
             project.id === snapshot.projectId && (project.revision ?? 0) <= revision
@@ -853,6 +884,8 @@ export default function Home() {
         );
       })
       .catch((error) => {
+        pendingProjectSavesRef.current -= 1;
+        setProjectSaveStatus("error");
         if (projectShapeSaveQueuesRef.current[snapshot.projectId] === queuedSave) {
           setDashboardNotice(error instanceof Error ? error.message : "Could not save project shapes");
         }
@@ -962,11 +995,12 @@ export default function Home() {
   const openSkfProjectFromFile = useCallback(async (file: File, sharedProject?: SharedProject) => {
     setDashboardNotice(`Validating ${file.name} before opening it as a new project`);
     try {
-      const restored = await restoreProjectFromBytes(file.name, await file.arrayBuffer());
-      const project = await addRestoredProject(restored, { sharedProject });
-      setDashboardNotice(sharedProject ? `Opened shared project ${sharedProject.name}; edits autosave locally until you save back to shared` : `Opened ${file.name} as a new editable local project`);
+      const opened = await restoreProjectFromBytes(file.name, await file.arrayBuffer());
+      const project = await addRestoredProject(opened.restored, { sharedProject });
+      const openedMessage = `Opened ${file.name} as a new editable local project${legacyOpenNote(opened)}`;
+      setDashboardNotice(sharedProject ? `Opened shared project ${sharedProject.name}; edits autosave locally until you save back to shared` : openedMessage);
       openEditor(project.id, { allowMissingFromStorage: true });
-      return { ok: true, message: sharedProject ? `Opened shared project ${sharedProject.name}` : `Opened ${file.name} as a new editable local project` };
+      return { ok: true, message: sharedProject ? `Opened shared project ${sharedProject.name}` : openedMessage };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not open SketchForge project";
       setDashboardNotice(message);
@@ -1000,8 +1034,9 @@ export default function Home() {
       setDriveDialog((current) => (current?.status === "ready" ? { ...current, openingFileId: file.fileId, message: undefined } : current));
       try {
         const bytes = await downloadProjectFromDrive(file.fileId);
-        const restored = await restoreProjectFromBytes(file.fileName, bytes);
-        const packaged = /\.skf$/i.test(file.fileName);
+        const opened = await restoreProjectFromBytes(file.fileName, bytes);
+        const { restored } = opened;
+        const packaged = !opened.legacy;
         // Only packaged .skf files are linked: SketchForge never overwrites a
         // legacy .sketchforge file, so the first Drive save of a legacy project
         // creates a new .skf file beside it.
@@ -1013,7 +1048,7 @@ export default function Home() {
         const project = await addRestoredProject(restored, { name, drive });
         let notice = packaged
           ? `Opened ${file.fileName} from Google Drive`
-          : `Opened ${file.fileName} from Google Drive; Save to Drive will create a new .skf file`;
+          : `Opened ${file.fileName} from Google Drive${droppedShapesNote(opened)}; Save to Drive creates a new .skf file beside it`;
         if (linked) {
           const linkedHasUnsyncedEdits = (linked.revision ?? 0) > (linked.drive?.savedAt ?? 0);
           if (linkedHasUnsyncedEdits) {
@@ -1094,10 +1129,10 @@ export default function Home() {
   const importFilesFromDashboard = useCallback(
     async (files: File[]) => {
       if (!files.length) return;
-      const projectFiles = files.filter((file) => /\.skf$/i.test(file.name));
+      const projectFiles = files.filter((file) => isOpenableProjectFileName(file.name));
       if (projectFiles.length) {
         if (files.length !== 1) {
-          setDashboardNotice("Open one .skf project at a time; import STL, STEP, and SVG geometry separately");
+          setDashboardNotice("Open one project file at a time; import STL, STEP, and SVG geometry separately");
           return;
         }
         await openSkfProjectFromFile(projectFiles[0]);
@@ -1252,7 +1287,7 @@ export default function Home() {
         className="hidden-file-input"
         type="file"
         multiple
-        accept=".skf,.stl,.step,.stp,.svg,image/svg+xml"
+        accept=".skf,.sketchforge,.sketchforge.json,.stl,.step,.stp,.svg,image/svg+xml"
         onChange={(event) => {
           const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
           if (files.length) {
@@ -1371,6 +1406,7 @@ export default function Home() {
             onProjectRename={(snapshot) => renameProject(snapshot.projectId, snapshot.name)}
             onOpenFromDrive={isDriveConfigured() ? openDriveDialog : undefined}
             driveFile={activeProject?.drive ?? null}
+            saveStatus={activeProjectId ? projectSaveStatus : null}
             projectId={activeProjectId}
             projectName={activeProject?.name}
             projectCreatedAt={activeProject?.createdAt}

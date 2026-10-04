@@ -90,6 +90,7 @@ import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceF
 import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
 import { buildSketchRevolveMesh, DEFAULT_SKETCH_REVOLVE_SETTINGS, normalizeSketchRevolveSettings, type SketchRevolveMesh } from "@/lib/sketchRevolve";
 import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
+import { isProjectFileName } from "@/lib/projectFile";
 import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
@@ -119,7 +120,7 @@ import {
   type SketchForgeMcpViewFace,
 } from "@/lib/sketchforgeMcpProtocol";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ProjectDriveFile, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ProjectDriveFile, ProjectSaveStatus, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export { importedShapeFromStl, importedShapeFromSvg };
 
@@ -5320,6 +5321,7 @@ export function SketchForgeEditor({
   onProjectRename,
   onOpenFromDrive,
   driveFile = null,
+  saveStatus = null,
   projectId,
   projectName = "SketchForge design",
   projectCreatedAt = Date.now(),
@@ -5368,6 +5370,7 @@ export function SketchForgeEditor({
   onProjectRename?: (snapshot: { projectId: string; name: string }) => void;
   onOpenFromDrive?: () => void;
   driveFile?: ProjectDriveFile | null;
+  saveStatus?: ProjectSaveStatus | null;
   projectId?: string | null;
   projectName?: string;
   projectCreatedAt?: number;
@@ -8647,10 +8650,11 @@ export function SketchForgeEditor({
 
   const importFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
-    const projectFiles = files.filter((file) => /\.skf$/i.test(file.name));
+    // Packaged .skf projects, plus legacy .sketchforge files opened read-only.
+    const projectFiles = files.filter((file) => /\.skf$/i.test(file.name) || isProjectFileName(file.name));
     if (projectFiles.length) {
       if (files.length !== 1) {
-        setNotice("Open one .skf project at a time; import STL, STEP, and SVG geometry separately");
+        setNotice("Open one project file at a time; import STL, STEP, and SVG geometry separately");
         return;
       }
       if (!onOpenSkfProjectFile) {
@@ -9066,6 +9070,7 @@ export function SketchForgeEditor({
           setMenuOpen(false);
         }}
         projectName={projectName}
+        saveStatus={saveStatus}
         onRenameProject={projectId && onProjectRename ? (name: string) => onProjectRename({ projectId, name }) : undefined}
       />
       <div className="editor-body">
@@ -9255,7 +9260,7 @@ export function SketchForgeEditor({
         ref={projectFileInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".skf"
+        accept=".skf,.sketchforge,.sketchforge.json"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           if (file) selectFiles([file]);
@@ -9371,6 +9376,7 @@ function SecondaryToolbar({
   onTopPanel,
   onAddShape,
   projectName,
+  saveStatus,
   onRenameProject,
 }: {
   toolbarMode: ToolbarMode;
@@ -9427,6 +9433,7 @@ function SecondaryToolbar({
   onTopPanel: (panel: TopPanel) => void;
   onAddShape: (shape: ShapeAsset) => void;
   projectName: string;
+  saveStatus?: ProjectSaveStatus | null;
   onRenameProject?: (name: string) => void;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
@@ -9915,6 +9922,11 @@ function SecondaryToolbar({
         ) : (
           <span className="project-name-static" title="Design name">{projectName}</span>
         )}
+        {saveStatus && saveStatus !== "idle" ? (
+          <span className={`autosave-indicator ${saveStatus}`} role="status" title="Designs autosave to this browser">
+            {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved ✓" : "Save failed"}
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -10109,7 +10121,7 @@ function TopActionPanel({
             <span className="open-skf-project-icon"><FolderOpen size={18} /></span>
             <span>
               <strong>Open SketchForge Project</strong>
-              <small>Restore an editable .skf file as a new local project</small>
+              <small>Restore an editable .skf (or older .sketchforge) file as a new local project</small>
             </span>
           </button>
           {driveConfigured && onOpenFromDrive ? (

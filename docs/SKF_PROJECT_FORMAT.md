@@ -63,6 +63,8 @@ The current format is version 1. Readers refuse a higher `formatVersion` or `min
 
 Future schema changes should add a version-to-version migration, run validation after every migration, and never mutate the user's original file.
 
+Earlier classroom builds saved a separate JSON format with the `.sketchforge` (or `.sketchforge.json`) extension: `{ "format": "sketchforge-project", "version": 1, "project": { name, workspace, snapGrid, shapes } }`. SketchForge still opens these, read-only, through `lib/projectFile.ts`: the file is parsed, unreadable shapes are skipped and counted, and the result is opened as a new project with a single history state, inline meshes and the base workplane. It is never written back in that format; saving the project produces a `.skf` file. A legacy file renamed to `.skf` is recognised by its JSON envelope.
+
 ## Current limitations
 
 - Projects created before source-asset tracking cannot recover the exact original STL/SVG file. Their existing normalized editable mesh is preserved as a deduplicated legacy cache and is identified by the absence of a source asset.

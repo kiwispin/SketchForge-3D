@@ -2023,6 +2023,24 @@ button {
   border-color: #cfdde8;
 }
 
+.toolbar-workspace-tabs .autosave-indicator {
+  align-self: center;
+  padding: 0 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.toolbar-workspace-tabs .autosave-indicator.saving {
+  color: #2563eb;
+}
+
+.toolbar-workspace-tabs .autosave-indicator.error {
+  color: #dc2626;
+}
+
 .toolbar-workspace-tabs .project-name-input:focus {
   background: #ffffff;
   border-color: #55add8;
@@ -7823,6 +7841,18 @@ html[data-theme="dark"] .drive-open-date {
 html[data-theme="dark"] .toolbar-workspace-tabs .project-name-input,
 html[data-theme="dark"] .toolbar-workspace-tabs .project-name-static {
   color: #d8e8f1;
+}
+
+html[data-theme="dark"] .toolbar-workspace-tabs .autosave-indicator {
+  color: #91a7b7;
+}
+
+html[data-theme="dark"] .toolbar-workspace-tabs .autosave-indicator.saving {
+  color: #74d8f2;
+}
+
+html[data-theme="dark"] .toolbar-workspace-tabs .autosave-indicator.error {
+  color: #ff9c92;
 }
 
 html[data-theme="dark"] .toolbar-workspace-tabs .project-name-input:hover {
