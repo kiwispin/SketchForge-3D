@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Home, Minus, MousePointer2, PanelsTopLeft, Plus, Ruler, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Home, Maximize2, Minus, MousePointer2, PanelsTopLeft, Plus, Ruler, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type SetStateAction, type WheelEvent as ReactWheelEvent } from "react";
 import * as THREE from "three";
 import { Brush, Evaluator, HOLLOW_INTERSECTION } from "three-bvh-csg";
@@ -59,6 +59,7 @@ import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, norm
 import { interiorWorkplaneGridCoordinates, workplaneThemePalette, WORKPLANE_LINE_ELEVATION, WORKPLANE_MAJOR_GRID_INTERVAL } from "@/lib/workplaneGrid";
 import { cleanNearZero, cleanRotationDegrees, constrainedAxisMoveDelta, fallbackSolidColor, mirroredAxisCount, mirrorSign, preservesEdgeTreatmentSize, proportionalResizeDimensions, resizedImportedCoordinates, resizedImportedMeshPositions, resizedShapeSize, shapeDepth, shapeWidth } from "@/lib/workplaneShapes";
 import { sphereTessellation } from "@/lib/sphereTessellation";
+import { frontAlignedHomePosition, viewFaceOrbitPose, type ViewCubeFace } from "@/lib/viewCube";
 import type { SketchForgeMcpViewFace } from "@/lib/sketchforgeMcpProtocol";
 import {
   TransformOverlay,
@@ -69,6 +70,7 @@ import {
   frameRotationPlanes,
   getElevationMeasureKey,
   measureKeyForHandle,
+  orthographicFitZoom,
   projectedMoveHandle,
   rotationSnapDelta,
   rotationWheelLocalRadius,
@@ -99,7 +101,7 @@ const WORKSPACE_DEFAULTS_STORAGE_PREFIX = "sketchForge.workspaceDefault.";
 const MOVE_DIMENSIONS_ENABLED_STORAGE_KEY = "sketchForge.editor.moveDimensionsEnabled";
 const DEFAULT_WORKSPACE = DEFAULT_WORKPLANE_WORKSPACE;
 const CAMERA_FOV = 38;
-const CAMERA_HOME = new THREE.Vector3(118, 96, 118);
+const CAMERA_HOME = frontAlignedHomePosition();
 const CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
 const MIN_SHAPE_SIZE = 0.01;
 const CUT_PREVIEW_PADDING = 0.01;
@@ -109,6 +111,12 @@ const SMART_GUIDE_TOLERANCE = 1.25;
 const SMART_GUIDE_MAX_DISTANCE = 60;
 const CAMERA_MIN_TARGET_Y = -70;
 const CAMERA_MAX_TARGET_Y = 120;
+// Camera motion is rendered every animation frame, but the DOM transform
+// overlay does not need to be rebuilt at the same rate. Rotation controls are
+// hidden while the camera is moving and are projected exactly on the first
+// settled frame, so this bound prevents OrbitControls damping from starving
+// the browser with React updates without allowing visible handle drift.
+const CAMERA_OVERLAY_SYNC_INTERVAL_MS = 32;
 const RENDER_LAYER_WORKPLANE = 0;
 const RENDER_LAYER_SHAPES = 1;
 const RENDER_LAYER_HELPERS = 2;
@@ -238,7 +246,6 @@ type WorkplaneViewportProps = {
 };
 
 type WorkspaceSettings = WorkplaneWorkspaceSettings;
-type ViewCubeFace = "top" | "bottom" | "front" | "back" | "right" | "left";
 
 function readSavedWorkspaceDefault(key: string | null) {
   if (!key || typeof window === "undefined") {
@@ -2708,7 +2715,10 @@ export function WorkplaneViewport({
     const animate = () => {
       state.animationId = window.requestAnimationFrame(animate);
       const now = performance.now();
-      const controlsChanged = state.controls.update();
+      // Disabled controls mean a shape transform, shape drag or marquee owns
+      // the pointer. Letting OrbitControls update here would replay leftover
+      // damped orbit/pan from the previous camera gesture under that drag.
+      const controlsChanged = state.controls.enabled ? state.controls.update() : false;
       const cameraSettled = state.wasCameraMoving && !controlsChanged;
       // OrbitControls can keep reporting camera changes for seconds while its
       // damping settles. Tinkercad restores the compact controls when the
@@ -2728,7 +2738,7 @@ export function WorkplaneViewport({
         syncViewCube(state, viewCubeRef.current);
         state.lastViewCubeSync = now;
       }
-      if (controlsChanged || cameraSettled || state.needsRender || now - state.lastOverlaySync > 96) {
+      if (cameraSettled || state.needsRender || now - state.lastOverlaySync > CAMERA_OVERLAY_SYNC_INTERVAL_MS) {
         const previewShapes = previewShapesForDrag(shapesRef.current, dragRef.current);
         syncTransformOverlay(
           state,
@@ -4669,6 +4679,62 @@ export function WorkplaneViewport({
     }
   }, []);
 
+  const fitSelection = useCallback(() => {
+    const state = threeRef.current;
+    const frame = state
+      ? selectionFrameForShapes(shapesRef.current, selectedIdsRef.current, placementWorkplaneRef.current)
+      : null;
+    if (!state || !frame) {
+      resetView();
+      return;
+    }
+
+    const currentDirection = state.camera.position.clone().sub(state.controls.target);
+    if (currentDirection.lengthSq() < 0.0001) {
+      currentDirection.copy(CAMERA_HOME).sub(CAMERA_TARGET);
+    }
+    currentDirection.normalize();
+
+    const corners = selectionFrameCorners(frame);
+    const radius = corners.reduce(
+      (maximum, corner) => Math.max(maximum, corner.distanceTo(frame.center)),
+      MIN_SHAPE_SIZE,
+    );
+    const target = frame.center.clone();
+
+    clearOrbitControlsMotion(state.controls);
+    if (state.camera instanceof THREE.OrthographicCamera) {
+      const camera = state.camera;
+      camera.updateMatrixWorld();
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+      const offsets = corners.map((corner) => corner.clone().sub(target));
+      const xValues = offsets.map((point) => point.dot(right));
+      const yValues = offsets.map((point) => point.dot(up));
+      const spanX = Math.max(MIN_SHAPE_SIZE, Math.max(...xValues) - Math.min(...xValues));
+      const spanY = Math.max(MIN_SHAPE_SIZE, Math.max(...yValues) - Math.min(...yValues));
+      // The orthographic frustum is in world units, so fit against its extent
+      // (not the canvas pixels) and let zoom scale it.
+      const zoom = orthographicFitZoom({ width: camera.right - camera.left, height: camera.top - camera.bottom }, spanX, spanY);
+      camera.zoom = clamp(zoom, state.controls.minZoom, state.controls.maxZoom);
+      const distance = Math.max(22, camera.position.distanceTo(state.controls.target));
+      camera.position.copy(target).add(currentDirection.multiplyScalar(distance));
+    } else {
+      const camera = state.camera;
+      const verticalHalfAngle = THREE.MathUtils.degToRad(camera.getEffectiveFOV()) / 2;
+      const horizontalHalfAngle = Math.atan(Math.tan(verticalHalfAngle) * Math.max(0.01, camera.aspect));
+      const verticalDistance = radius / Math.max(0.01, Math.tan(verticalHalfAngle));
+      const horizontalDistance = radius / Math.max(0.01, Math.tan(horizontalHalfAngle));
+      const distance = clamp(Math.max(verticalDistance, horizontalDistance) * 1.28, 22, 4200);
+      camera.position.copy(target).add(currentDirection.multiplyScalar(distance));
+    }
+    state.controls.target.copy(target);
+    state.camera.lookAt(target);
+    state.camera.updateProjectionMatrix();
+    state.controls.update();
+    state.needsRender = true;
+  }, [resetView]);
+
   const setViewCubeFace = useCallback((face: ViewCubeFace) => {
     const state = threeRef.current;
     if (!state) {
@@ -4918,7 +4984,14 @@ export function WorkplaneViewport({
         if (!event.shiftKey || !setPlacementWorkplaneAtSelection()) {
           togglePlacementWorkplane();
         }
-      } else if (key === "f" || event.key === "Home") {
+      } else if (key === "f" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        if (selectedIdsRef.current.length > 0) {
+          fitSelection();
+        } else {
+          resetView();
+        }
+      } else if (event.key === "Home") {
         event.preventDefault();
         resetView();
       } else if (key === "o" && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -4935,18 +5008,18 @@ export function WorkplaneViewport({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onWorkplaneModeChange, resetView, rulerToolsOpen, setPlacementWorkplaneAtSelection, setRulerActive, togglePlacementWorkplane, toggleProjection, zoomCamera]);
+  }, [fitSelection, onWorkplaneModeChange, resetView, rulerToolsOpen, setPlacementWorkplaneAtSelection, setRulerActive, togglePlacementWorkplane, toggleProjection, zoomCamera]);
 
   return (
     <main className="workplane-stage">
       <div className="view-cube" aria-label="View orientation cube" onPointerDown={(event) => event.stopPropagation()}>
         <div className="view-cube-inner" ref={viewCubeRef}>
-          <button type="button" className="cube-face cube-top" aria-label="Bottom view" onClick={() => setViewCubeFace("bottom")}>BOTTOM</button>
-          <button type="button" className="cube-face cube-bottom" aria-label="Top view" onClick={() => setViewCubeFace("top")}>TOP</button>
-          <button type="button" className="cube-face cube-front" aria-label="Front view" onClick={() => setViewCubeFace("front")}>FRONT</button>
-          <button type="button" className="cube-face cube-back" aria-label="Back view" onClick={() => setViewCubeFace("back")}>BACK</button>
-          <button type="button" className="cube-face cube-right" aria-label="Right view" onClick={() => setViewCubeFace("right")}>RIGHT</button>
-          <button type="button" className="cube-face cube-left" aria-label="Left view" onClick={() => setViewCubeFace("left")}>LEFT</button>
+          <button type="button" className="cube-face cube-top" aria-label="Bottom view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("bottom"); }} onClick={() => setViewCubeFace("bottom")}>BOTTOM</button>
+          <button type="button" className="cube-face cube-bottom" aria-label="Top view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("top"); }} onClick={() => setViewCubeFace("top")}>TOP</button>
+          <button type="button" className="cube-face cube-front" aria-label="Front view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("front"); }} onClick={() => setViewCubeFace("front")}>FRONT</button>
+          <button type="button" className="cube-face cube-back" aria-label="Back view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("back"); }} onClick={() => setViewCubeFace("back")}>BACK</button>
+          <button type="button" className="cube-face cube-right" aria-label="Right view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("right"); }} onClick={() => setViewCubeFace("right")}>RIGHT</button>
+          <button type="button" className="cube-face cube-left" aria-label="Left view" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setViewCubeFace("left"); }} onClick={() => setViewCubeFace("left")}>LEFT</button>
         </div>
       </div>
 
@@ -4962,6 +5035,9 @@ export function WorkplaneViewport({
             </button>
             <button aria-label="Home" onClick={resetView}>
               <Home size={24} strokeWidth={2.25} />
+            </button>
+            <button aria-label="Fit selection" title="Fit selection (F)" onClick={fitSelection}>
+              <Maximize2 size={22} strokeWidth={2.25} />
             </button>
             <button aria-label="Zoom in" onClick={() => zoomCamera(0.7)}>
               <Plus size={28} strokeWidth={2.15} />
@@ -5181,8 +5257,10 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
   controls.maxDistance = 4200;
   controls.minZoom = 0.02;
   controls.maxZoom = 100;
-  controls.minPolarAngle = 0.06;
-  controls.maxPolarAngle = Math.PI - 0.06;
+  // View-cube Top/Bottom poses stop imperceptibly short of the exact poles, so
+  // all views can share OrbitControls' world-Y frame and normal orbit path.
+  controls.minPolarAngle = 0;
+  controls.maxPolarAngle = Math.PI;
   controls.target.copy(CAMERA_TARGET);
 
   const ambient = new THREE.HemisphereLight("#ffffff", "#d6edf5", 2.1);
@@ -5326,6 +5404,7 @@ function createThreeScene(host: HTMLDivElement): ThreeState {
 
 function resetCamera(state: ThreeState) {
   state.camera.up.set(0, 1, 0);
+  clearOrbitControlsMotion(state.controls);
   state.camera.position.copy(CAMERA_HOME);
   state.controls.target.copy(CAMERA_TARGET);
   if (state.camera instanceof THREE.OrthographicCamera) {
@@ -5409,6 +5488,7 @@ function toggleCameraProjection(state: ThreeState) {
   next.updateMatrixWorld();
   state.camera = next;
   state.controls.object = next;
+  clearOrbitControlsMotion(state.controls);
   state.controls.update();
   state.needsRender = true;
 }
@@ -5416,22 +5496,32 @@ function toggleCameraProjection(state: ThreeState) {
 function setCameraToViewFace(state: ThreeState, face: ViewCubeFace) {
   const offset = state.camera.position.clone().sub(state.controls.target);
   const distance = clamp(offset.length(), 22, 4200);
-  const directionByFace: Record<ViewCubeFace, THREE.Vector3> = {
-    top: new THREE.Vector3(0, 1, 0),
-    bottom: new THREE.Vector3(0, -1, 0),
-    front: new THREE.Vector3(0, 0, 1),
-    back: new THREE.Vector3(0, 0, -1),
-    right: new THREE.Vector3(1, 0, 0),
-    left: new THREE.Vector3(-1, 0, 0),
-  };
-  const direction = directionByFace[face].clone().normalize();
-
-  state.camera.up.set(0, 1, 0);
+  const { direction, up } = viewFaceOrbitPose(face);
+  state.camera.up.copy(up);
+  clearOrbitControlsMotion(state.controls);
   state.camera.position.copy(state.controls.target).add(direction.multiplyScalar(distance));
   state.camera.lookAt(state.controls.target);
   state.camera.updateProjectionMatrix();
   state.controls.update();
   state.needsRender = true;
+}
+
+type OrbitControlsMotionState = OrbitControls & {
+  _sphericalDelta?: THREE.Spherical;
+  _panOffset?: THREE.Vector3;
+  _scale?: number;
+  _performCursorZoom?: boolean;
+};
+
+function clearOrbitControlsMotion(controls: OrbitControls) {
+  // A view-cube click, Home or a projection switch is an absolute pose change.
+  // Discard any damped orbit, pan, or cursor-zoom remainder from the preceding
+  // pointer gesture so it cannot keep moving the new view on later frames.
+  const orbitControls = controls as OrbitControlsMotionState;
+  orbitControls._sphericalDelta?.set(0, 0, 0);
+  orbitControls._panOffset?.set(0, 0, 0);
+  orbitControls._scale = 1;
+  orbitControls._performCursorZoom = false;
 }
 
 function constrainCamera(state: ThreeState, workspace: WorkspaceSettings) {
