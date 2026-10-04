@@ -56,6 +56,7 @@ import {
   cleanRotationDegrees,
   duplicateAxisOffset,
   fallbackSolidColor,
+  keyboardMoveStep,
   meshYawDegrees,
   mirroredAxisCount,
   mirrorSign,
@@ -90,7 +91,9 @@ import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
 import { buildSketchRevolveMesh, DEFAULT_SKETCH_REVOLVE_SETTINGS, normalizeSketchRevolveSettings, type SketchRevolveMesh } from "@/lib/sketchRevolve";
 import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
+import { stlHoleCount, stlSolidCount, stlSourceShapes, type StlExportScope } from "@/lib/stlExport";
 import { importedShapeFromSvg, invalidSvgMeshReason } from "@/lib/svgImport";
 import { toSvgProjection, type SvgProjectionLayer } from "@/lib/svgExport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
@@ -2474,6 +2477,20 @@ function normalFor(a: Vec3, b: Vec3, c: Vec3): Vec3 {
   const nz = ux * vy - uy * vx;
   const length = Math.hypot(nx, ny, nz) || 1;
   return [nx / length, ny / length, nz / length];
+}
+
+function stlMeshIsUsable(mesh: MeshData) {
+  if (mesh.vertices.length < 3 || mesh.faces.length < 1) {
+    return false;
+  }
+
+  return mesh.vertices.every((vertex) => vertex.every(Number.isFinite)) && mesh.faces.every(([a, b, c]) => {
+    if (![a, b, c].every((index) => Number.isInteger(index) && index >= 0 && index < mesh.vertices.length)) {
+      return false;
+    }
+    const normal = normalFor(mesh.vertices[a], mesh.vertices[b], mesh.vertices[c]);
+    return normal.every(Number.isFinite);
+  });
 }
 
 function toStl(meshes: MeshData[]) {
@@ -5381,6 +5398,8 @@ export function SketchForgeEditor({
   const [workplaneMode, setWorkplaneMode] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [topPanel, setTopPanel] = useState<TopPanel>(null);
+  const [repeatDefaults, setRepeatDefaults] = useState({ count: 3, offsetX: 20, offsetY: 0, offsetZ: 0 });
+  const [stlExporting, setStlExporting] = useState(false);
   const [stepExporting, setStepExporting] = useState(false);
   const [skfExporting, setSkfExporting] = useState(false);
   const [alignMode, setAlignMode] = useState(false);
@@ -5417,6 +5436,8 @@ export function SketchForgeEditor({
   const historyLimitRef = useRef(workspaceSettings.historyLimit);
   const interactionHistoryStartRef = useRef("");
   const interactionHistoryChangedRef = useRef(false);
+  const lastDuplicateOffsetRef = useRef<{ x: number; z: number } | null>(null);
+  const duplicateRepeatPatternRef = useRef<DuplicateRepeatPattern | null>(null);
   const interactionHistoryTimerRef = useRef<number | null>(null);
   const [projectInteractionActive, setProjectInteractionActive] = useState(false);
   const [toolbarMode, setToolbarMode] = useState<ToolbarMode>("geometry");
@@ -5815,6 +5836,8 @@ export function SketchForgeEditor({
   }, []);
   const exportableShapeCount = useMemo(() => (hasSelection ? selectedShapes : shapes).filter((shape) => !shape.hole).length, [hasSelection, selectedShapes, shapes]);
   const exportScopeLabel = hasSelection ? "selected" : "total";
+  const designExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes)), [selectedShapes, shapes]);
+  const selectedExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes, "selection")), [selectedShapes, shapes]);
   const effectiveAlignAnchorId = useMemo(
     () => effectiveAlignmentAnchorId(selectedShapes, alignAnchorId),
     [alignAnchorId, selectedShapes],
@@ -6814,7 +6837,9 @@ export function SketchForgeEditor({
         return;
       }
 
-      const { changed, next } = applyPatch(shapes);
+      // Read the latest committed shapes so several patches issued in one tick
+      // (e.g. baking each member of a multi-selection) build on each other.
+      const { changed, next } = applyPatch(shapesRef.current);
       if (changed) {
         commitShapes(next, selectedIds);
       }
@@ -6843,15 +6868,31 @@ export function SketchForgeEditor({
     const workspace = workspaceSettingsRef.current;
     const xLimit = Math.max(0, workspace.width / 2 - 6);
     const zLimit = Math.max(0, workspace.depth / 2 - 6);
-    const offsetX = duplicateAxisOffset(selectedShapes.map((shape) => shape.x), -xLimit, xLimit);
-    const offsetZ = duplicateAxisOffset(selectedShapes.map((shape) => shape.z), -zLimit, zLimit);
-    const duplicates = selectedShapes.map((shape) => ({
-      ...cloneWorkplaneShapeTreeWithFreshIds(shape, "copy"),
-      x: shape.x + offsetX,
-      z: shape.z + offsetZ,
-    }));
+    // Duplicate-and-repeat: if the selection is exactly the previous duplicate,
+    // replay the transform the user applied to it since it was created.
+    const repeatPattern = duplicateRepeatMatches(duplicateRepeatPatternRef.current, selectedIds);
+    const sourceShapes = repeatPattern ? duplicateRepeatPatternRef.current?.sourceShapes ?? [] : selectedShapes;
+    const sourceByIndex = new Map(sourceShapes.map((shape, index) => [index, shape]));
+    const remembered = lastDuplicateOffsetRef.current;
+    const offsetX = remembered && selectedShapes.every((shape) => shape.x + remembered.x >= -xLimit && shape.x + remembered.x <= xLimit)
+      ? remembered.x
+      : duplicateAxisOffset(selectedShapes.map((shape) => shape.x), -xLimit, xLimit);
+    const offsetZ = remembered && selectedShapes.every((shape) => shape.z + remembered.z >= -zLimit && shape.z + remembered.z <= zLimit)
+      ? remembered.z
+      : duplicateAxisOffset(selectedShapes.map((shape) => shape.z), -zLimit, zLimit);
+    lastDuplicateOffsetRef.current = { x: offsetX, z: offsetZ };
+    const duplicates = selectedShapes.map((shape, index) => {
+      const source = sourceByIndex.get(index);
+      const next = repeatPattern && source ? repeatShapeTransform(shape, source) : {
+        ...shape,
+        x: shape.x + offsetX,
+        z: shape.z + offsetZ,
+      };
+      return cloneWorkplaneShapeTreeWithFreshIds(next, "copy");
+    });
+    duplicateRepeatPatternRef.current = { selectedIds: duplicates.map((shape) => shape.id), sourceShapes: selectedShapes.map((shape) => ({ ...shape })) };
     commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Duplicated ${duplicates.length} shape${duplicates.length === 1 ? "" : "s"}`);
-  }, [commitShapes, hasSelection, selectedShapes, shapes]);
+  }, [commitShapes, hasSelection, selectedIds, selectedShapes, shapes]);
 
   const repeatSelected = useCallback(
     (count: number, offsetX: number, offsetY: number, offsetZ: number) => {
@@ -6869,6 +6910,7 @@ export function SketchForgeEditor({
         })),
       ).flat();
       commitShapes([...shapes, ...duplicates], duplicates.map((shape) => shape.id), `Repeated ${selectedShapes.length} shape${selectedShapes.length === 1 ? "" : "s"}, ${copies} time${copies === 1 ? "" : "s"}`);
+      setRepeatDefaults({ count: copies, offsetX, offsetY, offsetZ });
       setTopPanel(null);
     },
     [commitShapes, hasSelection, selectedShapes, shapes],
@@ -8330,11 +8372,19 @@ export function SketchForgeEditor({
     void run();
   }, [commitShapes]);
 
-  const exportDesign = useCallback((format: DirectExportFormat, exportName: string) => {
-    const sourceShapes = hasSelection ? selectedShapes : shapes;
+  const exportDesign = useCallback((format: DirectExportFormat, exportName: string, requestedScope?: StlExportScope) => {
+    // STL is the print export, so it defaults to the complete visible design
+    // (with hole cuts applied) even when something is selected. Selection-only
+    // STL is an explicit choice in the export dialog.
+    const scope: StlExportScope = requestedScope ?? (format === "stl" ? "design" : hasSelection ? "selection" : "design");
+    const sourceShapes = format === "stl"
+      ? stlSourceShapes(shapes, selectedShapes, scope)
+      : format === "obj"
+        ? (scope === "selection" ? selectedShapes : shapes).filter((shape) => !shape.hidden)
+        : scope === "selection" ? selectedShapes : shapes;
     const exportable = sourceShapes.filter((shape) => !shape.hole);
     if (exportable.length === 0) {
-      setNotice(hasSelection ? "Select at least one solid shape before exporting" : "Add a solid shape before exporting");
+      setNotice(scope === "selection" ? "Select at least one solid shape before exporting" : "Add a solid shape before exporting");
       return;
     }
     const invalidSvg = exportable.map(invalidSvgMeshReason).find((reason): reason is string => Boolean(reason));
@@ -8342,13 +8392,13 @@ export function SketchForgeEditor({
       setNotice(`${invalidSvg}. Re-import the source SVG after fixing its contours`);
       return;
     }
-    const selectedNotice = `Exported ${exportable.length} selected shape${exportable.length === 1 ? "" : "s"}`;
     const finishNotice = (label: string, result: DownloadResult) => {
       if (result.mode === "folder") {
         setNotice(`Saved ${label} to ${result.path}`);
         return;
       }
-      setNotice(hasSelection ? `${selectedNotice} as ${label}` : `Exported ${label}`);
+      const scopeNotice = scope === "selection" ? ` ${exportable.length} selected shape${exportable.length === 1 ? "" : "s"}` : " full design";
+      setNotice(`Exported${scopeNotice} as ${label}`);
     };
     const failNotice = (label: string, error: unknown) => {
       setNotice(error instanceof Error ? error.message : `Could not export ${label}`);
@@ -8361,17 +8411,48 @@ export function SketchForgeEditor({
         .catch((error: unknown) => failNotice("SVG", error));
       return;
     }
-    const meshes = exportable.map(meshForShape);
     if (format === "stl") {
-      void downloadTextFile(projectExportFileName(exportName, "stl"), toStl(meshes), "model/stl")
-        .then((result) => finishNotice("STL", result))
-        .catch((error: unknown) => failNotice("STL", error));
+      if (stlExporting) {
+        return;
+      }
+
+      setStlExporting(true);
+      setNotice(scope === "selection" ? "Preparing selected shapes for STL…" : "Preparing the full design for STL…");
+      void (async () => {
+        try {
+          const prepared = await buildGroupedShapeFromSelection(sourceShapes);
+          if (prepared.hasHole && !prepared.group) {
+            throw new Error(`${prepared.failureNotice}. The STL was not downloaded.`);
+          }
+
+          const meshes = prepared.group
+            ? [meshForShape(prepared.group)]
+            : exportable.map(meshForShape);
+          if (!meshes.every(stlMeshIsUsable)) {
+            throw new Error("The design did not produce valid solid geometry for STL export. The STL was not downloaded.");
+          }
+
+          const result = await downloadTextFile(projectExportFileName(exportName, "stl"), toStl(meshes), "model/stl");
+          if (result.mode === "folder") {
+            setNotice(`Saved STL for ${scope === "selection" ? "the selection" : "the full design"} to ${result.path}`);
+          } else {
+            const holeCount = stlHoleCount(prepared.booleanSelection);
+            const holeNote = holeCount > 0 ? `; applied ${holeCount} hole cut${holeCount === 1 ? "" : "s"}` : "";
+            setNotice(`Exported STL for ${scope === "selection" ? "the selection" : "the full design"}${holeNote}`);
+          }
+        } catch (error: unknown) {
+          failNotice("STL", error);
+        } finally {
+          setStlExporting(false);
+        }
+      })();
       return;
     }
+    const meshes = exportable.map(meshForShape);
     void downloadTextFile(projectExportFileName(exportName, "obj"), toObj(meshes), "text/plain")
       .then((result) => finishNotice("OBJ", result))
       .catch((error: unknown) => failNotice("OBJ", error));
-  }, [hasSelection, projectName, selectedShapes, shapes]);
+  }, [hasSelection, projectName, selectedShapes, shapes, stlExporting]);
 
   const exportStepDesign = useCallback(async (exportName: string) => {
     if (stepExporting) {
@@ -8768,7 +8849,7 @@ export function SketchForgeEditor({
         return;
       }
 
-      const step = event.shiftKey ? 5 : 1;
+      const step = keyboardMoveStep(snapGridRef.current, event.shiftKey);
       if (shortcut && event.key === "ArrowUp") {
         event.preventDefault();
         raiseSelected(step);
@@ -9058,6 +9139,9 @@ export function SketchForgeEditor({
           projectName={projectName}
           shapeCount={exportableShapeCount}
           scopeLabel={exportScopeLabel}
+          designShapeCount={designExportableShapeCount}
+          selectedShapeCount={selectedExportableShapeCount}
+          hasSelection={hasSelection}
           onClose={() => setTopPanel(null)}
           onExport={exportDesign}
           onExportSkf={exportSkfDesign}
@@ -9065,6 +9149,8 @@ export function SketchForgeEditor({
           sharedProjectsEnabled={sharedProjectsEnabled}
           skfExporting={skfExporting}
           onRepeat={repeatSelected}
+          repeatDefaults={repeatDefaults}
+          stlExporting={stlExporting}
           stepExporting={stepExporting}
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
@@ -9748,6 +9834,9 @@ function TopActionPanel({
   projectName,
   shapeCount,
   scopeLabel,
+  designShapeCount,
+  selectedShapeCount,
+  hasSelection,
   onClose,
   onExport,
   onExportSkf,
@@ -9755,6 +9844,8 @@ function TopActionPanel({
   sharedProjectsEnabled,
   skfExporting,
   onRepeat,
+  repeatDefaults,
+  stlExporting,
   stepExporting,
   onImportFiles,
   onPickFile,
@@ -9765,13 +9856,18 @@ function TopActionPanel({
   projectName: string;
   shapeCount: number;
   scopeLabel: "selected" | "total";
+  designShapeCount: number;
+  selectedShapeCount: number;
+  hasSelection: boolean;
   onClose: () => void;
-  onExport: (format: DirectExportFormat, exportName: string) => void;
+  onExport: (format: DirectExportFormat, exportName: string, scope?: StlExportScope) => void;
   onExportSkf: (exportName: string, historyLimit: SkfHistoryLimit, target?: SkfExportTarget) => void;
   onExportStep: (exportName: string) => void;
   sharedProjectsEnabled: boolean;
   skfExporting: boolean;
   onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void;
+  repeatDefaults: { count: number; offsetX: number; offsetY: number; offsetZ: number };
+  stlExporting: boolean;
   stepExporting: boolean;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
@@ -9798,7 +9894,7 @@ function TopActionPanel({
     stl: {
       label: "STL",
       description: "3D print mesh",
-      note: "Best for slicers and 3D printing. Geometry is exported as a triangulated mesh.",
+      note: "Best for slicers and 3D printing. Exports the complete visible design with hole cuts applied, even when shapes are selected.",
     },
     obj: {
       label: "OBJ",
@@ -9825,8 +9921,12 @@ function TopActionPanel({
   const runSelectedExport = () => {
     if (exportFormat === "step") onExportStep(exportName);
     else if (exportFormat === "skf") onExportSkf(exportName, skfHistoryLimit);
+    else if (exportFormat === "stl") onExport("stl", exportName, "design");
     else onExport(exportFormat, exportName);
   };
+  // STL always counts the full visible design; other mesh formats follow the selection.
+  const formatShapeCount = exportFormat === "stl" ? designShapeCount : shapeCount;
+  const exportBusy = stepExporting || skfExporting || stlExporting;
 
   return (
     <div
@@ -9886,7 +9986,7 @@ function TopActionPanel({
                 onChange={(event) => setExportName(event.target.value)}
                 onFocus={(event) => event.currentTarget.select()}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && (shapeCount > 0 || exportFormat === "skf") && !stepExporting && !skfExporting) runSelectedExport();
+                  if (event.key === "Enter" && (formatShapeCount > 0 || exportFormat === "skf") && !exportBusy) runSelectedExport();
                 }}
               />
               <span>.{exportFormat}</span>
@@ -9898,7 +9998,7 @@ function TopActionPanel({
               <div>
                 <strong>Format</strong>
               </div>
-              <span className="export-scope-badge">{exportFormat === "skf" ? "Full project" : `${shapeCount} ${scopeLabel}`}</span>
+              <span className="export-scope-badge">{exportFormat === "skf" ? "Full project" : exportFormat === "stl" ? `${designShapeCount} full design` : `${shapeCount} ${scopeLabel}`}</span>
             </div>
             <div className="export-format-slider" data-format={exportFormat} role="radiogroup" aria-label="Export format">
               {(["stl", "obj", "step", "svg", "skf"] as const).map((format) => (
@@ -9968,18 +10068,29 @@ function TopActionPanel({
                   <span>Save to shared</span>
                 </button>
               ) : null}
-              <button className="export-primary-button" onClick={runSelectedExport} disabled={(shapeCount === 0 && exportFormat !== "skf") || stepExporting || skfExporting}>
+              {exportFormat === "stl" && hasSelection && selectedShapeCount > 0 ? (
+                <button
+                  className="export-selection-button"
+                  type="button"
+                  title="Export only the currently selected solid shapes as STL"
+                  onClick={() => onExport("stl", exportName, "selection")}
+                  disabled={exportBusy}
+                >
+                  Export selection as STL ({selectedShapeCount})
+                </button>
+              ) : null}
+              <button className="export-primary-button" onClick={runSelectedExport} disabled={(formatShapeCount === 0 && exportFormat !== "skf") || exportBusy}>
                 <Download />
                 {exportFormat === "skf" ? (skfExporting ? "Saving project…" : "Save SketchForge Project") : null}
                 <span hidden={exportFormat === "skf"}>
-                {stepExporting && exportFormat === "step" ? "Building STEP…" : `Export ${selectedExport.label}`}
+                {stepExporting && exportFormat === "step" ? "Building STEP…" : stlExporting && exportFormat === "stl" ? "Preparing STL…" : `Export ${selectedExport.label}`}
                 </span>
               </button>
             </div>
           </footer>
         </div>
       ) : null}
-      {panel === "repeat" ? <RepeatPanel onRepeat={onRepeat} /> : null}
+      {panel === "repeat" ? <RepeatPanel onRepeat={onRepeat} defaults={repeatDefaults} /> : null}
       {panel === "settings" ? (
         <div className="top-action-body">
           <p>Workspace preferences</p>
@@ -9999,11 +10110,11 @@ function TopActionPanel({
   );
 }
 
-function RepeatPanel({ onRepeat }: { onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void }) {
-  const [count, setCount] = useState(3);
-  const [offsetX, setOffsetX] = useState(20);
-  const [offsetY, setOffsetY] = useState(0);
-  const [offsetZ, setOffsetZ] = useState(0);
+function RepeatPanel({ onRepeat, defaults }: { onRepeat: (count: number, offsetX: number, offsetY: number, offsetZ: number) => void; defaults: { count: number; offsetX: number; offsetY: number; offsetZ: number } }) {
+  const [count, setCount] = useState(defaults.count);
+  const [offsetX, setOffsetX] = useState(defaults.offsetX);
+  const [offsetY, setOffsetY] = useState(defaults.offsetY);
+  const [offsetZ, setOffsetZ] = useState(defaults.offsetZ);
   return (
     <div className="top-action-body repeat-panel">
       <p>Create evenly offset copies of the selected shape or group.</p>

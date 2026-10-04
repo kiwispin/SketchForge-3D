@@ -1,5 +1,21 @@
 import type { CSSProperties } from "react";
 import type { AlignAxis, AlignHandleStatus, AlignTarget } from "@/types/sketchforge";
+import type { SmartGuideAxis } from "@/lib/smartGuides";
+
+export type SmartGuideOverlayState = {
+  guides: Array<{
+    key: string;
+    axis: SmartGuideAxis;
+    kind: "center" | "distance";
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    labelX: number;
+    labelY: number;
+    label: string;
+  }>;
+};
 
 export type AlignOverlayState = {
   guides: Array<{ key: string; x1: number; y1: number; x2: number; y2: number }>;
@@ -10,6 +26,23 @@ export type MirrorOverlayState = {
   guides: Array<{ key: string; x1: number; y1: number; x2: number; y2: number }>;
   handles: Array<{ axis: AlignAxis; key: string; x: number; y: number; angle: number; title: string }>;
 };
+
+export function SmartGuideOverlay({ overlay }: { overlay: SmartGuideOverlayState }) {
+  return (
+    <div className="smart-guide-overlay" aria-label="Smart alignment guides">
+      <svg className="smart-guide-guides" width="100%" height="100%" aria-hidden="true">
+        {overlay.guides.map((guide) => (
+          <line key={guide.key} className={`axis-${guide.axis} ${guide.kind}`} x1={guide.x1} y1={guide.y1} x2={guide.x2} y2={guide.y2} />
+        ))}
+      </svg>
+      {overlay.guides.map((guide) => (
+        <span key={`${guide.key}-label`} className={`smart-guide-label axis-${guide.axis} ${guide.kind}`} style={{ left: guide.labelX, top: guide.labelY }}>
+          {guide.label}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export function AlignOverlay({
   overlay,

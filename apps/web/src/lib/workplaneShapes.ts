@@ -1,5 +1,5 @@
 import { createLocalId } from "@/lib/localIds";
-import type { WorkplaneShape } from "@/types/sketchforge";
+import type { GridSize, WorkplaneShape } from "@/types/sketchforge";
 
 export function normalizeDegrees(value: number) {
   return ((value % 360) + 360) % 360;
@@ -31,6 +31,12 @@ export function cloneWorkplaneShapeTreeWithFreshIds(shape: WorkplaneShape, suffi
 }
 
 export const DUPLICATE_PLACEMENT_OFFSET = 2;
+
+/** Arrow-key nudge distance: one snap step (or 1 mm with snapping off); Shift moves ten steps (5 mm when off). */
+export function keyboardMoveStep(grid: GridSize, coarse: boolean) {
+  const base = grid === "Off" ? 1 : grid === "Brick" ? 8 : Number.parseFloat(grid) || 1;
+  return coarse ? (grid === "Off" ? 5 : base * 10) : base;
+}
 
 export function duplicateAxisOffset(
   values: number[],

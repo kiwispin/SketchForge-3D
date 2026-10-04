@@ -8,6 +8,7 @@ import {
   constrainedAxisMoveDelta,
   duplicateAxisOffset,
   fallbackSolidColor,
+  keyboardMoveStep,
   meshYawDegrees,
   mirroredAxisCount,
   mirrorSign,
@@ -46,6 +47,16 @@ function shape(overrides: Partial<WorkplaneShape> = {}): WorkplaneShape {
 }
 
 describe("workplane shape helpers", () => {
+  it("uses snap-aware keyboard movement steps", () => {
+    expect(keyboardMoveStep("Off", false)).toBe(1);
+    expect(keyboardMoveStep("Off", true)).toBe(5);
+    expect(keyboardMoveStep("1.0 mm", false)).toBe(1);
+    expect(keyboardMoveStep("1.0 mm", true)).toBe(10);
+    expect(keyboardMoveStep("0.5 mm", false)).toBe(0.5);
+    expect(keyboardMoveStep("Brick", false)).toBe(8);
+    expect(keyboardMoveStep("Brick", true)).toBe(80);
+  });
+
   it("normalizes and cleans rotations", () => {
     expect(normalizeDegrees(-90)).toBe(270);
     expect(normalizeDegrees(450)).toBe(90);
