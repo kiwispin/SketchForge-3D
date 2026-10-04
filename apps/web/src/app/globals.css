@@ -7067,6 +7067,26 @@ html[data-theme="dark"] .action-buttons button {
   box-shadow: 0 5px 16px rgba(0, 0, 0, 0.3);
 }
 
+html[data-theme="dark"] .shape-menu-categories {
+  background: linear-gradient(180deg, #22323c, #1a2831);
+}
+
+html[data-theme="dark"] .shape-menu-category {
+  color: #9eb2bf;
+}
+
+html[data-theme="dark"] .shape-menu-category:hover,
+html[data-theme="dark"] .shape-menu-category.active {
+  color: #e5f4fc;
+  background: #273946;
+  border-color: #3a4f5e;
+}
+
+html[data-theme="dark"] .shape-menu-icon {
+  background: color-mix(in srgb, var(--shape-accent) 16%, #1b2a35);
+  border-color: color-mix(in srgb, var(--shape-accent) 40%, #3a4f5e);
+}
+
 html[data-theme="dark"] .shape-menu-title,
 html[data-theme="dark"] .export-action-panel header,
 html[data-theme="dark"] .import-action-panel header {
