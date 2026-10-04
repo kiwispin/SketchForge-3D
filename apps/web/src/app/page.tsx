@@ -4,6 +4,7 @@ import { Clock3, CloudDownload, EllipsisVertical, FileUp, FolderKanban, Graduati
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
 import { applyAppTheme, readStoredAppTheme, resolveAppTheme, storeAppTheme, type AppThemePreference, type ResolvedAppTheme } from "@/lib/appTheme";
+import { APP_ROOT_PATH, ASSET_BASE_PATH } from "@/lib/basePath";
 import { hydrateEditorHistoryState, type EditorHistoryEntry } from "@/lib/editorHistory";
 import { tutorials } from "@/lib/tutorials";
 import { DriveError, downloadProjectFromDrive, isDriveConfigured, listProjectsFromDrive, preloadGoogleIdentity, type DriveProjectFileInfo } from "@/lib/googleDrive";
@@ -688,7 +689,7 @@ export default function Home() {
     setActiveProjectId(null);
     setView("dashboard");
     if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", "/");
+      window.history.replaceState(null, "", APP_ROOT_PATH);
     }
   }, [activeProjectId, projects]);
 
@@ -771,7 +772,7 @@ export default function Home() {
         setProjects(storedProjects);
         setActiveProjectId(null);
         setView("dashboard");
-        window.history.replaceState(null, "", "/");
+        window.history.replaceState(null, "", APP_ROOT_PATH);
         return;
       }
       setProjects(storedProjects.map((project) => (project.id === projectId ? { ...project, updatedAt: Date.now() } : project)));
@@ -783,7 +784,7 @@ export default function Home() {
     setEditorStarted(true);
     setView("editor");
     if (typeof window !== "undefined") {
-      const nextUrl = projectId ? `/?editor=1&project=${encodeURIComponent(projectId)}` : "/?editor=1";
+      const nextUrl = projectId ? `${APP_ROOT_PATH}?editor=1&project=${encodeURIComponent(projectId)}` : `${APP_ROOT_PATH}?editor=1`;
       window.history.replaceState(null, "", nextUrl);
     }
   };
@@ -1242,7 +1243,7 @@ export default function Home() {
     setView("dashboard");
     setLaunchTutorial(null);
     if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", "/");
+      window.history.replaceState(null, "", APP_ROOT_PATH);
     }
   };
 
@@ -1622,7 +1623,7 @@ function Dashboard({
     <main className="dashboard-shell">
       <header className="dashboard-topbar">
         <a className="dashboard-brand" href="./" aria-label="SketchForge home">
-          <img src="/assets/sketchforge/sketchforge-logo-white.png" alt="" />
+          <img src={`${ASSET_BASE_PATH}/assets/sketchforge/sketchforge-logo-white.png`} alt="" />
           <span>SketchForge</span>
         </a>
         <div className="dashboard-search">

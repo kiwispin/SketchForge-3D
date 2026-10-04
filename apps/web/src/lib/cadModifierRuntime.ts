@@ -1,6 +1,7 @@
+import { ASSET_BASE_PATH } from "@/lib/basePath";
 import type { CadModifierEdge } from "@/lib/cadModifierTypes";
 
-export const CAD_MODIFIER_RUNTIME_BASE = "/occt";
+export const CAD_MODIFIER_RUNTIME_BASE = `${ASSET_BASE_PATH}/occt`;
 export const CAD_MODIFIER_REQUEST_TIMEOUT_MS = 30_000;
 export const CAD_MODIFIER_MAX_PREPARE_TIMEOUT_MS = 180_000;
 export const CAD_MODIFIER_MAX_SHARP_ANGLE = 90;

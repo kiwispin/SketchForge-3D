@@ -308,6 +308,36 @@ Build a static export:
 npm run export
 ```
 
+## Install as an app (PWA)
+
+SketchForge can run as an installable Progressive Web App. Production builds
+register a service worker (`apps/web/public/sw.js`) and a web app manifest, so
+the static export can be served from any HTTPS web server, opened in a modern
+browser and installed with **Install SketchForge** from the browser menu.
+
+On macOS or Linux the static export is:
+
+```bash
+STATIC_EXPORT=true npm run build
+npm run verify:static-worker-assets
+npx serve apps/web/.next-export
+```
+
+(`npm run export` does the same on Windows.) Localhost counts as a secure
+origin, so the URL printed by `serve` is enough for local testing. The app
+caches its editor shell after the first successful load and stores projects
+locally in the browser on that device. Each build gets its own cache, so a
+redeploy is picked up on the next online visit.
+
+### GitHub Pages
+
+`.github/workflows/deploy-pages.yml` builds the static export with
+`GITHUB_PAGES=true` and publishes it on every push to `main` (enable Pages with
+"GitHub Actions" as the source). The app is served from `/<repository>/`; set
+`PAGES_BASE_PATH` to build for another sub-path. To show Google Drive saving,
+add the OAuth client ID as the `GOOGLE_OAUTH_CLIENT_ID` repository variable
+(see [docs/google-drive-setup.md](docs/google-drive-setup.md)).
+
 ## Contributing
 
 Contributions are welcome. Good places to help:
