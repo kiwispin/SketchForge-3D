@@ -40,6 +40,7 @@ import {
 } from "@/components/workplane/gizmoV2";
 import type { AppThemePreference, ResolvedAppTheme } from "@/lib/appTheme";
 import { cadModifierPrimitiveForBakedShape, cadTransformFromMatrix, cadTransformToMatrix } from "@/lib/cadBakeMetadata";
+import { importedMeshProjectionBounds, orientationRecordForBake, resizeShapeInOwnFrame, shapeOwnFrameAxes, type AxisTriple } from "@/lib/shapeLocalFrame";
 import { createGearGeometry } from "@/lib/gearGeometry";
 import { parseMeasurementInput } from "@/lib/measurementUnits";
 import { createMoveDimensionOverlay, type MoveDimensionAxis, type MoveDimensionOverlayData } from "@/lib/moveDimensionLines";
@@ -502,6 +503,8 @@ type SelectionFrame = {
   min: THREE.Vector3;
   max: THREE.Vector3;
   singleShape: WorkplaneShape | null;
+  /** A single shape turned relative to the workplane: the frame follows the shape's own axes. */
+  ownFrame: boolean;
 };
 
 type DragItem = {
@@ -1533,73 +1536,11 @@ function shapeLocalExtents(shape: WorkplaneShape) {
   };
 }
 
-type AxisProjectionBounds = {
-  min: THREE.Vector3;
-  max: THREE.Vector3;
-};
-
-const importedShapeProjectionBoundsCache = new WeakMap<WorkplaneShape, Map<string, AxisProjectionBounds>>();
-
-function importedShapeProjectionBounds(
-  shape: WorkplaneShape,
-  xAxis: THREE.Vector3,
-  yAxis: THREE.Vector3,
-  zAxis: THREE.Vector3,
-) {
-  if (!shape.importedMesh?.positions.length) {
-    return null;
-  }
-
-  const axisKey = [...xAxis.toArray(), ...yAxis.toArray(), ...zAxis.toArray()].map((value) => value.toFixed(6)).join(":");
-  let shapeCache = importedShapeProjectionBoundsCache.get(shape);
-  if (!shapeCache) {
-    shapeCache = new Map();
-    importedShapeProjectionBoundsCache.set(shape, shapeCache);
-  }
-  const cached = shapeCache.get(axisKey);
-  if (cached) {
-    return {
-      min: cached.min.clone(),
-      max: cached.max.clone(),
-    };
-  }
-
-  const preserveSize = preservesEdgeTreatmentSize(shape);
-  const positions = preserveSize ? resizedImportedMeshPositions(shape) : shape.importedMesh.positions;
-  const scaleX = preserveSize ? 1 : shapeWidth(shape) / Math.max(0.001, shape.importedMesh.baseWidth);
-  const scaleY = preserveSize ? 1 : shape.height / Math.max(0.001, shape.importedMesh.baseHeight);
-  const scaleZ = preserveSize ? 1 : shapeDepth(shape) / Math.max(0.001, shape.importedMesh.baseDepth);
-  const center = shapeCenter(shape);
-  const quaternion = quaternionForShape(shape);
-  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
-  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
-  const point = new THREE.Vector3();
-
-  for (let index = 0; index + 2 < positions.length; index += 3) {
-    point
-      .set(
-        positions[index] * scaleX,
-        positions[index + 1] * scaleY - shape.height / 2,
-        positions[index + 2] * scaleZ,
-      )
-      .applyQuaternion(quaternion)
-      .add(center);
-    const projected = new THREE.Vector3(point.dot(xAxis), point.dot(yAxis), point.dot(zAxis));
-    min.min(projected);
-    max.max(projected);
-  }
-
-  if (![min.x, min.y, min.z, max.x, max.y, max.z].every(Number.isFinite)) {
-    return null;
-  }
-  shapeCache.set(axisKey, { min: min.clone(), max: max.clone() });
-  return { min, max };
-}
-
 function selectionFrameForShapes(
   shapes: WorkplaneShape[],
   selectedIds: string[],
   workplane?: PlacementWorkplane,
+  { followShape = true }: { followShape?: boolean } = {},
 ): SelectionFrame | null {
   const selected = selectedIds.map((id) => shapes.find((shape) => shape.id === id)).filter((shape): shape is WorkplaneShape => Boolean(shape && !shape.hidden));
   if (selected.length === 0) {
@@ -1607,31 +1548,42 @@ function selectionFrameForShapes(
   }
 
   const singleShape = selected.length === 1 ? selected[0] : null;
-  const quaternion = workplane
-    ? placementWorkplaneQuaternion(workplane)
-    : singleShape ? quaternionForShape(singleShape) : new THREE.Quaternion();
-  const xAxis = workplane
-    ? new THREE.Vector3(workplane.xAxis.x, workplane.xAxis.y, workplane.xAxis.z).normalize()
+  // A single shape that is turned relative to the workplane (or, without one,
+  // the world) gets a frame on its own axes that hugs its true size, as in
+  // Tinkercad. This includes rotations already baked into a mesh, which the
+  // shape remembers in `localFrame`. Multi-selections keep the workplane frame,
+  // and world-axis tools (smart guides, align, mirror) pass followShape: false.
+  const ownAxes = singleShape && followShape
+    ? shapeOwnFrameAxes(singleShape, workplane ? placementWorkplaneAxes(workplane) : undefined)
+    : null;
+  const frameWorkplane = ownAxes ? undefined : workplane;
+  const quaternion = ownAxes
+    ? ownAxes.quaternion.clone()
+    : frameWorkplane
+      ? placementWorkplaneQuaternion(frameWorkplane)
+      : singleShape ? quaternionForShape(singleShape) : new THREE.Quaternion();
+  const xAxis = frameWorkplane
+    ? new THREE.Vector3(frameWorkplane.xAxis.x, frameWorkplane.xAxis.y, frameWorkplane.xAxis.z).normalize()
     : new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion).normalize();
-  const yAxis = workplane
-    ? new THREE.Vector3(workplane.normal.x, workplane.normal.y, workplane.normal.z).normalize()
+  const yAxis = frameWorkplane
+    ? new THREE.Vector3(frameWorkplane.normal.x, frameWorkplane.normal.y, frameWorkplane.normal.z).normalize()
     : new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion).normalize();
-  const zAxis = workplane
-    ? new THREE.Vector3(workplane.zAxis.x, workplane.zAxis.y, workplane.zAxis.z).normalize()
+  const zAxis = frameWorkplane
+    ? new THREE.Vector3(frameWorkplane.zAxis.x, frameWorkplane.zAxis.y, frameWorkplane.zAxis.z).normalize()
     : new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion).normalize();
   const localMin = new THREE.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
   const localMax = new THREE.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
-  const origin = workplane
-    ? new THREE.Vector3(workplane.origin.x, workplane.origin.y, workplane.origin.z)
+  const origin = frameWorkplane
+    ? new THREE.Vector3(frameWorkplane.origin.x, frameWorkplane.origin.y, frameWorkplane.origin.z)
     : singleShape ? shapeCenter(singleShape) : new THREE.Vector3();
 
-  if (!workplane && !singleShape) {
+  if (!frameWorkplane && !singleShape) {
     selected.forEach((shape) => origin.add(shapeCenter(shape)));
     origin.multiplyScalar(1 / selected.length);
   }
 
   selected.forEach((shape) => {
-    const importedBounds = importedShapeProjectionBounds(shape, xAxis, yAxis, zAxis);
+    const importedBounds = importedMeshProjectionBounds(shape, xAxis, yAxis, zAxis);
     if (importedBounds) {
       const originProjection = new THREE.Vector3(origin.dot(xAxis), origin.dot(yAxis), origin.dot(zAxis));
       localMin.min(importedBounds.min.sub(originProjection));
@@ -1676,7 +1628,16 @@ function selectionFrameForShapes(
     min: new THREE.Vector3(-width / 2, -height / 2, -depth / 2),
     max: new THREE.Vector3(width / 2, height / 2, depth / 2),
     singleShape,
+    ownFrame: Boolean(ownAxes),
   };
+}
+
+function placementWorkplaneAxes(workplane: PlacementWorkplane): AxisTriple {
+  return [
+    new THREE.Vector3(workplane.xAxis.x, workplane.xAxis.y, workplane.xAxis.z).normalize(),
+    new THREE.Vector3(workplane.normal.x, workplane.normal.y, workplane.normal.z).normalize(),
+    new THREE.Vector3(workplane.zAxis.x, workplane.zAxis.y, workplane.zAxis.z).normalize(),
+  ];
 }
 
 function framePoint(frame: SelectionFrame, x: number, y: number, z: number) {
@@ -1747,7 +1708,43 @@ function workplaneYForFrame(frame: SelectionFrame, workplane: PlacementWorkplane
 }
 
 function workplaneFootprintY(frame: SelectionFrame, workplane: PlacementWorkplane) {
+  // A shape's own frame keeps its footprint (and resize handles) on its own
+  // bottom face; the workplane plane need not be parallel to it.
+  if (frame.ownFrame) {
+    return frame.min.y;
+  }
   return clamp(workplaneYForFrame(frame, workplane), frame.min.y, frame.max.y);
+}
+
+function workplaneNormal(workplane: PlacementWorkplane) {
+  return new THREE.Vector3(workplane.normal.x, workplane.normal.y, workplane.normal.z).normalize();
+}
+
+/** The frame corner nearest the workplane and its height above it (along the workplane normal). */
+function frameLowestCornerAboveWorkplane(frame: SelectionFrame, workplane: PlacementWorkplane) {
+  const normal = workplaneNormal(workplane);
+  const origin = new THREE.Vector3(workplane.origin.x, workplane.origin.y, workplane.origin.z);
+  return selectionFrameCorners(frame).reduce<{ point: THREE.Vector3; height: number } | null>((lowest, corner) => {
+    const height = corner.clone().sub(origin).dot(normal);
+    return !lowest || height < lowest.height - 1e-9 ? { point: corner, height } : lowest;
+  }, null) ?? { point: frame.center.clone(), height: 0 };
+}
+
+/**
+ * Elevation shown on the lift label and edited by it. For the workplane frame
+ * this is the distance from the workplane to the frame bottom; for a rotated
+ * shape's own frame it is the height of its lowest point above the workplane.
+ */
+function frameElevationAboveWorkplane(frame: SelectionFrame, workplane: PlacementWorkplane) {
+  if (frame.ownFrame) {
+    return cleanNearZero(frameLowestCornerAboveWorkplane(frame, workplane).height, 1e-6);
+  }
+  return workplaneFootprintY(frame, workplane) - workplaneYForFrame(frame, workplane);
+}
+
+/** "Move up or down" always moves along the workplane normal, even when the frame is tilted with the shape. */
+function frameLiftAxis(frame: SelectionFrame, workplane: PlacementWorkplane) {
+  return frame.ownFrame ? workplaneNormal(workplane) : frame.yAxis.clone().normalize();
 }
 
 function localResizePlaneForFrame(frame: SelectionFrame, localY = frame.min.y) {
@@ -1883,9 +1880,14 @@ function patchWithResizeAnchor(
   patch: Partial<WorkplaneShape>,
   options: ShapeInspectorUpdateOptions | undefined,
   anchor: ResizeAnchorMemory | null,
+  workplane?: PlacementWorkplane,
 ) {
   if (options?.position) {
     return patch;
+  }
+  const ownPatch = ownFrameMeshPatchWithResizeAnchor(shape, patch, options, anchor, workplane);
+  if (ownPatch) {
+    return ownPatch;
   }
   const axis = options?.resizeAxis;
   if (axis === "height") {
@@ -1918,6 +1920,51 @@ function patchWithResizeAnchor(
   });
 }
 
+/**
+ * Typed sizes (dimension labels, inspector) for a rotated baked mesh: the
+ * values are its true local width/depth/height. The edit keeps the face
+ * opposite the last-pressed handle (or the bottom), then, like other typed
+ * resizes, keeps the shape's lowest (or, for a bottom height edit, highest)
+ * world point where it was.
+ */
+function ownFrameMeshPatchWithResizeAnchor(
+  shape: WorkplaneShape,
+  patch: Partial<WorkplaneShape>,
+  options: ShapeInspectorUpdateOptions | undefined,
+  anchor: ResizeAnchorMemory | null,
+  workplane?: PlacementWorkplane,
+): Partial<WorkplaneShape> | null {
+  if (patch.width === undefined && patch.depth === undefined && patch.height === undefined) {
+    return null;
+  }
+  // The same frame the labels and inspector show (it depends on the workplane).
+  const frame = selectionFrameForShapes([shape], [shape.id], workplane);
+  if (!frame || !usesOwnFrameMeshResize(shape, frame)) {
+    return null;
+  }
+  const width = Math.max(MIN_SHAPE_SIZE, patch.width ?? frame.width);
+  const depth = Math.max(MIN_SHAPE_SIZE, patch.depth ?? frame.depth);
+  const height = Math.max(MIN_SHAPE_SIZE, patch.height ?? frame.height);
+  const axis = options?.resizeAxis;
+  const anchoredHere = anchor?.shapeId === shape.id;
+  const keepTop = axis === "height" && anchoredHere && anchor?.pressedY === "bottom";
+  const signs = anchoredHere && (axis === "width" || axis === "depth") ? resizeSignsForDimension(anchor.signs, axis) : { x: 0, z: 0 };
+  const center = keepTop
+    ? framePoint(frame, 0, frame.max.y, 0).addScaledVector(frame.yAxis, -height / 2)
+    : resizeCenterFromAnchor(frame, resizeAnchorPointForFrame(frame, signs), signs, width, depth, height);
+  const resized = resizeShapeInOwnFrame(shape, frame, { center, width, height, depth });
+  if (!resized) {
+    return null;
+  }
+  const startBottom = shape.elevation ?? 0;
+  const startTop = startBottom + shape.height;
+  const resizedHeight = resized.height ?? shape.height;
+  return {
+    ...resized,
+    elevation: cleanNearZero(keepTop ? startTop - resizedHeight : startBottom, 0.0005),
+  };
+}
+
 function resizeShapeFromFrameHandle(
   transform: TransformDragState,
   point: THREE.Vector3,
@@ -1946,12 +1993,15 @@ function resizeShapeFromFrameHandle(
     return snapDimension(current + signedDelta, step, MIN_SHAPE_SIZE, maxSize);
   };
 
+  // In a rotated shape's own frame the frame height is its true height; the
+  // stored height of a baked mesh is its world bounds.
+  const startHeight = frame.ownFrame ? frame.height : shape.height;
   let nextWidth = axisResize(width, localDelta.x, signs.x);
   let nextDepth = axisResize(depth, localDelta.z, signs.z);
-  let nextHeight = shape.height;
+  let nextHeight = startHeight;
 
   if (shiftKey && signs.x && signs.z) {
-    const proportional = proportionalResizeDimensions(width, depth, shape.height, nextWidth, nextDepth, MIN_SHAPE_SIZE, maxSize);
+    const proportional = proportionalResizeDimensions(width, depth, startHeight, nextWidth, nextDepth, MIN_SHAPE_SIZE, maxSize);
     nextWidth = proportional.width;
     nextDepth = proportional.depth;
     nextHeight = proportional.height;
@@ -1960,7 +2010,19 @@ function resizeShapeFromFrameHandle(
   const nextCenter = altKey
     ? frame.center.clone()
     : resizeCenterFromAnchor(frame, transform.scaleAnchorPoint ?? resizeAnchorPointForFrame(frame, signs), signs, nextWidth, nextDepth, nextHeight);
+  if (usesOwnFrameMeshResize(shape, frame)) {
+    return resizeShapeInOwnFrame(shape, frame, { center: nextCenter, width: nextWidth, height: nextHeight, depth: nextDepth }) ?? {};
+  }
   return resizedShapePatchFromFrame(shape, nextCenter, nextWidth, nextDepth, nextHeight);
+}
+
+/**
+ * A mesh in a rotated shape's own frame is resized by rewriting its vertices
+ * along that frame (its stored width/depth/height are world bounds, and
+ * scaling those would shear it).
+ */
+function usesOwnFrameMeshResize(shape: WorkplaneShape, frame: SelectionFrame) {
+  return frame.ownFrame && frame.singleShape?.id === shape.id && Boolean(shape.importedMesh?.positions.length);
 }
 
 function axisScaleMatrix(axis: THREE.Vector3, scale: number, anchor: number) {
@@ -2077,6 +2139,7 @@ function resizeImportedShapeAlongFrameNormal(
       triangleCount: Math.floor(localPositions.length / 9),
       sourceFormat: "json",
     },
+    localFrame: orientationRecordForBake(shape),
     cadPrimitiveFrame,
     cadBrep: undefined,
     cadBrepFrame: undefined,
@@ -2094,6 +2157,14 @@ function resizeShapeAlongFrameNormal(
   nextFrameHeight: number,
   resizingFromBottom: boolean,
 ): Partial<WorkplaneShape> {
+  if (usesOwnFrameMeshResize(shape, frame)) {
+    const heightChange = Math.max(MIN_SHAPE_SIZE, nextFrameHeight) - frame.height;
+    const nextCenter = frame.center.clone().addScaledVector(frame.yAxis, (resizingFromBottom ? -heightChange : heightChange) / 2);
+    const ownPatch = resizeShapeInOwnFrame(shape, frame, { center: nextCenter, width: frame.width, height: frame.height + heightChange, depth: frame.depth });
+    if (ownPatch) {
+      return ownPatch;
+    }
+  }
   const importedPatch = resizeImportedShapeAlongFrameNormal(shape, frame, nextFrameHeight, resizingFromBottom);
   if (importedPatch) {
     return importedPatch;
@@ -2337,6 +2408,14 @@ export function WorkplaneViewport({
   });
 
   const selectedShape = useMemo(() => (selectedIds.length === 1 ? shapes.find((shape) => shape.id === selectedIds[0]) ?? null : null), [selectedIds, shapes]);
+  // A rotated mesh shows (and edits) its true size along its own axes, the
+  // same numbers as its selection frame, rather than its world bounds.
+  const inspectorShape = useMemo(() => {
+    if (!selectedShape?.importedMesh?.positions.length) return selectedShape;
+    const frame = selectionFrameForShapes([selectedShape], [selectedShape.id], placementWorkplane);
+    if (!frame?.ownFrame) return selectedShape;
+    return { ...selectedShape, width: frame.width, depth: frame.depth, height: frame.height, size: Math.max(frame.width, frame.depth) };
+  }, [placementWorkplane, selectedShape]);
   const renderSelectionIds = useCallback(
     (ids = selectedIdsRef.current) => (
       workplaneModeRef.current || (modifierActiveRef.current && !modifierPreviewActiveRef.current) ? [] : ids
@@ -3396,7 +3475,9 @@ export function WorkplaneViewport({
       const scaleStartPoint = scalePlane ? toRawPlanePoint(event.clientX, event.clientY, scalePlane) ?? undefined : undefined;
       const scaleSigns = kind === "scale" ? resizeSignsForHandle(resizeHandleKey) : undefined;
       const scaleAnchorPoint = kind === "scale" && scaleSigns ? resizeAnchorPointForFrame(frame, scaleSigns) : undefined;
-      const liftAxis = kind === "lift" || kind === "height" ? frame.yAxis.clone().normalize() : undefined;
+      const liftAxis = kind === "lift"
+        ? frameLiftAxis(frame, activeWorkplane)
+        : kind === "height" ? frame.yAxis.clone().normalize() : undefined;
       const liftHandlePoint = liftAxis
         ? framePoint(frame, 0, handlesLowerSide ? frame.min.y : frame.max.y, 0).addScaledVector(liftAxis, liftOffset)
         : undefined;
@@ -3405,7 +3486,7 @@ export function WorkplaneViewport({
         : undefined;
       const liftStartPoint = liftPlane ? toRawPlanePoint(event.clientX, event.clientY, liftPlane) ?? undefined : undefined;
       const liftStartValue = kind === "lift"
-        ? workplaneFootprintY(frame, activeWorkplane) - workplaneYForFrame(frame, activeWorkplane)
+        ? frameElevationAboveWorkplane(frame, activeWorkplane)
         : undefined;
       // Axis move handles drag in the selection's horizontal (workplane) plane
       // through its centre and keep only the component along their axis.
@@ -3818,7 +3899,14 @@ export function WorkplaneViewport({
       transform.items.forEach((item) => {
         const nextQuaternion = rotationDelta.clone().multiply(item.startQuaternion);
         const patch: Partial<WorkplaneShape> = rotationPatchFromQuaternion(nextQuaternion);
-        if (transform.items.length > 1) {
+        if (transform.items.length === 1 && transform.selectionFrame.ownFrame && item.startCenter.distanceToSquared(pivot) > 1e-12) {
+          // An asymmetric mesh's own frame is not centred on its world bounds;
+          // turn it about the frame centre the rings are drawn around.
+          const nextCenter = pivot.clone().add(item.startCenter.clone().sub(pivot).applyQuaternion(rotationDelta));
+          patch.x = cleanNearZero(nextCenter.x, 0.0005);
+          patch.z = cleanNearZero(nextCenter.z, 0.0005);
+          patch.elevation = cleanNearZero(nextCenter.y - item.startShape.height / 2, 0.0005);
+        } else if (transform.items.length > 1) {
           const nextCenter = pivot.clone().add(item.startCenter.clone().sub(pivot).applyQuaternion(rotationDelta));
           patch.x = snapPositionValue(nextCenter.x, step, -workspaceRef.current.width / 2 + 6, workspaceRef.current.width / 2 - 6);
           patch.z = snapPositionValue(nextCenter.z, step, -workspaceRef.current.depth / 2 + 6, workspaceRef.current.depth / 2 - 6);
@@ -3934,7 +4022,7 @@ export function WorkplaneViewport({
     if (!frame) {
       return;
     }
-    const elevation = workplaneFootprintY(frame, activeWorkplane) - workplaneYForFrame(frame, activeWorkplane);
+    const elevation = frameElevationAboveWorkplane(frame, activeWorkplane);
     const elevationMark = Object.values(transformOverlayRef.current?.dimensions ?? {})
       .flat()
       .find((entry) => entry.axis === "elevation");
@@ -3966,11 +4054,11 @@ export function WorkplaneViewport({
         const activeWorkplane = placementWorkplaneRef.current;
         const frame = selectionFrameForShapes(shapesRef.current, selectedIdsRef.current, activeWorkplane);
         const currentElevation = frame
-          ? workplaneFootprintY(frame, activeWorkplane) - workplaneYForFrame(frame, activeWorkplane)
+          ? frameElevationAboveWorkplane(frame, activeWorkplane)
           : shape.elevation ?? 0;
         const targetElevation = cleanNearZero(clamp(value, MIN_ELEVATION, MAX_ELEVATION), 0.0005);
         const delta = targetElevation - currentElevation;
-        const axis = frame?.yAxis.clone().normalize() ?? new THREE.Vector3(0, 1, 0);
+        const axis = frame ? frameLiftAxis(frame, activeWorkplane) : new THREE.Vector3(0, 1, 0);
         selectedIdsRef.current.forEach((selectedId) => {
           const selectedShape = shapesRef.current.find((entry) => entry.id === selectedId);
           if (selectedShape) {
@@ -3993,11 +4081,11 @@ export function WorkplaneViewport({
         if (shape.kind === "cone") {
           patch.baseRadius = nextValue / 2;
         }
-        onUpdateShape(id, patchWithResizeAnchor(shape, patch, { resizeAxis: edit.axis }, lastResizeAnchorRef.current));
+        onUpdateShape(id, patchWithResizeAnchor(shape, patch, { resizeAxis: edit.axis }, lastResizeAnchorRef.current, placementWorkplaneRef.current));
       } else if (edit.axis === "depth") {
-        onUpdateShape(id, patchWithResizeAnchor(shape, { depth: nextValue, size: resizedShapeSize(shapeWidth(shape), nextValue) }, { resizeAxis: edit.axis }, lastResizeAnchorRef.current));
+        onUpdateShape(id, patchWithResizeAnchor(shape, { depth: nextValue, size: resizedShapeSize(shapeWidth(shape), nextValue) }, { resizeAxis: edit.axis }, lastResizeAnchorRef.current, placementWorkplaneRef.current));
       } else {
-        onUpdateShape(id, patchWithResizeAnchor(shape, { height: nextValue }, { resizeAxis: edit.axis }, lastResizeAnchorRef.current));
+        onUpdateShape(id, patchWithResizeAnchor(shape, { height: nextValue }, { resizeAxis: edit.axis }, lastResizeAnchorRef.current, placementWorkplaneRef.current));
       }
     }
     setEditingDimension(null);
@@ -4036,7 +4124,18 @@ export function WorkplaneViewport({
     }
     const value = parseMeasurementInput(edit.value);
     if (Number.isFinite(value)) {
-      selectedIdsRef.current.forEach((id) => onUpdateShape(id, { ...rotationPatchForAxis(edit.axis, value), bakeTransform: true }));
+      const frame = selectionFrameForShapes(shapesRef.current, selectedIdsRef.current, placementWorkplaneRef.current);
+      const ownShape = frame?.ownFrame ? frame.singleShape : null;
+      if (frame && ownShape) {
+        // A rotated shape's rings follow its own axes, so a typed angle turns
+        // it about that axis (relative to the angle the label showed).
+        const axisVector = rotationAxisVectorForFrame(`rotate-${edit.axis}`, frame);
+        const delta = THREE.MathUtils.degToRad(value - rotationValueForAxis(ownShape, edit.axis));
+        const nextQuaternion = new THREE.Quaternion().setFromAxisAngle(axisVector, delta).multiply(quaternionForShape(ownShape));
+        onUpdateShape(ownShape.id, { ...rotationPatchFromQuaternion(nextQuaternion), bakeTransform: true });
+      } else {
+        selectedIdsRef.current.forEach((id) => onUpdateShape(id, { ...rotationPatchForAxis(edit.axis, value), bakeTransform: true }));
+      }
     }
     setEditingRotation(null);
     setActiveRotationWheel(false);
@@ -4274,7 +4373,9 @@ export function WorkplaneViewport({
           : undefined;
         const rotationStartPoint = handle.kind === "rotate" ? rayPointOnRotationPlane(state, event.clientX, event.clientY, rotationPlaneCenter, axisVector) : null;
         const rotationStartVector = rotationStartPoint ? rotationStartPoint.sub(rotationPlaneCenter) : undefined;
-        const liftAxis = handle.kind === "lift" || handle.kind === "height" ? frame.yAxis.clone().normalize() : undefined;
+        const liftAxis = handle.kind === "lift"
+          ? frameLiftAxis(frame, activeWorkplane)
+          : handle.kind === "height" ? frame.yAxis.clone().normalize() : undefined;
         const liftHandlePoint = liftAxis
           ? framePoint(frame, 0, handlesLowerSide ? frame.min.y : frame.max.y, 0).addScaledVector(liftAxis, liftOffset)
           : undefined;
@@ -4283,7 +4384,7 @@ export function WorkplaneViewport({
           : undefined;
         const liftStartPoint = liftPlane ? toRawPlanePoint(event.clientX, event.clientY, liftPlane) ?? undefined : undefined;
         const liftStartValue = handle.kind === "lift"
-          ? workplaneFootprintY(frame, activeWorkplane) - workplaneYForFrame(frame, activeWorkplane)
+          ? frameElevationAboveWorkplane(frame, activeWorkplane)
           : undefined;
         if ((handle.kind === "lift" || handle.kind === "height") && !liftStartPoint) {
           return;
@@ -4472,7 +4573,7 @@ export function WorkplaneViewport({
         && Math.abs(activeWorkplane.xAxis.x - 1) < 1e-6
         && Math.abs(activeWorkplane.zAxis.z - 1) < 1e-6;
       if (moveDimensionsEnabledRef.current && usesWorldHorizontalAxes) {
-        const dragFrame = selectionFrameForShapes(shapesRef.current, items.map((item) => item.id));
+        const dragFrame = selectionFrameForShapes(shapesRef.current, items.map((item) => item.id), undefined, { followShape: false });
         const moveDimensionAnchor = dragFrame
           ? moveDimensionAnchorForCamera(state, dragFrame)
           : new THREE.Vector3(shape.x, WORKPLANE_LINE_ELEVATION + 0.04, shape.z);
@@ -5303,13 +5404,13 @@ export function WorkplaneViewport({
 
       {selectedShape && !modifierActive && !rulerMode && !rulerDeleteMode && !rulerMoveMode ? (
         <ShapeInspector
-          shape={selectedShape}
+          shape={inspectorShape ?? selectedShape}
           snap={snap}
           snapOpen={snapOpen}
           workspace={workspace}
           onUpdate={(patch, options) => {
             clearMoveDimensions();
-            onUpdateShape(selectedShape.id, patchWithResizeAnchor(selectedShape, patch, options, lastResizeAnchorRef.current));
+            onUpdateShape(selectedShape.id, patchWithResizeAnchor(selectedShape, patch, options, lastResizeAnchorRef.current, placementWorkplaneRef.current));
           }}
           onSnapChange={setSnap}
           onSnapOpenChange={setSnapOpen}
@@ -6535,7 +6636,7 @@ function syncSmartGuideOverlay(
 
   const accuracy = workspace.accuracy;
   const movingIds = drag.items.map((item) => item.id);
-  const selectedFrame = selectionFrameForShapes(shapes, movingIds);
+  const selectedFrame = selectionFrameForShapes(shapes, movingIds, undefined, { followShape: false });
   if (!selectedFrame) {
     updateSmartGuideOverlayIfChanged(overlayRef, setOverlay, null);
     return;
@@ -6544,7 +6645,7 @@ function syncSmartGuideOverlay(
   const referenceEntries = shapes
     .filter((shape) => !movingIds.includes(shape.id) && !shape.hidden)
     .map((shape) => {
-      const frame = selectionFrameForShapes([shape], [shape.id]);
+      const frame = selectionFrameForShapes([shape], [shape.id], undefined, { followShape: false });
       if (!frame) {
         return null;
       }
@@ -6815,9 +6916,10 @@ function syncTransformOverlay(
   const lowerCenterWorld = framePoint(frame, 0, frame.min.y, 0);
   const upperCenterWorld = framePoint(frame, 0, frame.max.y, 0);
   const liftOffset = Math.max(2, frame.height * 0.08);
+  const liftAxis = frameLiftAxis(frame, activeWorkplane);
   const liftHandle = (showLowerHandles ? lowerCenterWorld : upperCenterWorld)
     .clone()
-    .addScaledVector(yFootAxis, showLowerHandles ? -liftOffset : liftOffset);
+    .addScaledVector(liftAxis, showLowerHandles ? -liftOffset : liftOffset);
   const bottom = {
     nearLeft: project(footprintWorld.nearLeft),
     nearRight: project(footprintWorld.nearRight),
@@ -6865,8 +6967,12 @@ function syncTransformOverlay(
   const leftOut = xFootAxis.clone().multiplyScalar(-1);
   const heightHandleKey = showLowerHandles ? "bottom-height" : "top-height";
   const liftHandleKey = showLowerHandles ? "lower-shape" : "lift-shape";
-  const workplaneAnchor = framePoint(frame, 0, workplaneY, 0);
-  const liftLabel = formatMeasure(footprintY - workplaneY, accuracy);
+  const lowestCorner = frame.ownFrame ? frameLowestCornerAboveWorkplane(frame, activeWorkplane) : null;
+  const elevationFrom = lowestCorner
+    ? lowestCorner.point.clone().addScaledVector(workplaneNormal(activeWorkplane), -lowestCorner.height)
+    : framePoint(frame, 0, workplaneY, 0);
+  const elevationTo = lowestCorner ? lowestCorner.point : bottomCenterWorld;
+  const liftLabel = formatMeasure(frameElevationAboveWorkplane(frame, activeWorkplane), accuracy);
   const makeFootprintDimensionMark = (handleKey: string, axis: "width" | "depth") => {
     if (axis === "width") {
       const useFarSide = handleKey.includes("far") || handleKey.includes("left");
@@ -6909,7 +7015,7 @@ function syncTransformOverlay(
   const dimensionMarks = {
     ...footprintDimensionMarks,
     [heightHandleKey]: [makeDimensionMark("height", heightHandleKey, "height", heightLabel, lowerCenterWorld, upperCenterWorld, rightOut, project)],
-    [liftHandleKey]: [makeDimensionMark("elevation", liftHandleKey, "elevation", liftLabel, workplaneAnchor, bottomCenterWorld, rightOut, project)],
+    [liftHandleKey]: [makeDimensionMark("elevation", liftHandleKey, "elevation", liftLabel, elevationFrom, elevationTo, rightOut, project)],
   };
   // Rotation controls (gizmo v2). Everything is expressed in the selection
   // frame, whose axes are the placement workplane's axes; on the base
@@ -7156,8 +7262,8 @@ function syncAlignOverlay(
     return;
   }
 
-  const selectedFrame = selectionFrameForShapes(shapes, selectedIds);
-  const anchorFrame = alignAnchorId && selectedIds.includes(alignAnchorId) ? selectionFrameForShapes(shapes, [alignAnchorId]) : null;
+  const selectedFrame = selectionFrameForShapes(shapes, selectedIds, undefined, { followShape: false });
+  const anchorFrame = alignAnchorId && selectedIds.includes(alignAnchorId) ? selectionFrameForShapes(shapes, [alignAnchorId], undefined, { followShape: false }) : null;
   const frame = anchorFrame ?? selectedFrame;
   if (!frame) {
     clear();
@@ -7265,7 +7371,8 @@ function syncMirrorOverlay(
     return;
   }
 
-  const frame = selectionFrameForShapes(shapes, selectedIds);
+  // Mirroring flips along world axes, so its handles stay on the world frame.
+  const frame = selectionFrameForShapes(shapes, selectedIds, undefined, { followShape: false });
   if (!frame) {
     clear();
     return;
@@ -7439,23 +7546,39 @@ function createSelectedGroundFootprint(shape: WorkplaneShape, workplane: Placeme
     return null;
   }
 
-  const planeY = workplaneYForFrame(frame, workplane);
-  const nearestFaceY = clamp(planeY, frame.min.y, frame.max.y);
-  if (Math.abs(nearestFaceY - planeY) <= 0.08) {
-    return null;
+  let footprint: THREE.Vector3[];
+  if (frame.ownFrame) {
+    // A rotated shape's shadow: its own bottom face dropped onto the workplane.
+    if (frameElevationAboveWorkplane(frame, workplane) <= 0.08) {
+      return null;
+    }
+    const normal = workplaneNormal(workplane);
+    const origin = new THREE.Vector3(workplane.origin.x, workplane.origin.y, workplane.origin.z);
+    footprint = [
+      framePoint(frame, frame.min.x, frame.min.y, frame.min.z),
+      framePoint(frame, frame.max.x, frame.min.y, frame.min.z),
+      framePoint(frame, frame.max.x, frame.min.y, frame.max.z),
+      framePoint(frame, frame.min.x, frame.min.y, frame.max.z),
+    ].map((corner) => corner.addScaledVector(normal, 0.04 - corner.clone().sub(origin).dot(normal)));
+  } else {
+    const planeY = workplaneYForFrame(frame, workplane);
+    const nearestFaceY = clamp(planeY, frame.min.y, frame.max.y);
+    if (Math.abs(nearestFaceY - planeY) <= 0.08) {
+      return null;
+    }
+    const shadowY = planeY + 0.04;
+    footprint = [
+      framePoint(frame, frame.min.x, shadowY, frame.min.z),
+      framePoint(frame, frame.max.x, shadowY, frame.min.z),
+      framePoint(frame, frame.max.x, shadowY, frame.max.z),
+      framePoint(frame, frame.min.x, shadowY, frame.max.z),
+    ];
   }
 
   const group = new THREE.Group();
   group.name = "SelectedGroundFootprint";
   group.userData.shapeId = shape.id;
 
-  const shadowY = planeY + 0.04;
-  const footprint = [
-    framePoint(frame, frame.min.x, shadowY, frame.min.z),
-    framePoint(frame, frame.max.x, shadowY, frame.min.z),
-    framePoint(frame, frame.max.x, shadowY, frame.max.z),
-    framePoint(frame, frame.min.x, shadowY, frame.max.z),
-  ];
   const fillGeometry = new THREE.BufferGeometry();
   fillGeometry.setAttribute(
     "position",

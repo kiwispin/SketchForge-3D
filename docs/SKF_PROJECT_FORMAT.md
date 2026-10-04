@@ -40,6 +40,7 @@ Object nodes keep stable SketchForge object IDs. Groups refer to child node IDs 
 
 - All current native shape kinds and their editable parameters
 - Position, rotation, dimensions, mirrors, colour, solid/hole role, visibility, and lock state
+- The orientation of rotated shapes whose rotation was baked into their mesh: an optional `localFrame: { quaternion: [x, y, z, w] }` in the object definition (maps the shape's own axes to world axes). Readers ignore an invalid record, and files without it open as before.
 - Nested groups, boolean operands, subtraction results, and intersection metadata
 - Sketch points, lines, Bezier/smooth handles, disjoint profiles, reference images, and extrusion depth
 - Imported STL, SVG, and STEP sources, stored once and reused by instances

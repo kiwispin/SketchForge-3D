@@ -1,5 +1,5 @@
 import { createLocalId } from "@/lib/localIds";
-import type { GridSize, WorkplaneShape } from "@/types/sketchforge";
+import type { GridSize, ShapeLocalFrame, WorkplaneShape } from "@/types/sketchforge";
 
 export function normalizeDegrees(value: number) {
   return ((value % 360) + 360) % 360;
@@ -92,7 +92,7 @@ export function meshYawDegrees(shape: WorkplaneShape) {
   return Math.abs(equivalentYaw) < 1e-9 ? 0 : equivalentYaw;
 }
 
-function edgeTreatmentPreserveZone(shape: WorkplaneShape): number {
+export function edgeTreatmentPreserveZone(shape: WorkplaneShape): number {
   const own = Math.max(...(shape.edgeTreatments ?? []).map((feature) => feature.amount), 0);
   const child = Math.max(...(shape.groupedShapes ?? []).map(edgeTreatmentPreserveZone), 0);
   return Math.max(own, child);
@@ -102,7 +102,7 @@ export function preservesEdgeTreatmentSize(shape: WorkplaneShape) {
   return shape.edgeResizeMode === "preserve" && Boolean(shape.importedMesh && edgeTreatmentPreserveZone(shape) > 0);
 }
 
-function edgePreservedCoordinate(value: number, baseSize: number, targetSize: number, centered: boolean, requestedZone: number) {
+export function edgePreservedCoordinate(value: number, baseSize: number, targetSize: number, centered: boolean, requestedZone: number) {
   const oldMin = centered ? -baseSize / 2 : 0;
   const oldMax = oldMin + baseSize;
   const newMin = centered ? -targetSize / 2 : 0;
@@ -209,9 +209,28 @@ export function mirroredAxisCount(shape: WorkplaneShape) {
   return [shape.mirrorX, shape.mirrorY, shape.mirrorZ].filter(Boolean).length;
 }
 
+/**
+ * A valid, non-identity orientation record, or undefined. The same object is
+ * returned when it is already valid so shape equality by reference holds.
+ */
+export function normalizeShapeLocalFrame(value: unknown): ShapeLocalFrame | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const quaternion = (value as { quaternion?: unknown }).quaternion;
+  if (!Array.isArray(quaternion) || quaternion.length !== 4 || !quaternion.every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
+    return undefined;
+  }
+  const [x, y, z, w] = quaternion as number[];
+  const length = Math.hypot(x, y, z, w);
+  if (length < 1e-9) return undefined;
+  // Identity (q or -q) means "never rotated": store nothing.
+  if (Math.abs(Math.abs(w) / length - 1) < 1e-12) return undefined;
+  return value as ShapeLocalFrame;
+}
+
 export function canonicalizeShape(shape: WorkplaneShape): WorkplaneShape {
   const next: WorkplaneShape = {
     ...shape,
+    localFrame: normalizeShapeLocalFrame(shape.localFrame),
     rotation: cleanRotationDegrees(shape.rotation ?? 0),
     rotationX: cleanRotationDegrees(shape.rotationX ?? 0),
     rotationZ: cleanRotationDegrees(shape.rotationZ ?? 0),
@@ -280,6 +299,7 @@ export function workplaneShapesEqual(a: WorkplaneShape, b: WorkplaneShape) {
     a.cadBrep === b.cadBrep &&
     a.cadBrepFrame === b.cadBrepFrame &&
     a.cadPrimitiveFrame === b.cadPrimitiveFrame &&
+    a.localFrame === b.localFrame &&
     a.groupedShapes === b.groupedShapes &&
     a.groupedBaseWidth === b.groupedBaseWidth &&
     a.groupedBaseDepth === b.groupedBaseDepth &&

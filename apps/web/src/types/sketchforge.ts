@@ -173,6 +173,17 @@ export type CadPrimitiveFrame = {
   frame: CadBrepFrame;
 };
 
+/**
+ * The orientation of a shape whose rotation has been baked into world-space
+ * mesh positions (rotation fields reset to 0). `quaternion` ([x, y, z, w])
+ * maps the shape's own X/Y/Z axes to world axes, so the selection frame and
+ * resize handles can keep following the shape after the bake. The shape's
+ * true local size is not stored: it is measured from the mesh along these axes.
+ */
+export type ShapeLocalFrame = {
+  quaternion: [number, number, number, number];
+};
+
 export type WorkplaneShape = {
   id: string;
   name: string;
@@ -244,6 +255,7 @@ export type WorkplaneShape = {
   cadBrep?: string;
   cadBrepFrame?: CadBrepFrame;
   cadPrimitiveFrame?: CadPrimitiveFrame;
+  localFrame?: ShapeLocalFrame;
   groupedShapes?: WorkplaneShape[];
   groupedBaseWidth?: number;
   groupedBaseDepth?: number;

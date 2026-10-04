@@ -70,6 +70,7 @@ import {
   workplaneShapesEqual,
 } from "@/lib/workplaneShapes";
 import { bakeCadMetadataForShapeTransform, cadBrepTransformForShape, cadModifierPrimitiveForAnalyticBox, cadModifierPrimitiveForBakedShape } from "@/lib/cadBakeMetadata";
+import { bakeWorldMeshIntoShape, orientationRecordForBake, shapeOwnFrame } from "@/lib/shapeLocalFrame";
 import { hasOneToOneCadComponentMapping } from "@/lib/cadModifierGroups";
 import {
   CAD_MODIFIER_MAX_SHARP_ANGLE,
@@ -1340,6 +1341,8 @@ function shapeFromCadMesh(
       height,
     },
     cadPrimitiveFrame: undefined,
+    // The CAD result is in world space; it keeps the source's orientation.
+    localFrame: orientationRecordForBake(source),
   });
 }
 
@@ -2223,6 +2226,7 @@ function sketchReferenceShapeOnWorkplane(shape: WorkplaneShape, workplane: Place
     cadBrep: undefined,
     cadBrepFrame: undefined,
     cadPrimitiveFrame: undefined,
+    localFrame: undefined,
   });
 }
 
@@ -2276,79 +2280,12 @@ function bakeShapeTransformIntoMesh(shape: WorkplaneShape): WorkplaneShape {
     return shape;
   }
 
-  const mesh = meshForShape(shape);
-  if (mesh.vertices.length < 3 || mesh.faces.length < 1) {
-    return shape;
-  }
-
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let minZ = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  let maxZ = Number.NEGATIVE_INFINITY;
-
-  mesh.vertices.forEach(([x, y, z]) => {
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    minZ = Math.min(minZ, z);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-    maxZ = Math.max(maxZ, z);
+  return bakeWorldMeshIntoShape(shape, meshForShape(shape), {
+    cleanDimension: cleanModelDimension,
+    minDimension: MIN_SHAPE_DIMENSION,
+    bakeCadMetadata: ({ centerX, minY, centerZ, width, depth, height }) =>
+      bakeCadMetadataForShapeTransform(shape, { centerX, minY, centerZ, width, depth, height, yawDegrees: meshYawDegrees(shape) }),
   });
-
-  if (![minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite)) {
-    return shape;
-  }
-
-  const centerX = (minX + maxX) / 2;
-  const centerZ = (minZ + maxZ) / 2;
-  const rawWidth = Math.max(MIN_SHAPE_DIMENSION, maxX - minX);
-  const rawHeight = Math.max(MIN_SHAPE_DIMENSION, maxY - minY);
-  const rawDepth = Math.max(MIN_SHAPE_DIMENSION, maxZ - minZ);
-  const width = cleanModelDimension(rawWidth);
-  const height = cleanModelDimension(rawHeight);
-  const depth = cleanModelDimension(rawDepth);
-  const positions: number[] = [];
-  const bakedCadMetadata = bakeCadMetadataForShapeTransform(shape, { centerX, minY, centerZ, width, depth, height, yawDegrees: meshYawDegrees(shape) });
-
-  mesh.faces.forEach(([ai, bi, ci]) => {
-    [mesh.vertices[ai], mesh.vertices[bi], mesh.vertices[ci]].forEach(([x, y, z]) => {
-      positions.push(x - centerX, y - minY, z - centerZ);
-    });
-  });
-
-  return {
-    ...shape,
-    kind: "mesh",
-    x: cleanNearZero(centerX, 0.0005),
-    z: cleanNearZero(centerZ, 0.0005),
-    elevation: cleanNearZero(minY, 0.0005),
-    width,
-    depth,
-    height,
-    size: Math.max(width, depth),
-    rotation: 0,
-    rotationX: 0,
-    rotationZ: 0,
-    mirrorX: undefined,
-    mirrorY: undefined,
-    mirrorZ: undefined,
-    importedMesh: {
-      positions,
-      baseWidth: rawWidth,
-      baseDepth: rawDepth,
-      baseHeight: rawHeight,
-      triangleCount: mesh.faces.length,
-      sourceFormat: "json",
-    },
-    ...bakedCadMetadata,
-    imagePlate: undefined,
-    groupedShapes: undefined,
-    groupedBaseWidth: undefined,
-    groupedBaseDepth: undefined,
-    groupedBaseHeight: undefined,
-  };
 }
 
 function readFileAsDataUrl(file: File) {
@@ -5142,6 +5079,20 @@ async function buildGroupedShapeFromSelection(groupable: WorkplaneShape[]): Prom
   };
 }
 
+function debugOwnFrameSummary(shape: WorkplaneShape) {
+  const frame = shapeOwnFrame(shape);
+  if (!frame) return null;
+  const round = (value: number) => Number(value.toFixed(4));
+  return {
+    width: round(frame.width),
+    depth: round(frame.depth),
+    height: round(frame.height),
+    xAxis: frame.xAxis.toArray().map(round),
+    yAxis: frame.yAxis.toArray().map(round),
+    zAxis: frame.zAxis.toArray().map(round),
+  };
+}
+
 function debugShapeSummary(shape: WorkplaneShape): Record<string, unknown> {
   return {
     id: shape.id,
@@ -5168,6 +5119,8 @@ function debugShapeSummary(shape: WorkplaneShape): Record<string, unknown> {
     edgeResizeMode: shape.edgeResizeMode ?? "scale",
     cadBrepLength: shape.cadBrep?.length ?? 0,
     cadPrimitiveKind: shape.cadPrimitiveFrame?.kind ?? null,
+    localFrame: shape.localFrame?.quaternion ?? null,
+    ownFrame: debugOwnFrameSummary(shape),
     groupedCount: shape.groupedShapes?.length ?? 0,
     children: shape.groupedShapes?.map(debugShapeSummary) ?? [],
   };
