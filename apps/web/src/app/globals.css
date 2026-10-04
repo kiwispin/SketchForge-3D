@@ -21,6 +21,11 @@
   --font-ui: "Avenir Next", Avenir, "Helvetica Neue", Arial, sans-serif;
   --editor-toolbar-height: 108px;
   --editor-toolbar-tools-height: 76px;
+  /* Transform gizmo glyphs drawn straight onto the workplane. */
+  --gizmo-ink: #293743;
+  --gizmo-move: #17222a;
+  --gizmo-rotate: #555b5e;
+  --gizmo-rotate-base: #42484a;
 }
 
 * {
@@ -4668,7 +4673,7 @@ button {
 .transform-handle.dark {
   width: 6px;
   height: 6px;
-  background: #293743;
+  background: var(--gizmo-ink);
 }
 
 .transform-handle.height-top,
@@ -4697,12 +4702,12 @@ button {
   transform: translate(-50%, -50%);
   border-left: 6px solid transparent;
   border-right: 6px solid transparent;
-  border-bottom: 13px solid #293743;
+  border-bottom: 13px solid var(--gizmo-ink);
 }
 
 .transform-handle.height-lift.lower::before {
   border-bottom: 0;
-  border-top: 13px solid #293743;
+  border-top: 13px solid var(--gizmo-ink);
 }
 
 .transform-handle.move-axis {
@@ -4712,7 +4717,7 @@ button {
   border: 0;
   background: transparent;
   box-shadow: none;
-  color: #17222a;
+  color: var(--gizmo-move);
   cursor: grab;
   transform: translate3d(var(--overlay-x, 0), var(--overlay-y, 0), 0) translate(-50%, -50%) rotate(var(--transform-handle-angle, 0deg));
 }
@@ -4746,7 +4751,7 @@ button {
   width: 42px;
   height: 42px;
   padding: 0;
-  color: #555b5e;
+  color: var(--gizmo-rotate);
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -4788,7 +4793,7 @@ button {
 .rotate-handle.axis-y-workplane {
   width: 46px;
   height: 34px;
-  color: #42484a;
+  color: var(--gizmo-rotate-base);
   touch-action: none;
   user-select: none;
 }
@@ -7077,6 +7082,44 @@ html[data-theme="dark"] .transform-guides line {
 
 html[data-theme="dark"] .transform-guides #dimension-arrow path {
   fill: rgba(222, 237, 244, 0.94);
+}
+
+/* The fork's gizmo glyphs were drawn in dark ink for the light workplane. */
+html[data-theme="dark"] {
+  --gizmo-ink: #d3e0e9;
+  --gizmo-move: #e3edf3;
+  --gizmo-rotate: #b9c8d2;
+  --gizmo-rotate-base: #cbd8e1;
+}
+
+html[data-theme="dark"] .transform-handle.edge,
+html[data-theme="dark"] .transform-handle.dark {
+  border-color: #0f1922;
+}
+
+html[data-theme="dark"] .rotation-tick {
+  stroke: rgba(205, 222, 232, 0.55);
+}
+
+html[data-theme="dark"] .rotation-tick.major {
+  stroke: rgba(226, 238, 245, 0.86);
+}
+
+html[data-theme="dark"] .rotation-zero-line {
+  stroke: rgba(205, 222, 232, 0.45);
+}
+
+html[data-theme="dark"] .rotation-protractor-center {
+  fill: rgba(222, 236, 244, 0.9);
+}
+
+html[data-theme="dark"] .rotation-zero-marker {
+  fill: #e3edf3;
+  stroke: rgba(12, 20, 27, 0.8);
+}
+
+html[data-theme="dark"] .rotation-axis-label {
+  fill: rgba(222, 236, 244, 0.8);
 }
 
 html[data-theme="dark"] .ruler-overlay .ruler-point.origin-marker {
