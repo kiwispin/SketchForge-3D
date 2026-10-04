@@ -92,7 +92,7 @@ import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
 import { buildSketchRevolveMesh, DEFAULT_SKETCH_REVOLVE_SETTINGS, normalizeSketchRevolveSettings, type SketchRevolveMesh } from "@/lib/sketchRevolve";
 import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
 import { isProjectFileName } from "@/lib/projectFile";
-import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
+import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, requestDriveAccessToken, uploadProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
@@ -8612,6 +8612,10 @@ export function SketchForgeEditor({
           : "Packaging editable project, history, and deduplicated assets…",
     );
     try {
+      // Ask for Drive access first, while the click still counts as a user
+      // gesture; packaging a large project could outlast it and get the
+      // Google sign-in pop-up blocked.
+      const driveToken = toDrive ? await requestDriveAccessToken() : null;
       const exportedHistory = editorHistoryForExport(historyRef.current, historyIndexRef.current, historyLimit);
       const bytes = await exportSkfProject({
         projectId: projectInfoRef.current.projectId,
@@ -8630,11 +8634,11 @@ export function SketchForgeEditor({
       });
       if (target === "shared" && onSaveSharedProject) {
         setNotice(await onSaveSharedProject({ exportName: exportName.trim() || projectName, bytes }));
-      } else if (toDrive) {
+      } else if (driveToken) {
         // Drive always receives the packaged .skf project; a linked project
         // updates its own Drive file, "Save a copy" makes a separate one.
         const copy = target === "drive-copy";
-        const result = await saveProjectToDrive({
+        const result = await uploadProjectToDrive(driveToken, {
           fileName: projectExportFileName(exportName.trim() || projectName, "skf"),
           content: bytes,
           mimeType: SKF_MEDIA_TYPE,
