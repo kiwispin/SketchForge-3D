@@ -4264,6 +4264,36 @@ button {
   transform: translate(-50%, -50%);
 }
 
+.origin-ruler-glyph {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  color: currentColor;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.origin-ruler-overlay {
+  z-index: 6;
+}
+
+.origin-ruler-readout {
+  font-weight: 700;
+  color: #0c4a6e;
+  border-color: rgba(0, 143, 190, 0.55);
+  white-space: nowrap;
+}
+
+.ruler-overlay .ruler-point.origin-marker {
+  pointer-events: none;
+  cursor: default;
+  fill: #00a7d8;
+  stroke: #ffffff;
+}
+
 .transform-overlay {
   position: absolute;
   inset: 0;
@@ -7047,6 +7077,10 @@ html[data-theme="dark"] .transform-guides line {
 
 html[data-theme="dark"] .transform-guides #dimension-arrow path {
   fill: rgba(222, 237, 244, 0.94);
+}
+
+html[data-theme="dark"] .ruler-overlay .ruler-point.origin-marker {
+  stroke: #101820;
 }
 
 html[data-theme="dark"] .inspector-snap-dock {

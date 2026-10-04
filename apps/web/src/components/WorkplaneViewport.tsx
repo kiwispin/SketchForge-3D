@@ -1286,6 +1286,85 @@ function pickModifierEdgeFromScreen(state: ThreeState, edges: CadModifierEdge[],
   return nearestId;
 }
 
+type OriginRulerOverlayState = {
+  originX: number;
+  originY: number;
+  readout: { x: number; y: number; text: string } | null;
+};
+
+/**
+ * "Ruler from origin": a passive overlay that marks the workplane origin and
+ * reads out the selection's X/Z centre and Y (bottom) from it. It does not add
+ * points to the ruler model, so it never blocks selection or measuring.
+ */
+function syncOriginRulerOverlay(
+  state: ThreeState,
+  active: boolean,
+  shapes: WorkplaneShape[],
+  selectedIds: string[],
+  workplane: PlacementWorkplane,
+  overlayRef: MutableRefObject<OriginRulerOverlayState | null>,
+  setOverlay: Dispatch<SetStateAction<OriginRulerOverlayState | null>>,
+  accuracy: MeasurementAccuracy,
+) {
+  if (!active) {
+    if (overlayRef.current) {
+      overlayRef.current = null;
+      setOverlay(null);
+    }
+    return;
+  }
+  const origin = projectToScreen(new THREE.Vector3(0, 0, 0), state);
+  const frame = selectedIds.length > 0 ? selectionFrameForShapes(shapes, selectedIds, workplane) : null;
+  let readout: OriginRulerOverlayState["readout"] = null;
+  if (frame) {
+    const bounds = selectionWorldYBounds(frame);
+    const top = projectToScreen(new THREE.Vector3(frame.center.x, bounds.max, frame.center.z), state);
+    const above = projectToScreen(new THREE.Vector3(frame.center.x, bounds.max + 14, frame.center.z), state);
+    readout = {
+      x: above.x,
+      // At least clear the lift arrow, which sits >= 32 px above the top.
+      y: Math.min(above.y, top.y - 56),
+      text: `X ${formatMeasure(frame.center.x, accuracy)} · Z ${formatMeasure(frame.center.z, accuracy)} · Y ${formatMeasure(bounds.min, accuracy)}`,
+    };
+  }
+  const next: OriginRulerOverlayState = { originX: origin.x, originY: origin.y, readout };
+  const previous = overlayRef.current;
+  if (
+    previous
+    && Math.abs(previous.originX - next.originX) < 0.2
+    && Math.abs(previous.originY - next.originY) < 0.2
+    && (previous.readout === null) === (next.readout === null)
+    && (!previous.readout || !next.readout || (
+      previous.readout.text === next.readout.text
+      && Math.abs(previous.readout.x - next.readout.x) < 0.2
+      && Math.abs(previous.readout.y - next.readout.y) < 0.2
+    ))
+  ) {
+    return;
+  }
+  overlayRef.current = next;
+  setOverlay(next);
+}
+
+function OriginRulerOverlay({ overlay }: { overlay: OriginRulerOverlayState }) {
+  return (
+    <div className="ruler-overlay origin-ruler-overlay" aria-hidden="true">
+      <svg className="ruler-guides">
+        <circle className="ruler-point origin-marker" cx={overlay.originX} cy={overlay.originY} r="5" />
+      </svg>
+      <span className="ruler-label origin-ruler-label" style={{ left: overlay.originX + 10, top: overlay.originY - 18 }}>
+        0, 0
+      </span>
+      {overlay.readout ? (
+        <span className="ruler-label origin-ruler-readout" style={{ left: overlay.readout.x, top: overlay.readout.y }}>
+          {overlay.readout.text}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function syncRulerOverlay(
   state: ThreeState,
   model: RulerModel,
@@ -2197,6 +2276,8 @@ export function WorkplaneViewport({
   const [cameraControlsCollapsed, setCameraControlsCollapsed] = useState(false);
   const [rulerModel, setRulerModel] = useState<RulerModel>({ points: [], segments: [], startPointId: null, hover: null });
   const [rulerOverlay, setRulerOverlay] = useState<RulerOverlayState | null>(null);
+  const [originRulerMode, setOriginRulerMode] = useState(false);
+  const [originRulerOverlay, setOriginRulerOverlay] = useState<OriginRulerOverlayState | null>(null);
   const [moveDimensionOverlay, setMoveDimensionOverlay] = useState<MoveDimensionOverlayState | null>(null);
   const [moveDimensionsEnabled, setMoveDimensionsEnabled] = useState(true);
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -2231,6 +2312,8 @@ export function WorkplaneViewport({
   const rulerHistoryRef = useRef<RulerModel[]>([]);
   const [rulerHistoryRevision, setRulerHistoryRevision] = useState(0);
   const rulerOverlayRef = useRef<RulerOverlayState | null>(null);
+  const originRulerModeRef = useRef(false);
+  const originRulerOverlayRef = useRef<OriginRulerOverlayState | null>(null);
   const rulerIdRef = useRef(0);
   const alignModeRef = useRef(alignMode);
   const alignAnchorIdRef = useRef(alignAnchorId);
@@ -2598,6 +2681,24 @@ export function WorkplaneViewport({
   }, [rulerMoveMode]);
 
   useEffect(() => {
+    originRulerModeRef.current = originRulerMode;
+    const state = threeRef.current;
+    if (state) {
+      syncOriginRulerOverlay(
+        state,
+        originRulerMode,
+        shapes,
+        selectedIds,
+        placementWorkplane,
+        originRulerOverlayRef,
+        setOriginRulerOverlay,
+        workspace.accuracy,
+      );
+      state.needsRender = true;
+    }
+  }, [originRulerMode, placementWorkplane, selectedIds, shapes, workspace.accuracy]);
+
+  useEffect(() => {
     rulerModelRef.current = rulerModel;
     if (threeRef.current) {
       syncRulerOverlay(threeRef.current, rulerModel, rulerOverlayRef, setRulerOverlay, workspaceRef.current.accuracy);
@@ -2755,6 +2856,16 @@ export function WorkplaneViewport({
         syncAlignOverlay(state, alignReferenceShapesRef.current, selectedIdsRef.current, alignModeRef.current, alignAnchorIdRef.current, alignHandlesRef.current, alignOverlayRef, setAlignOverlay);
         syncMirrorOverlay(state, mirrorReferenceShapesRef.current, selectedIdsRef.current, mirrorModeRef.current, mirrorOverlayRef, setMirrorOverlay);
         syncRulerOverlay(state, rulerModelRef.current, rulerOverlayRef, setRulerOverlay, workspaceRef.current.accuracy);
+        syncOriginRulerOverlay(
+          state,
+          originRulerModeRef.current,
+          previewShapes,
+          selectedIdsRef.current,
+          placementWorkplaneRef.current,
+          originRulerOverlayRef,
+          setOriginRulerOverlay,
+          workspaceRef.current.accuracy,
+        );
         syncMoveDimensionOverlay(
           state,
           moveDimensionSessionRef.current,
@@ -5078,6 +5189,15 @@ export function WorkplaneViewport({
                   <button className={`ruler-delete-button ${rulerDeleteMode ? "active" : ""}`} aria-label="Delete measurement part" title="Delete measurement part" aria-pressed={rulerDeleteMode} onClick={activateRulerDelete}>
                     <X size={20} strokeWidth={2.4} aria-hidden="true" />
                   </button>
+                  <button
+                    className={originRulerMode ? "active" : ""}
+                    aria-label="Ruler from origin"
+                    title="Ruler from origin"
+                    aria-pressed={originRulerMode}
+                    onClick={() => setOriginRulerMode((current) => !current)}
+                  >
+                    <span className="origin-ruler-glyph" aria-hidden="true">0</span>
+                  </button>
                   {rulerModel.points.length > 0 ? (
                     <button aria-label="Clear ruler" title="Clear all measurements (Ctrl/Cmd+Z to undo)" onClick={clearRuler}>
                       <Trash2 size={19} strokeWidth={2.3} aria-hidden="true" />
@@ -5164,6 +5284,7 @@ export function WorkplaneViewport({
           {!workplaneMode && smartGuideOverlay && !alignMode && !mirrorMode && !rulerMode && !rulerDeleteMode && !rulerMoveMode && !modifierActive ? <SmartGuideOverlay overlay={smartGuideOverlay} /> : null}
           {!workplaneMode && alignOverlay ? <AlignOverlay overlay={alignOverlay} onAlign={onAlignSelection} onPreview={onAlignPreview} onPreviewClear={onAlignPreviewClear} /> : null}
           {!workplaneMode && mirrorOverlay ? <MirrorOverlay overlay={mirrorOverlay} onMirror={onMirrorSelection} onPreview={onMirrorPreview} onPreviewClear={onMirrorPreviewClear} /> : null}
+          {!workplaneMode && originRulerOverlay ? <OriginRulerOverlay overlay={originRulerOverlay} /> : null}
           {!workplaneMode && rulerOverlay && (rulerOverlay.points.length > 0 || rulerOverlay.hover) ? (
             <RulerOverlay
               overlay={rulerOverlay}
