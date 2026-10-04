@@ -1,10 +1,11 @@
 "use client";
 
-import { Clock3, EllipsisVertical, FileUp, FolderKanban, Grid3X3, HomeIcon, List, Pencil, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Clock3, CloudDownload, EllipsisVertical, FileUp, FolderKanban, Grid3X3, HomeIcon, List, Pencil, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
 import { applyAppTheme, readStoredAppTheme, resolveAppTheme, storeAppTheme, type AppThemePreference, type ResolvedAppTheme } from "@/lib/appTheme";
 import { hydrateEditorHistoryState, type EditorHistoryEntry } from "@/lib/editorHistory";
+import { DriveError, downloadProjectFromDrive, isDriveConfigured, listProjectsFromDrive, preloadGoogleIdentity, type DriveProjectFileInfo } from "@/lib/googleDrive";
 import { createLocalId } from "@/lib/localIds";
 import {
   horizontalPlacementWorkplane,
@@ -14,10 +15,10 @@ import {
 } from "@/lib/placementWorkplane";
 import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceFormatForFileName } from "@/lib/projectAssets";
 import { hydrateProjectShapeState, type ImportedMeshResource } from "@/lib/projectShapePersistence";
-import { exportSkfProject, importSkfProject, SKF_CREATED_WITH_VERSION } from "@/lib/skfProject";
+import { exportSkfProject, importSkfProject, SKF_CREATED_WITH_VERSION, type SkfRestoredProject } from "@/lib/skfProject";
 import { importExtensionSupported } from "@/lib/stlImport";
 import { DEFAULT_SNAP_GRID, DEFAULT_WORKPLANE_WORKSPACE, normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
-import type { GridSize, ProjectAsset, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { GridSize, ProjectAsset, ProjectDriveFile, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 type AppView = "dashboard" | "editor";
 type ViewMode = "grid" | "list";
@@ -40,7 +41,13 @@ type DashboardProject = {
   placementWorkplane?: PlacementWorkplane;
   sketchPlacementWorkplane?: PlacementWorkplane;
   sharedProject?: { fileName: string; revision: string };
+  drive?: ProjectDriveFile | null;
 };
+
+type DriveOpenDialogState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; files: DriveProjectFileInfo[]; openingFileId?: string; message?: string };
 
 type SharedProject = {
   fileName: string;
@@ -402,6 +409,7 @@ function readStoredProjects() {
           sharedProject: typeof project.sharedProject?.fileName === "string" && typeof project.sharedProject.revision === "string"
             ? { fileName: project.sharedProject.fileName, revision: project.sharedProject.revision }
             : undefined,
+          drive: parseProjectDriveFile(project.drive),
         };
       });
     return { projects, legacyShapes };
@@ -436,6 +444,7 @@ function mergeProjectForStorage(project: DashboardProject, storedProject?: Dashb
     placementWorkplane: storedProject.placementWorkplane ?? project.placementWorkplane,
     sketchPlacementWorkplane: storedProject.sketchPlacementWorkplane ?? project.sketchPlacementWorkplane,
     sharedProject: project.sharedProject ?? storedProject.sharedProject,
+    drive: project.drive ?? storedProject.drive,
   };
 }
 
@@ -456,6 +465,18 @@ function projectForStorage(project: DashboardProject): DashboardProject {
     placementWorkplane: normalizePlacementWorkplane(project.placementWorkplane, project.placementElevation),
     sketchPlacementWorkplane: normalizePlacementWorkplane(project.sketchPlacementWorkplane),
     sharedProject: project.sharedProject,
+    drive: project.drive ?? null,
+  };
+}
+
+function parseProjectDriveFile(value: unknown): ProjectDriveFile | null {
+  if (!value || typeof value !== "object") return null;
+  const drive = value as Partial<ProjectDriveFile>;
+  if (typeof drive.fileId !== "string" || typeof drive.fileName !== "string") return null;
+  return {
+    fileId: drive.fileId,
+    fileName: drive.fileName,
+    savedAt: typeof drive.savedAt === "number" ? drive.savedAt : Date.now(),
   };
 }
 
@@ -487,6 +508,16 @@ function projectNameFromFileName(fileName: string) {
   return fileName.replace(/\.[^.]+$/, "").trim() || "Imported design";
 }
 
+// The name a project file has in Drive or on disk, without its extension.
+function projectFileNameStem(fileName: string) {
+  return fileName.replace(/\.(skf|sketchforge(\.json)?)$/i, "").trim();
+}
+
+async function restoreProjectFromBytes(fileName: string, bytes: ArrayBuffer): Promise<SkfRestoredProject> {
+  void fileName;
+  return importSkfProject(bytes);
+}
+
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<AppView>("dashboard");
@@ -508,6 +539,7 @@ export default function Home() {
   const [sharedProjectsEnabled, setSharedProjectsEnabled] = useState(false);
   const [sharedProjectsLoading, setSharedProjectsLoading] = useState(false);
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
+  const [driveDialog, setDriveDialog] = useState<DriveOpenDialogState | null>(null);
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
   const nextProjectRevisionRef = useRef(0);
@@ -901,27 +933,37 @@ export default function Home() {
     openEditor(project.id, { allowMissingFromStorage: true });
   };
 
+  const addRestoredProject = useCallback(async (
+    restored: SkfRestoredProject,
+    options: { name?: string; sharedProject?: SharedProject; drive?: ProjectDriveFile | null } = {},
+  ) => {
+    const now = Date.now();
+    const project: DashboardProject = {
+      ...newProject(options.name || restored.projectName, projects.length, restored.shapes.length),
+      createdAt: restored.createdAt,
+      updatedAt: now,
+      revision: now,
+      workspace: restored.workspace,
+      snapGrid: restored.snapGrid,
+      placementElevation: restored.placementElevation,
+      placementWorkplane: restored.placementWorkplane,
+      sketchPlacementWorkplane: restored.sketchPlacementWorkplane,
+      sharedProject: options.sharedProject ? { fileName: options.sharedProject.fileName, revision: options.sharedProject.revision } : undefined,
+      // Same timestamp as the revision, so the project starts in sync with Drive.
+      drive: options.drive ? { ...options.drive, savedAt: now } : null,
+    };
+    const entry = projectShapeCacheEntry(now, restored.shapes, restored.history, restored.historyIndex, restored.assets);
+    await saveProjectShapes(project.id, entry, projectShapeSaveContext(project));
+    setProjectShapesById((current) => ({ ...current, [project.id]: entry }));
+    setProjects((current) => [project, ...current]);
+    return project;
+  }, [projects.length]);
+
   const openSkfProjectFromFile = useCallback(async (file: File, sharedProject?: SharedProject) => {
     setDashboardNotice(`Validating ${file.name} before opening it as a new project`);
     try {
-      const restored = await importSkfProject(await file.arrayBuffer());
-      const now = Date.now();
-      const project: DashboardProject = {
-        ...newProject(restored.projectName, projects.length, restored.shapes.length),
-        createdAt: restored.createdAt,
-        updatedAt: now,
-        revision: now,
-        workspace: restored.workspace,
-        snapGrid: restored.snapGrid,
-        placementElevation: restored.placementElevation,
-        placementWorkplane: restored.placementWorkplane,
-        sketchPlacementWorkplane: restored.sketchPlacementWorkplane,
-        sharedProject: sharedProject ? { fileName: sharedProject.fileName, revision: sharedProject.revision } : undefined,
-      };
-      const entry = projectShapeCacheEntry(now, restored.shapes, restored.history, restored.historyIndex, restored.assets);
-      await saveProjectShapes(project.id, entry, projectShapeSaveContext(project));
-      setProjectShapesById((current) => ({ ...current, [project.id]: entry }));
-      setProjects((current) => [project, ...current]);
+      const restored = await restoreProjectFromBytes(file.name, await file.arrayBuffer());
+      const project = await addRestoredProject(restored, { sharedProject });
       setDashboardNotice(sharedProject ? `Opened shared project ${sharedProject.name}; edits autosave locally until you save back to shared` : `Opened ${file.name} as a new editable local project`);
       openEditor(project.id, { allowMissingFromStorage: true });
       return { ok: true, message: sharedProject ? `Opened shared project ${sharedProject.name}` : `Opened ${file.name} as a new editable local project` };
@@ -930,7 +972,85 @@ export default function Home() {
       setDashboardNotice(message);
       return { ok: false, message };
     }
-  }, [projects.length]);
+  }, [addRestoredProject]);
+
+  const updateProjectDriveFile = useCallback((snapshot: { projectId: string; drive: ProjectDriveFile }) => {
+    setProjects((current) =>
+      current.map((project) => (project.id === snapshot.projectId ? { ...project, drive: snapshot.drive } : project)),
+    );
+  }, []);
+
+  const openDriveDialog = useCallback(() => {
+    setDriveDialog({ status: "loading" });
+    listProjectsFromDrive()
+      .then((files) => {
+        setDriveDialog((current) => (current ? { status: "ready", files } : current));
+      })
+      .catch((error: unknown) => {
+        setDriveDialog((current) =>
+          current
+            ? { status: "error", message: error instanceof DriveError ? error.message : "Could not load files from Google Drive" }
+            : current,
+        );
+      });
+  }, []);
+
+  const openDriveFile = useCallback(
+    async (file: DriveProjectFileInfo) => {
+      setDriveDialog((current) => (current?.status === "ready" ? { ...current, openingFileId: file.fileId, message: undefined } : current));
+      try {
+        const bytes = await downloadProjectFromDrive(file.fileId);
+        const restored = await restoreProjectFromBytes(file.fileName, bytes);
+        const packaged = /\.skf$/i.test(file.fileName);
+        // Only packaged .skf files are linked: SketchForge never overwrites a
+        // legacy .sketchforge file, so the first Drive save of a legacy project
+        // creates a new .skf file beside it.
+        const drive: ProjectDriveFile | null = packaged ? { fileId: file.fileId, fileName: file.fileName, savedAt: Date.now() } : null;
+        // The file's own name is what the student sees in Drive, so it wins over
+        // the (possibly stale) name stored inside the project.
+        const name = projectFileNameStem(file.fileName) || restored.projectName;
+        const linked = packaged ? projects.find((project) => project.drive?.fileId === file.fileId) : undefined;
+        const project = await addRestoredProject(restored, { name, drive });
+        let notice = packaged
+          ? `Opened ${file.fileName} from Google Drive`
+          : `Opened ${file.fileName} from Google Drive; Save to Drive will create a new .skf file`;
+        if (linked) {
+          const linkedHasUnsyncedEdits = (linked.revision ?? 0) > (linked.drive?.savedAt ?? 0);
+          if (linkedHasUnsyncedEdits) {
+            // Keep the local copy's newer edits as its own, unlinked project.
+            setProjects((current) => current.map((candidate) => (candidate.id === linked.id ? { ...candidate, drive: null } : candidate)));
+            notice = `Opened ${file.fileName} from Google Drive; your local copy had changes not saved to Drive and was kept as "${linked.name}"`;
+          } else {
+            // Replace the older local copy instead of piling up duplicates.
+            setProjects((current) => current.filter((candidate) => candidate.id !== linked.id));
+            setProjectShapesById((current) => {
+              const next = { ...current };
+              delete next[linked.id];
+              return next;
+            });
+            void deleteProjectShapes(linked.id).catch(() => undefined);
+            if (!STATIC_EXPORT_BUILD) {
+              void fetch(`/api/project-thumbnail?projectId=${encodeURIComponent(linked.id)}`, { method: "DELETE" });
+            }
+          }
+        }
+        setDashboardNotice(notice);
+        setDriveDialog(null);
+        openEditor(project.id, { allowMissingFromStorage: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : `Could not open ${file.fileName}`;
+        setDriveDialog((current) => (current?.status === "ready" ? { ...current, openingFileId: undefined, message } : current));
+      }
+    },
+    [addRestoredProject, projects],
+  );
+
+  useEffect(() => {
+    if (view === "dashboard" && isDriveConfigured()) {
+      // Warm up the Google sign-in script so the pop-up opens from the click.
+      void preloadGoogleIdentity().catch(() => undefined);
+    }
+  }, [view]);
 
   const openSharedProject = useCallback(async (sharedProject: SharedProject) => {
     setDashboardNotice(`Opening shared project ${sharedProject.name}`);
@@ -1141,6 +1261,52 @@ export default function Home() {
           event.currentTarget.value = "";
         }}
       />
+      {driveDialog ? (
+        <div className="workspace-modal drive-open-modal" role="dialog" aria-label="Open from Google Drive">
+          <button className="workspace-modal-backdrop" aria-label="Close" onClick={() => setDriveDialog(null)} />
+          <div className="workspace-modal-card drive-open-card">
+            <div className="workspace-modal-header">
+              <strong>Open from Google Drive</strong>
+              <button aria-label="Close" onClick={() => setDriveDialog(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="drive-open-body">
+              {driveDialog.status === "loading" ? <p>Loading your SketchForge files from Google Drive…</p> : null}
+              {driveDialog.status === "error" ? (
+                <>
+                  <p className="drive-open-error">{driveDialog.message}</p>
+                  <button className="drive-open-retry" type="button" onClick={openDriveDialog}>
+                    Try again
+                  </button>
+                </>
+              ) : null}
+              {driveDialog.status === "ready" ? (
+                driveDialog.files.length === 0 ? (
+                  <p>No SketchForge projects in this Google Drive yet. Save a design to Drive first, then it will show up here.</p>
+                ) : (
+                  <>
+                    <p>Opening a .skf file creates a project linked to it — saves go back to the same Drive file.</p>
+                    {driveDialog.message ? <p className="drive-open-error">{driveDialog.message}</p> : null}
+                    <ul className="drive-open-list">
+                      {driveDialog.files.map((file) => (
+                        <li key={file.fileId}>
+                          <button type="button" onClick={() => void openDriveFile(file)} disabled={Boolean(driveDialog.openingFileId)}>
+                            <span className="drive-open-name">{file.fileName}</span>
+                            <span className="drive-open-date">
+                              {driveDialog.openingFileId === file.fileId ? "Opening…" : formatUpdated(file.modifiedAt)}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
       {view === "dashboard" ? (
         <Dashboard
           dashboardSection={dashboardSection}
@@ -1162,6 +1328,7 @@ export default function Home() {
           onDownloadFolderChange={setDownloadFolder}
           onDownloadModeChange={setDownloadMode}
           onImportFile={() => dashboardImportInputRef.current?.click()}
+          onOpenFromDrive={isDriveConfigured() ? openDriveDialog : undefined}
           onChallenges={() => {
             setDashboardSection("challenges");
             setDashboardNotice("");
@@ -1200,6 +1367,10 @@ export default function Home() {
             onProjectShapesChange={updateProjectShapes}
             onProjectSnapshot={updateProjectSnapshot}
             onProjectWorkspaceChange={updateProjectWorkspace}
+            onProjectDriveFileChange={updateProjectDriveFile}
+            onProjectRename={(snapshot) => renameProject(snapshot.projectId, snapshot.name)}
+            onOpenFromDrive={isDriveConfigured() ? openDriveDialog : undefined}
+            driveFile={activeProject?.drive ?? null}
             projectId={activeProjectId}
             projectName={activeProject?.name}
             projectCreatedAt={activeProject?.createdAt}
@@ -1306,6 +1477,7 @@ function Dashboard({
   onDownloadFolderChange,
   onDownloadModeChange,
   onImportFile,
+  onOpenFromDrive,
   onChallenges,
   onDashboardHome,
   onOpenSharedProject,
@@ -1338,6 +1510,7 @@ function Dashboard({
   onDownloadFolderChange: (value: string) => void;
   onDownloadModeChange: (value: DownloadMode) => void;
   onImportFile: () => void;
+  onOpenFromDrive?: () => void;
   onChallenges: () => void;
   onDashboardHome: () => void;
   onOpenSharedProject: (project: SharedProject) => void;
@@ -1481,6 +1654,14 @@ function Dashboard({
                   </span>
                   <span>Open SKF or import geometry</span>
                 </button>
+                {onOpenFromDrive ? (
+                  <button className="dashboard-action-tile" type="button" onClick={onOpenFromDrive}>
+                    <span className="dashboard-action-icon">
+                      <CloudDownload size={24} strokeWidth={2.4} />
+                    </span>
+                    <span>Open from Drive</span>
+                  </button>
+                ) : null}
                 <button className="dashboard-action-tile" type="button" onClick={onWorkspace}>
                   <span className="dashboard-action-icon">
                     <Clock3 size={24} strokeWidth={2.4} />

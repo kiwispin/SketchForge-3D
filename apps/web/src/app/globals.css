@@ -593,7 +593,7 @@ button {
 
 .dashboard-actions-band {
   display: grid;
-  grid-template-columns: repeat(3, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 14px;
   margin-bottom: 24px;
 }
@@ -1995,6 +1995,41 @@ button {
   border-bottom-color: #159fd0;
 }
 
+.toolbar-workspace-tabs .project-name-input,
+.toolbar-workspace-tabs .project-name-static {
+  align-self: center;
+  width: 210px;
+  margin-left: 14px;
+  padding: 3px 8px;
+  color: #264d68;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-workspace-tabs .project-name-input {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: text;
+}
+
+.toolbar-workspace-tabs .project-name-input:hover {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: #cfdde8;
+}
+
+.toolbar-workspace-tabs .project-name-input:focus {
+  background: #ffffff;
+  border-color: #55add8;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 156, 222, 0.14);
+}
+
 .tool-group {
   display: flex;
   height: var(--editor-toolbar-tools-height);
@@ -2970,6 +3005,75 @@ button {
   line-height: 1.4;
 }
 
+.drive-status-card {
+  display: grid;
+  gap: 3px;
+  margin-top: 9px;
+  padding: 10px 12px;
+  background: #f2f9fd;
+  border: 1px solid #cfe6f3;
+  border-radius: 7px;
+}
+
+.drive-status-file {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: #1d4a66;
+}
+
+.drive-status-file svg {
+  flex: none;
+  color: #0d99d6;
+}
+
+.drive-status-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-status-meta {
+  padding-left: 22px;
+  color: #62798c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.drive-status-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
+  padding-left: 22px;
+}
+
+.drive-status-actions a,
+.drive-status-actions button {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  color: #0a6aad;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: underline;
+}
+
+.drive-status-actions button:hover {
+  color: #084f81;
+  background: none;
+}
+
+.drive-status-actions button:disabled {
+  color: #8aa4b5;
+  cursor: default;
+}
+
 .printability-preflight {
   margin: 0 14px 10px;
   padding: 9px 11px;
@@ -3039,6 +3143,7 @@ p.printability-preflight.ready {
   display: flex;
   justify-content: flex-end;
   gap: 9px;
+  flex-wrap: wrap;
 }
 
 .export-dialog-footer button {
@@ -5817,6 +5922,100 @@ p.printability-preflight.ready {
   cursor: pointer;
 }
 
+.drive-open-modal {
+  position: fixed;
+  z-index: 90;
+}
+
+.drive-open-card {
+  display: flex;
+  width: 440px;
+  height: auto;
+  max-height: min(560px, calc(100vh - 104px));
+  flex-direction: column;
+}
+
+.drive-open-body {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+
+.drive-open-body p {
+  margin: 0;
+  color: #51697c;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.drive-open-body .drive-open-error {
+  color: #b3261e;
+}
+
+.drive-open-retry {
+  justify-self: start;
+  min-height: 34px;
+  padding: 0 14px;
+  color: #173b5a;
+  background: #f7fafc;
+  border: 1px solid #d8e3ea;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drive-open-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drive-open-list button {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  color: #173b5a;
+  background: #f7fafc;
+  border: 1px solid #d8e3ea;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.drive-open-list button:hover:not(:disabled) {
+  background: #eef8fc;
+}
+
+.drive-open-list button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.drive-open-name {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-open-date {
+  flex: 0 0 auto;
+  color: #6f8698;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .workspace-modal-layout {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
@@ -7569,6 +7768,71 @@ html[data-theme="dark"] .export-scope-badge {
   color: #74d8f2;
   background: #15323d;
   border-color: #28566a;
+}
+
+html[data-theme="dark"] .drive-status-card {
+  background: #111d25;
+  border-color: #344854;
+}
+
+html[data-theme="dark"] .drive-status-file {
+  color: #d8e8f1;
+}
+
+html[data-theme="dark"] .drive-status-file svg {
+  color: #42c7eb;
+}
+
+html[data-theme="dark"] .drive-status-meta {
+  color: #91a7b7;
+}
+
+html[data-theme="dark"] .drive-status-actions a,
+html[data-theme="dark"] .drive-status-actions button {
+  color: #74d8f2;
+  background: none;
+}
+
+html[data-theme="dark"] .drive-status-actions button:disabled {
+  color: #5d7584;
+}
+
+html[data-theme="dark"] .drive-open-body p {
+  color: #a9bccb;
+}
+
+html[data-theme="dark"] .drive-open-body .drive-open-error {
+  color: #ff9c92;
+}
+
+html[data-theme="dark"] .drive-open-retry,
+html[data-theme="dark"] .drive-open-list button {
+  color: #d6e5ef;
+  background: #1b2a35;
+  border-color: #3a4f5e;
+}
+
+html[data-theme="dark"] .drive-open-list button:hover:not(:disabled) {
+  background: #233744;
+}
+
+html[data-theme="dark"] .drive-open-date {
+  color: #91a7b7;
+}
+
+html[data-theme="dark"] .toolbar-workspace-tabs .project-name-input,
+html[data-theme="dark"] .toolbar-workspace-tabs .project-name-static {
+  color: #d8e8f1;
+}
+
+html[data-theme="dark"] .toolbar-workspace-tabs .project-name-input:hover {
+  background: #1b2a35;
+  border-color: #3a4f5e;
+}
+
+html[data-theme="dark"] .toolbar-workspace-tabs .project-name-input:focus {
+  background: #0f1921;
+  border-color: #24b8dc;
 }
 
 html[data-theme="dark"] .printability-preflight.ready {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CloudUpload, Download, Eye, FolderOpen, X } from "lucide-react";
+import { Check, CloudDownload, CloudUpload, Download, Eye, FolderOpen, X } from "lucide-react";
 import type manifoldModule from "manifold-3d";
 import type { ManifoldToplevel } from "manifold-3d";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -90,6 +90,7 @@ import { attachProjectAsset, dedupeProjectAssets, projectAssetFromBytes, sourceF
 import { findSketchOutlineIntersection } from "@/lib/sketchProfileValidation";
 import { buildSketchRevolveMesh, DEFAULT_SKETCH_REVOLVE_SETTINGS, normalizeSketchRevolveSettings, type SketchRevolveMesh } from "@/lib/sketchRevolve";
 import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
+import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
 import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
@@ -118,7 +119,7 @@ import {
   type SketchForgeMcpViewFace,
 } from "@/lib/sketchforgeMcpProtocol";
 import type { CadModifierComponentMesh, CadModifierDisplayEdge, CadModifierEdge, CadModifierKind, CadModifierMeshPart, CadModifierPrimitivePart, CadModifierQuality, CadModifierWorkerRequest, CadModifierWorkerResponse } from "@/lib/cadModifierTypes";
-import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
+import type { AlignAxis, AlignHandleStatus, AlignTarget, GridSize, ProjectAsset, ProjectDriveFile, ShapeAsset, SketchImage, SketchOperation, SketchPoint, SketchProfile, SketchRevolveSettings, SketchSegment, WorkplaneShape, WorkplaneWorkspaceSettings } from "@/types/sketchforge";
 
 export { importedShapeFromStl, importedShapeFromSvg };
 
@@ -126,7 +127,7 @@ type TopPanel = "import" | "export" | "profile" | "settings" | "repeat" | null;
 type ExportFormat = "stl" | "obj" | "step" | "svg" | "skf";
 type DirectExportFormat = Exclude<ExportFormat, "step" | "skf">;
 type SkfHistoryLimit = EditorHistoryExportLimit;
-type SkfExportTarget = "download" | "shared";
+type SkfExportTarget = "download" | "shared" | "drive" | "drive-copy";
 type ToolbarMode = "geometry" | "sketch";
 type Vec3 = [number, number, number];
 type MeshData = { name: string; vertices: Vec3[]; faces: [number, number, number][] };
@@ -5315,6 +5316,10 @@ export function SketchForgeEditor({
   onProjectShapesChange,
   onProjectSnapshot,
   onProjectWorkspaceChange,
+  onProjectDriveFileChange,
+  onProjectRename,
+  onOpenFromDrive,
+  driveFile = null,
   projectId,
   projectName = "SketchForge design",
   projectCreatedAt = Date.now(),
@@ -5359,6 +5364,10 @@ export function SketchForgeEditor({
     placementWorkplane?: PlacementWorkplane;
     sketchPlacementWorkplane?: PlacementWorkplane;
   }) => void;
+  onProjectDriveFileChange?: (snapshot: { projectId: string; drive: ProjectDriveFile }) => void;
+  onProjectRename?: (snapshot: { projectId: string; name: string }) => void;
+  onOpenFromDrive?: () => void;
+  driveFile?: ProjectDriveFile | null;
   projectId?: string | null;
   projectName?: string;
   projectCreatedAt?: number;
@@ -5403,6 +5412,8 @@ export function SketchForgeEditor({
   const [stlExporting, setStlExporting] = useState(false);
   const [stepExporting, setStepExporting] = useState(false);
   const [skfExporting, setSkfExporting] = useState(false);
+  const [driveSaving, setDriveSaving] = useState(false);
+  const [driveFileLink, setDriveFileLink] = useState<ProjectDriveFile | null>(driveFile);
   const [alignMode, setAlignMode] = useState(false);
   const [alignAnchorId, setAlignAnchorId] = useState<string | null>(null);
   const [alignPreview, setAlignPreview] = useState<{ axis: AlignAxis; target: AlignTarget } | null>(null);
@@ -5746,6 +5757,17 @@ export function SketchForgeEditor({
   useEffect(() => {
     projectInfoRef.current = { projectId: projectId ?? null, projectName, projectCreatedAt };
   }, [projectCreatedAt, projectId, projectName]);
+
+  useEffect(() => {
+    setDriveFileLink(driveFile ?? null);
+  }, [driveFile, projectId]);
+
+  useEffect(() => {
+    if ((topPanel === "export" || topPanel === "import") && isDriveConfigured()) {
+      // Warm up the Google sign-in script so the pop-up opens from the click.
+      void preloadGoogleIdentity().catch(() => undefined);
+    }
+  }, [topPanel]);
 
   useEffect(() => {
     historyIndexRef.current = historyIndex;
@@ -8495,12 +8517,24 @@ export function SketchForgeEditor({
       setNotice("Shared project storage is not available in this deployment");
       return;
     }
+    const toDrive = target === "drive" || target === "drive-copy";
+    if (toDrive && !isDriveConfigured()) {
+      setNotice("Google Drive saving isn't set up for this SketchForge build yet");
+      return;
+    }
     if (projectInteractionActiveRef.current) {
       setNotice("Finish the current drag or transform before saving the project file");
       return;
     }
     setSkfExporting(true);
-    setNotice(target === "shared" ? "Packaging project for Docker shared storage…" : "Packaging editable project, history, and deduplicated assets…");
+    if (toDrive) setDriveSaving(true);
+    setNotice(
+      target === "shared"
+        ? "Packaging project for Docker shared storage…"
+        : toDrive
+          ? "Saving to Google Drive…"
+          : "Packaging editable project, history, and deduplicated assets…",
+    );
     try {
       const exportedHistory = editorHistoryForExport(historyRef.current, historyIndexRef.current, historyLimit);
       const bytes = await exportSkfProject({
@@ -8520,17 +8554,45 @@ export function SketchForgeEditor({
       });
       if (target === "shared" && onSaveSharedProject) {
         setNotice(await onSaveSharedProject({ exportName: exportName.trim() || projectName, bytes }));
+      } else if (toDrive) {
+        // Drive always receives the packaged .skf project; a linked project
+        // updates its own Drive file, "Save a copy" makes a separate one.
+        const copy = target === "drive-copy";
+        const result = await saveProjectToDrive({
+          fileName: projectExportFileName(exportName.trim() || projectName, "skf"),
+          content: bytes,
+          mimeType: SKF_MEDIA_TYPE,
+          existingFileId: copy ? null : (driveFileLink?.fileId ?? null),
+        });
+        if (!copy) {
+          const drive: ProjectDriveFile = { fileId: result.fileId, fileName: result.fileName, savedAt: Date.now() };
+          setDriveFileLink(drive);
+          const currentProjectId = projectInfoRef.current.projectId;
+          if (currentProjectId) onProjectDriveFileChange?.({ projectId: currentProjectId, drive });
+        }
+        setNotice(
+          copy
+            ? `Saved a copy of ${result.fileName} to Google Drive`
+            : result.replacedMissingFile
+              ? `Drive file was missing — saved ${result.fileName} as a new Drive file`
+              : `Saved ${result.fileName} to Google Drive`,
+        );
       } else {
         const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
         const result = await downloadBlobFile(projectExportFileName(exportName, "skf"), new Blob([buffer], { type: SKF_MEDIA_TYPE }));
         setNotice(result.mode === "folder" ? `Saved editable SketchForge project to ${result.path}` : "Saved editable SketchForge project (.skf)");
       }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not save SketchForge project");
+      if (toDrive) {
+        setNotice(error instanceof DriveError ? error.message : "Could not save to Google Drive — use Download instead");
+      } else {
+        setNotice(error instanceof Error ? error.message : "Could not save SketchForge project");
+      }
     } finally {
       setSkfExporting(false);
+      if (toDrive) setDriveSaving(false);
     }
-  }, [onSaveSharedProject, placementElevation, placementWorkplane, projectCreatedAt, projectModifiedAt, projectName, skfExporting, snapGrid]);
+  }, [driveFileLink, onProjectDriveFileChange, onSaveSharedProject, placementElevation, placementWorkplane, projectCreatedAt, projectModifiedAt, projectName, skfExporting, snapGrid]);
 
   const clearDesign = useCallback(() => {
     commitShapes([], [], "New empty design");
@@ -9003,6 +9065,8 @@ export function SketchForgeEditor({
           setTopPanel(null);
           setMenuOpen(false);
         }}
+        projectName={projectName}
+        onRenameProject={projectId && onProjectRename ? (name: string) => onProjectRename({ projectId, name }) : undefined}
       />
       <div className="editor-body">
         {toolbarMode === "sketch" && sketchActive ? (
@@ -9159,6 +9223,17 @@ export function SketchForgeEditor({
           stlExporting={stlExporting}
           stepExporting={stepExporting}
           preflight={exportPreflight}
+          driveConfigured={isDriveConfigured()}
+          driveSaving={driveSaving}
+          driveFile={driveFileLink}
+          onOpenFromDrive={
+            onOpenFromDrive
+              ? () => {
+                  setTopPanel(null);
+                  onOpenFromDrive();
+                }
+              : undefined
+          }
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
           onPickProjectFile={() => projectFileInputRef.current?.click()}
@@ -9295,6 +9370,8 @@ function SecondaryToolbar({
   onUndo,
   onTopPanel,
   onAddShape,
+  projectName,
+  onRenameProject,
 }: {
   toolbarMode: ToolbarMode;
   onToolbarModeChange: (mode: ToolbarMode) => void;
@@ -9349,6 +9426,8 @@ function SecondaryToolbar({
   onUndo: () => void;
   onTopPanel: (panel: TopPanel) => void;
   onAddShape: (shape: ShapeAsset) => void;
+  projectName: string;
+  onRenameProject?: (name: string) => void;
 }) {
   const [shapesOpen, setShapesOpen] = useState(false);
   const [sketchCreateOpen, setSketchCreateOpen] = useState(false);
@@ -9831,8 +9910,73 @@ function SecondaryToolbar({
         >
           Sketch
         </button>
+        {onRenameProject ? (
+          <ProjectNameField name={projectName} onRename={onRenameProject} />
+        ) : (
+          <span className="project-name-static" title="Design name">{projectName}</span>
+        )}
       </div>
     </div>
+  );
+}
+
+function timeAgoLabel(timestamp: number) {
+  const age = Date.now() - timestamp;
+  if (age < 60_000) return "just now";
+  if (age < 3_600_000) return `${Math.max(1, Math.round(age / 60_000))} min ago`;
+  if (age < 86_400_000) return "today";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(timestamp));
+}
+
+function ProjectNameField({ name, onRename }: { name: string; onRename: (name: string) => void }) {
+  const [draft, setDraft] = useState(name);
+  const [editing, setEditing] = useState(false);
+  const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(name);
+    }
+  }, [editing, name]);
+
+  const commit = () => {
+    setEditing(false);
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      setDraft(name);
+      return;
+    }
+    const next = draft.trim();
+    if (!next || next === name) {
+      setDraft(name);
+      return;
+    }
+    onRename(next);
+  };
+
+  return (
+    <input
+      className="project-name-input"
+      aria-label="Design name"
+      title="Design name — click to rename"
+      value={draft}
+      maxLength={80}
+      spellCheck={false}
+      onFocus={(event) => {
+        setEditing(true);
+        event.currentTarget.select();
+      }}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          cancelledRef.current = true;
+          event.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -9855,6 +9999,10 @@ function TopActionPanel({
   stlExporting,
   stepExporting,
   preflight,
+  driveConfigured,
+  driveSaving,
+  driveFile,
+  onOpenFromDrive,
   onImportFiles,
   onPickFile,
   onPickProjectFile,
@@ -9878,6 +10026,10 @@ function TopActionPanel({
   stlExporting: boolean;
   stepExporting: boolean;
   preflight: PrintabilityReport | null;
+  driveConfigured: boolean;
+  driveSaving: boolean;
+  driveFile: ProjectDriveFile | null;
+  onOpenFromDrive?: () => void;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
   onPickProjectFile: () => void;
@@ -9960,6 +10112,15 @@ function TopActionPanel({
               <small>Restore an editable .skf file as a new local project</small>
             </span>
           </button>
+          {driveConfigured && onOpenFromDrive ? (
+            <button className="open-skf-project-button" type="button" onClick={onOpenFromDrive}>
+              <span className="open-skf-project-icon"><CloudDownload size={18} /></span>
+              <span>
+                <strong>Open from Google Drive</strong>
+                <small>Open a project SketchForge saved to your Drive</small>
+              </span>
+            </button>
+          ) : null}
           <div className="import-kind-divider"><span>or add geometry</span></div>
           <button
             className="import-drop-zone"
@@ -10056,6 +10217,39 @@ function TopActionPanel({
             </section>
           ) : null}
 
+          {exportFormat === "skf" && driveConfigured ? (
+            <section className="export-setting-section drive-export-section" aria-label="Google Drive">
+              <div className="export-section-heading">
+                <div>
+                  <strong>Google Drive</strong>
+                  <span>{driveFile ? "Saving updates the linked Drive file" : "Files go to My Drive → SketchForge"}</span>
+                </div>
+              </div>
+              {driveFile ? (
+                <div className="drive-status-card">
+                  <div className="drive-status-file">
+                    <Check size={15} strokeWidth={3} />
+                    <span className="drive-status-name" title={driveFile.fileName}>{driveFile.fileName}</span>
+                  </div>
+                  <div className="drive-status-meta">Saved to Drive · {timeAgoLabel(driveFile.savedAt)}</div>
+                  <div className="drive-status-actions">
+                    <a href={driveFileViewUrl(driveFile.fileId)} target="_blank" rel="noreferrer">
+                      View in Drive
+                    </a>
+                    <button
+                      type="button"
+                      title="Keep this version in Drive as its own separate file"
+                      onClick={() => onExportSkf(exportName, skfHistoryLimit, "drive-copy")}
+                      disabled={exportBusy}
+                    >
+                      Save a copy
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           <div className="export-format-summary">
             <div>
               <strong>{selectedExport.label}</strong>
@@ -10079,6 +10273,17 @@ function TopActionPanel({
                   <span>Save to shared</span>
                 </button>
               ) : null}
+              {exportFormat === "skf" && driveConfigured ? (
+                <button
+                  className="export-shared-button export-drive-button"
+                  type="button"
+                  onClick={() => onExportSkf(exportName, skfHistoryLimit, "drive")}
+                  disabled={exportBusy}
+                >
+                  <CloudUpload />
+                  <span>{driveSaving ? "Saving to Drive…" : "Save to Drive"}</span>
+                </button>
+              ) : null}
               {exportFormat === "stl" && hasSelection && selectedShapeCount > 0 ? (
                 <button
                   className="export-selection-button"
@@ -10092,7 +10297,7 @@ function TopActionPanel({
               ) : null}
               <button className="export-primary-button" onClick={runSelectedExport} disabled={(formatShapeCount === 0 && exportFormat !== "skf") || exportBusy}>
                 <Download />
-                {exportFormat === "skf" ? (skfExporting ? "Saving project…" : "Save SketchForge Project") : null}
+                {exportFormat === "skf" ? (skfExporting && !driveSaving ? "Saving project…" : "Save SketchForge Project") : null}
                 <span hidden={exportFormat === "skf"}>
                 {stepExporting && exportFormat === "step" ? "Building STEP…" : stlExporting && exportFormat === "stl" ? "Preparing STL…" : `Export ${selectedExport.label}`}
                 </span>

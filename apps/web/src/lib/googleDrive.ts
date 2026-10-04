@@ -1,11 +1,12 @@
-// The fork's lib/projectFile.ts (.sketchforge JSON format) is not on this base yet;
-// keep the same filename test inline until the Drive/project-file chunks are
-// reconciled with upstream's .skf format (lib/skfProject.ts).
-function isProjectFileName(fileName: string) {
-  return /\.sketchforge(\.json)?$/i.test(fileName.trim());
+// Project files SketchForge keeps in Drive: packaged .skf projects (the only
+// format SketchForge writes) and legacy .sketchforge / .sketchforge.json files
+// saved by earlier fork builds, which are opened read-only through
+// lib/projectFile.ts.
+export function isDriveProjectFileName(fileName: string) {
+  return /\.(skf|sketchforge(\.json)?)$/i.test(fileName.trim());
 }
 
-// Direct browser-to-Google-Drive saving for .sketchforge projects.
+// Direct browser-to-Google-Drive saving for SketchForge projects.
 //
 // Uses the Google Identity Services (GIS) token flow with only the narrow
 // `drive.file` scope, so SketchForge can touch files it created (or files the
@@ -60,19 +61,45 @@ export function escapeDriveQueryValue(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-export function buildMultipartBody(metadata: object, content: string, boundary: string) {
+export function buildMultipartBody(metadata: object, content: string, boundary: string, mimeType = PROJECT_FILE_MIME) {
   return [
     `--${boundary}`,
     "Content-Type: application/json; charset=UTF-8",
     "",
     JSON.stringify(metadata),
     `--${boundary}`,
-    `Content-Type: ${PROJECT_FILE_MIME}`,
+    `Content-Type: ${mimeType}`,
     "",
     content,
     `--${boundary}--`,
     "",
   ].join("\r\n");
+}
+
+// Binary variant used for packaged .skf projects: the same multipart/related
+// layout, with the file bytes sent unmodified between the text parts.
+export function buildMultipartBlob(metadata: object, content: Uint8Array, boundary: string, mimeType: string) {
+  const head = [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    JSON.stringify(metadata),
+    `--${boundary}`,
+    `Content-Type: ${mimeType}`,
+    "",
+    "",
+  ].join("\r\n");
+  const bytes = content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer;
+  return new Blob([head, bytes, `\r\n--${boundary}--\r\n`], { type: `multipart/related; boundary=${boundary}` });
+}
+
+type DriveUploadContent = { content: string | Uint8Array; mimeType?: string };
+
+function multipartUploadBody(metadata: object, upload: DriveUploadContent, boundary: string) {
+  const mimeType = upload.mimeType ?? PROJECT_FILE_MIME;
+  return typeof upload.content === "string"
+    ? buildMultipartBody(metadata, upload.content, boundary, mimeType)
+    : buildMultipartBlob(metadata, upload.content, boundary, mimeType);
 }
 
 export function driveErrorFromResponse(status: number, bodyText: string): DriveError {
@@ -256,13 +283,14 @@ export async function findOrCreateSketchForgeFolder(token: string): Promise<stri
 
 export async function uploadProjectToDrive(
   token: string,
-  options: { fileName: string; content: string; existingFileId?: string | null },
+  options: { fileName: string; content: string | Uint8Array; mimeType?: string; existingFileId?: string | null },
 ): Promise<DriveSaveResult> {
   const boundary = `sketchforge-${Math.random().toString(36).slice(2)}`;
   const multipartHeaders = { "Content-Type": `multipart/related; boundary=${boundary}` };
 
   if (options.existingFileId) {
-    const body = buildMultipartBody({ name: options.fileName }, options.content, boundary);
+    const metadata = options.mimeType ? { name: options.fileName, mimeType: options.mimeType } : { name: options.fileName };
+    const body = multipartUploadBody(metadata, options, boundary);
     const response = await driveFetch(
       token,
       `${DRIVE_UPLOAD_URL}/${encodeURIComponent(options.existingFileId)}?uploadType=multipart&fields=id`,
@@ -279,14 +307,14 @@ export async function uploadProjectToDrive(
   }
 
   const folderId = await findOrCreateSketchForgeFolder(token);
-  const body = buildMultipartBody(
+  const body = multipartUploadBody(
     {
       name: options.fileName,
       parents: [folderId],
-      mimeType: PROJECT_FILE_MIME,
+      mimeType: options.mimeType ?? PROJECT_FILE_MIME,
       appProperties: { sketchforgeProject: "true" },
     },
-    options.content,
+    options,
     boundary,
   );
   const response = await driveFetch(token, `${DRIVE_UPLOAD_URL}?uploadType=multipart&fields=id`, {
@@ -306,7 +334,8 @@ export async function uploadProjectToDrive(
 
 export async function saveProjectToDrive(options: {
   fileName: string;
-  content: string;
+  content: string | Uint8Array;
+  mimeType?: string;
   existingFileId?: string | null;
 }): Promise<DriveSaveResult> {
   const token = await requestDriveAccessToken();
@@ -331,7 +360,7 @@ export async function listDriveProjectFiles(token: string): Promise<DriveProject
     files?: { id?: string; name?: string; modifiedTime?: string }[];
   } | null;
   return (payload?.files ?? [])
-    .filter((file) => typeof file.id === "string" && typeof file.name === "string" && isProjectFileName(file.name))
+    .filter((file) => typeof file.id === "string" && typeof file.name === "string" && isDriveProjectFileName(file.name))
     .map((file) => ({
       fileId: file.id as string,
       fileName: file.name as string,
@@ -339,14 +368,16 @@ export async function listDriveProjectFiles(token: string): Promise<DriveProject
     }));
 }
 
-export async function downloadDriveProjectFile(token: string, fileId: string): Promise<string> {
+// Returns the raw bytes: .skf projects are ZIP packages, legacy .sketchforge
+// files are UTF-8 JSON.
+export async function downloadDriveProjectFile(token: string, fileId: string): Promise<ArrayBuffer> {
   const response = await driveFetch(token, `${DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?alt=media`, {
     method: "GET",
   });
   if (!response.ok) {
     throw driveErrorFromResponse(response.status, await response.text());
   }
-  return response.text();
+  return response.arrayBuffer();
 }
 
 export async function listProjectsFromDrive(): Promise<DriveProjectFileInfo[]> {
@@ -354,7 +385,7 @@ export async function listProjectsFromDrive(): Promise<DriveProjectFileInfo[]> {
   return listDriveProjectFiles(token);
 }
 
-export async function downloadProjectFromDrive(fileId: string): Promise<string> {
+export async function downloadProjectFromDrive(fileId: string): Promise<ArrayBuffer> {
   const token = await requestDriveAccessToken();
   return downloadDriveProjectFile(token, fileId);
 }
