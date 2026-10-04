@@ -27,6 +27,7 @@ describe("computeTutorialSignals", () => {
       holeCount: 0,
       groupCount: 0,
       rotatedCount: 0,
+      bakedMeshCount: 0,
       dimensionFingerprint: 0,
     });
   });
@@ -94,6 +95,20 @@ describe("learn-the-basics step checks", () => {
     const start = computeTutorialSignals(base);
     expect(byId("rotate").check!(computeTutorialSignals(base), start)).toBe(false);
     expect(byId("rotate").check!(computeTutorialSignals([shape({ rotation: 30 })]), start)).toBe(true);
+  });
+
+  it("rotate also advances once the rotation has been baked into a mesh", () => {
+    const base = [shape()];
+    const start = computeTutorialSignals(base);
+    const baked = shape({
+      kind: "mesh",
+      rotation: 0,
+      importedMesh: { positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], baseWidth: 1, baseDepth: 1, baseHeight: 1, triangleCount: 1, sourceFormat: "json" },
+    });
+    expect(computeTutorialSignals([baked]).bakedMeshCount).toBe(1);
+    expect(byId("rotate").check!(computeTutorialSignals([baked]), start)).toBe(true);
+    const group = { ...baked, groupedShapes: [shape(), shape()] };
+    expect(computeTutorialSignals([group]).bakedMeshCount).toBe(0);
   });
 
   it("hole advances when a hole appears", () => {

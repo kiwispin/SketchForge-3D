@@ -1,10 +1,11 @@
 "use client";
 
-import { Clock3, CloudDownload, EllipsisVertical, FileUp, FolderKanban, Grid3X3, HomeIcon, List, Pencil, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Clock3, CloudDownload, EllipsisVertical, FileUp, FolderKanban, GraduationCap, Grid3X3, HomeIcon, List, Pencil, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SketchForgeEditor, importedShapeFromStl, importedShapeFromSvg } from "@/components/SketchForgeEditor";
 import { applyAppTheme, readStoredAppTheme, resolveAppTheme, storeAppTheme, type AppThemePreference, type ResolvedAppTheme } from "@/lib/appTheme";
 import { hydrateEditorHistoryState, type EditorHistoryEntry } from "@/lib/editorHistory";
+import { tutorials } from "@/lib/tutorials";
 import { DriveError, downloadProjectFromDrive, isDriveConfigured, listProjectsFromDrive, preloadGoogleIdentity, type DriveProjectFileInfo } from "@/lib/googleDrive";
 import { createLocalId } from "@/lib/localIds";
 import { isProjectFileName, looksLikeProjectFile, restoredProjectFromLegacyFile } from "@/lib/projectFile";
@@ -23,7 +24,7 @@ import type { GridSize, ProjectAsset, ProjectDriveFile, ProjectSaveStatus, Workp
 
 type AppView = "dashboard" | "editor";
 type ViewMode = "grid" | "list";
-type DashboardSection = "home" | "shared" | "challenges";
+type DashboardSection = "home" | "shared" | "challenges" | "learn";
 type DownloadMode = "browser" | "folder";
 
 type DashboardProject = {
@@ -564,6 +565,7 @@ export default function Home() {
   const [projectShapesById, setProjectShapesById] = useState<Record<string, ProjectShapeCacheEntry>>({});
   const [driveDialog, setDriveDialog] = useState<DriveOpenDialogState | null>(null);
   const [projectSaveStatus, setProjectSaveStatus] = useState<ProjectSaveStatus>("idle");
+  const [launchTutorial, setLaunchTutorial] = useState<{ projectId: string; tutorialId: string } | null>(null);
   const pendingProjectSavesRef = useRef(0);
   const projectsJsonRef = useRef("");
   const dashboardImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -949,7 +951,7 @@ export default function Home() {
     });
   }, []);
 
-  const createAndOpenProject = (name?: string) => {
+  const createAndOpenProject = (name?: string, tutorialId?: string) => {
     const project = newProject(name ?? `Untitled design ${projects.length + 1}`, projects.length);
     setProjectShapesById((current) => ({
       ...current,
@@ -963,7 +965,16 @@ export default function Home() {
       setDashboardNotice("Could not prepare project shape storage");
     });
     setProjects((current) => [project, ...current]);
+    setLaunchTutorial(tutorialId ? { projectId: project.id, tutorialId } : null);
     openEditor(project.id, { allowMissingFromStorage: true });
+  };
+
+  // Each tutorial runs in a fresh project named after it, so the student's
+  // work is saved like any other design.
+  const startTutorial = (tutorialId: string) => {
+    const tutorial = tutorials.find((entry) => entry.id === tutorialId);
+    if (!tutorial) return;
+    createAndOpenProject(tutorial.title, tutorial.id);
   };
 
   const addRestoredProject = useCallback(async (
@@ -1229,6 +1240,7 @@ export default function Home() {
     setDashboardSection("home");
     setEditorLoading(false);
     setView("dashboard");
+    setLaunchTutorial(null);
     if (typeof window !== "undefined") {
       window.history.replaceState(null, "", "/");
     }
@@ -1368,6 +1380,11 @@ export default function Home() {
             setDashboardSection("challenges");
             setDashboardNotice("");
           }}
+          onLearn={() => {
+            setDashboardSection("learn");
+            setDashboardNotice("");
+          }}
+          onStartTutorial={startTutorial}
           onDashboardHome={() => setDashboardSection("home")}
           onOpenSharedProject={(project) => void openSharedProject(project)}
           onOpenProject={openEditor}
@@ -1407,6 +1424,7 @@ export default function Home() {
             onOpenFromDrive={isDriveConfigured() ? openDriveDialog : undefined}
             driveFile={activeProject?.drive ?? null}
             saveStatus={activeProjectId ? projectSaveStatus : null}
+            initialTutorialId={launchTutorial && activeProjectId === launchTutorial.projectId ? launchTutorial.tutorialId : null}
             projectId={activeProjectId}
             projectName={activeProject?.name}
             projectCreatedAt={activeProject?.createdAt}
@@ -1515,6 +1533,8 @@ function Dashboard({
   onImportFile,
   onOpenFromDrive,
   onChallenges,
+  onLearn,
+  onStartTutorial,
   onDashboardHome,
   onOpenSharedProject,
   onOpenProject,
@@ -1548,6 +1568,8 @@ function Dashboard({
   onImportFile: () => void;
   onOpenFromDrive?: () => void;
   onChallenges: () => void;
+  onLearn: () => void;
+  onStartTutorial: (tutorialId: string) => void;
   onDashboardHome: () => void;
   onOpenSharedProject: (project: SharedProject) => void;
   onOpenProject: (projectId: string) => void;
@@ -1630,6 +1652,10 @@ function Dashboard({
               <SlidersHorizontal size={20} />
               <span>Challenges</span>
             </button>
+            <button className={`dashboard-nav-item ${dashboardSection === "learn" ? "active" : ""}`} type="button" aria-label="Learn" title="Learn" onClick={onLearn}>
+              <GraduationCap size={20} />
+              <span>Learn</span>
+            </button>
           </div>
           <button className="dashboard-nav-item dashboard-settings-button" type="button" aria-label="Settings" title="Settings" onClick={onOpenSettings}>
             <Settings size={20} />
@@ -1637,11 +1663,40 @@ function Dashboard({
           </button>
         </aside>
 
-        <section className="dashboard-main" aria-label={dashboardSection === "challenges" ? "Challenges" : dashboardSection === "shared" ? "Shared projects" : "Dashboard"}>
+        <section
+          className="dashboard-main"
+          aria-label={dashboardSection === "challenges" ? "Challenges" : dashboardSection === "learn" ? "Learn" : dashboardSection === "shared" ? "Shared projects" : "Dashboard"}
+        >
           {dashboardSection === "challenges" ? (
             <div className="dashboard-coming-soon" role="status">
               <strong>Coming soon</strong>
             </div>
+          ) : dashboardSection === "learn" ? (
+            <>
+              <div className="dashboard-section-header">
+                <div>
+                  <h1>Learn</h1>
+                  <span>Step-by-step tutorials you follow right in the editor.</span>
+                </div>
+              </div>
+              <div className="dashboard-learn">
+                {tutorials.map((tutorial) => (
+                  <article className="tutorial-card" key={tutorial.id}>
+                    <span className="tutorial-card-badge">
+                      <GraduationCap size={22} strokeWidth={2.2} />
+                    </span>
+                    <div className="tutorial-card-body">
+                      <h2>{tutorial.title}</h2>
+                      <p>{tutorial.description}</p>
+                      <span className="tutorial-card-meta">{tutorial.steps.length} steps</span>
+                    </div>
+                    <button className="tutorial-card-start" type="button" onClick={() => onStartTutorial(tutorial.id)}>
+                      Start
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </>
           ) : dashboardSection === "shared" ? (
             <>
               {dashboardNotice ? <div className="dashboard-import-notice" role="status">{dashboardNotice}</div> : null}

@@ -93,6 +93,7 @@ import { exportSkfProject, SKF_MEDIA_TYPE } from "@/lib/skfProject";
 import { isProjectFileName } from "@/lib/projectFile";
 import { DriveError, driveFileViewUrl, isDriveConfigured, preloadGoogleIdentity, saveProjectToDrive } from "@/lib/googleDrive";
 import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCategories, type ToolbarShapeAsset } from "@/lib/shapeCatalog";
+import { computeTutorialSignals, getTutorial, type TutorialSignals, type TutorialStep } from "@/lib/tutorials";
 import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { stlHoleCount, stlSolidCount, stlSourceShapes, type StlExportScope } from "@/lib/stlExport";
@@ -5322,6 +5323,7 @@ export function SketchForgeEditor({
   onOpenFromDrive,
   driveFile = null,
   saveStatus = null,
+  initialTutorialId = null,
   projectId,
   projectName = "SketchForge design",
   projectCreatedAt = Date.now(),
@@ -5371,6 +5373,7 @@ export function SketchForgeEditor({
   onOpenFromDrive?: () => void;
   driveFile?: ProjectDriveFile | null;
   saveStatus?: ProjectSaveStatus | null;
+  initialTutorialId?: string | null;
   projectId?: string | null;
   projectName?: string;
   projectCreatedAt?: number;
@@ -5455,6 +5458,10 @@ export function SketchForgeEditor({
   const duplicateRepeatPatternRef = useRef<DuplicateRepeatPattern | null>(null);
   const interactionHistoryTimerRef = useRef<number | null>(null);
   const [projectInteractionActive, setProjectInteractionActive] = useState(false);
+  const [activeTutorialId, setActiveTutorialId] = useState<string | null>(initialTutorialId);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+  const [tutorialStepDone, setTutorialStepDone] = useState(false);
+  const tutorialBaselineRef = useRef<TutorialSignals | null>(null);
   const [toolbarMode, setToolbarMode] = useState<ToolbarMode>("geometry");
   const [sketchActive, setSketchActive] = useState(false);
   const [activeSketchWorkplane, setActiveSketchWorkplane] = useState<PlacementWorkplane>(
@@ -6824,6 +6831,73 @@ export function SketchForgeEditor({
     }, 120);
     sketchRevolveUpdateTimerRef.current.set(id, timer);
   }, [commitShapes]);
+
+  // --- Guided tutorial (hybrid auto-advance) ---
+  const activeTutorial = getTutorial(activeTutorialId);
+  const tutorialSignals = useMemo(() => computeTutorialSignals(shapes), [shapes]);
+  const tutorialStep = activeTutorial ? activeTutorial.steps[tutorialStepIndex] ?? null : null;
+  const tutorialLastStep = activeTutorial ? tutorialStepIndex >= activeTutorial.steps.length - 1 : false;
+
+  // Start (or restart) the tutorial when one is launched into this editor. Keyed on
+  // projectId too so relaunching the same tutorial in a fresh project starts over.
+  // Opening a different project ends the tutorial; visiting the dashboard and
+  // coming back to the tutorial's own project keeps it.
+  const tutorialProjectIdRef = useRef(projectId);
+  useEffect(() => {
+    if (!initialTutorialId) {
+      if (projectId !== tutorialProjectIdRef.current) setActiveTutorialId(null);
+      return;
+    }
+    tutorialProjectIdRef.current = projectId;
+    setActiveTutorialId(initialTutorialId);
+    setTutorialStepIndex(0);
+    setTutorialStepDone(false);
+  }, [initialTutorialId, projectId]);
+
+  // Snapshot the scene when a step begins so its check compares against a fresh baseline.
+  useEffect(() => {
+    if (!activeTutorialId) return;
+    tutorialBaselineRef.current = computeTutorialSignals(shapesRef.current);
+    setTutorialStepDone(false);
+  }, [activeTutorialId, tutorialStepIndex]);
+
+  // Mark the current step done once its check passes.
+  useEffect(() => {
+    if (!activeTutorial || tutorialStepDone) return;
+    const step = activeTutorial.steps[tutorialStepIndex];
+    const baseline = tutorialBaselineRef.current;
+    if (!step?.check || !baseline) return;
+    if (step.check(tutorialSignals, baseline)) {
+      setTutorialStepDone(true);
+    }
+  }, [tutorialSignals, activeTutorial, tutorialStepIndex, tutorialStepDone]);
+
+  // Advance a short beat after the step is marked done. Kept separate from the
+  // detection effect so flipping `tutorialStepDone` doesn't cancel this timer.
+  useEffect(() => {
+    if (!tutorialStepDone || !activeTutorial) return;
+    const timer = window.setTimeout(() => {
+      setTutorialStepIndex((index) => Math.min(index + 1, activeTutorial.steps.length - 1));
+    }, 1150);
+    return () => window.clearTimeout(timer);
+  }, [tutorialStepDone, activeTutorial]);
+
+  const tutorialNext = useCallback(() => {
+    if (!activeTutorial) return;
+    if (tutorialStepIndex >= activeTutorial.steps.length - 1) {
+      setActiveTutorialId(null);
+      return;
+    }
+    setTutorialStepIndex((index) => index + 1);
+  }, [activeTutorial, tutorialStepIndex]);
+
+  const tutorialBack = useCallback(() => {
+    setTutorialStepIndex((index) => Math.max(0, index - 1));
+  }, []);
+
+  const tutorialExit = useCallback(() => {
+    setActiveTutorialId(null);
+  }, []);
 
   const updateShape = useCallback(
     (id: string, patch: ShapeUpdatePatch) => {
@@ -9159,6 +9233,19 @@ export function SketchForgeEditor({
           />
         )}
       </div>
+      {activeTutorial && tutorialStep ? (
+        <TutorialPanel
+          tutorialTitle={activeTutorial.title}
+          stepIndex={tutorialStepIndex}
+          stepCount={activeTutorial.steps.length}
+          step={tutorialStep}
+          stepDone={tutorialStepDone}
+          isLastStep={tutorialLastStep}
+          onNext={tutorialNext}
+          onBack={tutorialBack}
+          onExit={tutorialExit}
+        />
+      ) : null}
       {edgeModifier ? (
         <EdgeModifierPanel
           kind={edgeModifier.kind}
@@ -9929,6 +10016,101 @@ function SecondaryToolbar({
         ) : null}
       </div>
     </div>
+  );
+}
+
+const CONFETTI_COLORS = ["#00aeea", "#f2cf10", "#33983d", "#d41721", "#8e44ad", "#f39c12"];
+
+function TutorialConfetti() {
+  // Params computed once per mount; the parent remounts (via key) each step so the burst replays.
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 26 }, (_, index) => ({
+        tx: (Math.random() * 2 - 1) * 135,
+        ty: (Math.random() * 2 - 1) * 120 + 20,
+        rot: Math.random() * 620 - 310,
+        delay: Math.random() * 90,
+        duration: 900 + Math.random() * 520,
+        color: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
+        round: index % 3 === 0,
+      })),
+    [],
+  );
+  return (
+    <div className="tutorial-confetti" aria-hidden="true">
+      {pieces.map((piece, index) => (
+        <span
+          key={index}
+          className={piece.round ? "round" : ""}
+          style={
+            {
+              background: piece.color,
+              borderRadius: piece.round ? "50%" : "1px",
+              animationDelay: `${piece.delay}ms`,
+              animationDuration: `${piece.duration}ms`,
+              "--tx": `${piece.tx}px`,
+              "--ty": `${piece.ty}px`,
+              "--rot": `${piece.rot}deg`,
+            } as CSSProperties
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+function TutorialPanel({
+  tutorialTitle,
+  stepIndex,
+  stepCount,
+  step,
+  stepDone,
+  isLastStep,
+  onNext,
+  onBack,
+  onExit,
+}: {
+  tutorialTitle: string;
+  stepIndex: number;
+  stepCount: number;
+  step: TutorialStep;
+  stepDone: boolean;
+  isLastStep: boolean;
+  onNext: () => void;
+  onBack: () => void;
+  onExit: () => void;
+}) {
+  const progress = stepCount > 1 ? Math.round((stepIndex / (stepCount - 1)) * 100) : 100;
+  return (
+    <aside className="tutorial-panel" role="dialog" aria-label={`${tutorialTitle} tutorial`}>
+      {stepDone ? <TutorialConfetti key={stepIndex} /> : null}
+      <div className="tutorial-panel-head">
+        <div className="tutorial-panel-heading">
+          <span className="tutorial-panel-kicker">{tutorialTitle}</span>
+          <span className="tutorial-panel-count">Step {stepIndex + 1} of {stepCount}</span>
+        </div>
+        <button className="tutorial-panel-exit" type="button" aria-label="Exit tutorial" title="Exit tutorial" onClick={onExit}>
+          <X size={18} />
+        </button>
+      </div>
+      <div className="tutorial-panel-progress" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+        <span style={{ width: `${progress}%` }} />
+      </div>
+      <div className="tutorial-panel-body">
+        <h2 className="tutorial-panel-title">{step.title}</h2>
+        <p className="tutorial-panel-text">{step.body}</p>
+        {step.hint ? <p className="tutorial-panel-hint">💡 {step.hint}</p> : null}
+        {stepDone ? <p className="tutorial-panel-done" role="status">🎉 Nice work!</p> : null}
+      </div>
+      <div className="tutorial-panel-actions">
+        <button className="tutorial-panel-back" type="button" onClick={onBack} disabled={stepIndex === 0}>
+          Back
+        </button>
+        <button className="tutorial-panel-next" type="button" onClick={onNext}>
+          {isLastStep ? "Finish" : "Next"}
+        </button>
+      </div>
+    </aside>
   );
 }
 
