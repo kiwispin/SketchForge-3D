@@ -94,6 +94,7 @@ import { automaticShapePlacement, makeShapeFromAsset, sceneShape, shapeLibraryCa
 import { duplicateRepeatMatches, repeatShapeTransform, type DuplicateRepeatPattern } from "@/lib/duplicateRepeat";
 import { importedShapeFromStl, importExtensionSupported } from "@/lib/stlImport";
 import { stlHoleCount, stlSolidCount, stlSourceShapes, type StlExportScope } from "@/lib/stlExport";
+import { checkPrintability, type PrintabilityReport } from "@/lib/printabilityPreflight";
 import { importedShapeFromSvg, invalidSvgMeshReason } from "@/lib/svgImport";
 import { toSvgProjection, type SvgProjectionLayer } from "@/lib/svgExport";
 import { normalizeSnapGrid, normalizeWorkspaceSettings, workplaneSettingsFingerprint } from "@/lib/workplaneSettings";
@@ -5838,6 +5839,11 @@ export function SketchForgeEditor({
   const exportScopeLabel = hasSelection ? "selected" : "total";
   const designExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes)), [selectedShapes, shapes]);
   const selectedExportableShapeCount = useMemo(() => stlSolidCount(stlSourceShapes(shapes, selectedShapes, "selection")), [selectedShapes, shapes]);
+  // Preflight checks what the STL export writes: the full visible design.
+  const exportPreflight = useMemo(
+    () => (topPanel === "export" ? checkPrintability(stlSourceShapes(shapes, selectedShapes), workspaceSettings) : null),
+    [selectedShapes, shapes, topPanel, workspaceSettings],
+  );
   const effectiveAlignAnchorId = useMemo(
     () => effectiveAlignmentAnchorId(selectedShapes, alignAnchorId),
     [alignAnchorId, selectedShapes],
@@ -9152,6 +9158,7 @@ export function SketchForgeEditor({
           repeatDefaults={repeatDefaults}
           stlExporting={stlExporting}
           stepExporting={stepExporting}
+          preflight={exportPreflight}
           onImportFiles={selectFiles}
           onPickFile={() => fileInputRef.current?.click()}
           onPickProjectFile={() => projectFileInputRef.current?.click()}
@@ -9847,6 +9854,7 @@ function TopActionPanel({
   repeatDefaults,
   stlExporting,
   stepExporting,
+  preflight,
   onImportFiles,
   onPickFile,
   onPickProjectFile,
@@ -9869,6 +9877,7 @@ function TopActionPanel({
   repeatDefaults: { count: number; offsetX: number; offsetY: number; offsetZ: number };
   stlExporting: boolean;
   stepExporting: boolean;
+  preflight: PrintabilityReport | null;
   onImportFiles: (files: FileList | File[]) => void;
   onPickFile: () => void;
   onPickProjectFile: () => void;
@@ -10055,6 +10064,8 @@ function TopActionPanel({
             <p>{selectedExport.note}</p>
           </div>
 
+          {preflight && (exportFormat === "stl" || exportFormat === "obj" || exportFormat === "step") ? <PrintabilityPreflight report={preflight} /> : null}
+
           <footer className="export-dialog-footer">
             <div>
               {exportFormat === "skf" && sharedProjectsEnabled ? (
@@ -10107,6 +10118,29 @@ function TopActionPanel({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function PrintabilityPreflight({ report }: { report: PrintabilityReport }) {
+  if (report.checkedCount === 0) {
+    return <p className="printability-preflight neutral">Add a solid shape to run the printability check.</p>;
+  }
+  if (report.issues.length === 0) {
+    return (
+      <p className="printability-preflight ready">
+        <Check size={14} strokeWidth={3} />
+        Printability check: full design ready to print.
+      </p>
+    );
+  }
+  return (
+    <section className="printability-preflight warning" aria-label="Printability check">
+      <strong>Printability check: {report.issues.length} warning{report.issues.length === 1 ? "" : "s"}</strong>
+      <p>Fix these before printing where possible. Export remains available for teacher review.</p>
+      <ul>
+        {report.issues.map((issue) => <li key={`${issue.kind}-${issue.shapeId}`}>{issue.message}</li>)}
+      </ul>
+    </section>
   );
 }
 

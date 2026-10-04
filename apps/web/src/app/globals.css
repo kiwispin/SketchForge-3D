@@ -2970,6 +2970,61 @@ button {
   line-height: 1.4;
 }
 
+.printability-preflight {
+  margin: 0 14px 10px;
+  padding: 9px 11px;
+  border: 1px solid #c8ddea;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+p.printability-preflight.ready {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.printability-preflight.ready {
+  color: #17623a;
+  background: #eefaf2;
+  border-color: #a9d8b8;
+}
+
+.printability-preflight.neutral {
+  color: #51697c;
+  background: #f7fafc;
+}
+
+.printability-preflight.warning {
+  color: #744d09;
+  background: #fff8e6;
+  border-color: #eac86f;
+}
+
+.printability-preflight strong {
+  display: block;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.printability-preflight p {
+  margin: 4px 0 0;
+  color: inherit;
+  font-size: 11px;
+}
+
+.printability-preflight ul {
+  display: grid;
+  gap: 3px;
+  max-height: 120px;
+  margin: 7px 0 0;
+  padding-left: 17px;
+  overflow-y: auto;
+}
+
 .export-dialog-footer {
   display: flex;
   align-items: center;
@@ -7514,6 +7569,24 @@ html[data-theme="dark"] .export-scope-badge {
   color: #74d8f2;
   background: #15323d;
   border-color: #28566a;
+}
+
+html[data-theme="dark"] .printability-preflight.ready {
+  color: #8fe0ad;
+  background: #13301f;
+  border-color: #2c6142;
+}
+
+html[data-theme="dark"] .printability-preflight.neutral {
+  color: #91a7b7;
+  background: #111d25;
+  border-color: #344854;
+}
+
+html[data-theme="dark"] .printability-preflight.warning {
+  color: #f4d38a;
+  background: #33280f;
+  border-color: #6d5520;
 }
 
 html[data-theme="dark"] .export-format-slider,
